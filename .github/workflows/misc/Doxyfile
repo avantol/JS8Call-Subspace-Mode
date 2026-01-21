@@ -953,7 +953,8 @@ WARN_LOGFILE           =
 # js8call Our change
 
 INPUT = docs/build_for_Linux.md docs/build_for_MacOS.md docs/build_for_Windows.md \
-        docs/CONTRIBUTOR_GUIDE.md docs/user_guide/JS8Call_User_Guide.md .
+        docs/CONTRIBUTOR_GUIDE.md docs/user_guide/JS8Call_User_Guide.md \
+        docs/API.md .
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses
