@@ -7,6 +7,7 @@
 
 #include <QDateTime>
 #include <QMenu>
+#include <QTimeZone>
 
 #include <algorithm>
 
@@ -127,7 +128,7 @@ void MessagePanel::populateMessages(QList<QPair<int, Message>> msgs) {
 
       const auto dateStr = params.value("UTC").toString();
       QDateTime ts = QDateTime::fromString(dateStr, "yyyy-MM-dd HH:mm:ss");
-      ts.setTimeSpec(Qt::UTC);
+      ts.setTimeZone(QTimeZone::utc());
 
       auto *dateItem = new DateItem(ts.toString("ddd MMM d HH:mm:ss yyyy"));
       dateItem->setData(Qt::UserRole, ts.toSecsSinceEpoch());   // sort key
