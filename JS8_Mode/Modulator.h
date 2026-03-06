@@ -92,6 +92,11 @@ class Modulator final : public AudioDevice {
     qint64 m_silentFrames;
     unsigned m_ic;
     unsigned m_isym0;
+#ifdef JS8_ENABLE_FT2
+    bool m_ft2Mode = false;        // True when transmitting FT2 GFSK waveform
+    float *m_ft2Wave = nullptr;    // Pointer to pre-generated waveform
+    int m_ft2WaveLen = 0;          // Length of pre-generated waveform
+#endif
 };
 
 #endif

@@ -152,7 +152,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     //   3) compute the delta
                     //   4) apply the drift
 
-                    qint32 periodMs = 1000 * JS8::Submode::period(m);
+                    qint32 periodMs = JS8::Submode::periodMS(m);
 
                     // writeNoticeTextToUI(now, QString("Decode at %1 (kin: %2,
                     // lastDecoded:

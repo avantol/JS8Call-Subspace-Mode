@@ -6,6 +6,11 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#ifdef JS8_ENABLE_FT2
+#include "JS8_Mode/ft2_bridge.h"
+#include "JS8_Mode/DecodeFT2.h"
+#endif
+
 int ms_minute_error() {
     auto const now = DriftingDateTime::currentDateTimeLocal();
     auto const time = now.time();
@@ -637,6 +642,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // to turn off split on the rig e.g. WSPR
     m_config.transceiver_online();
 
+#ifdef JS8_ENABLE_FT2
+    ft2_init_c();
+    // Run self-test after event loop starts (Fortran needs stack space)
+    QTimer::singleShot(2000, []() { JS8::DecodeFT2::selfTest(); });
+#endif
+
     setupJS8();
 
     Q_EMIT transmitFrequency(freq() + m_XIT);
@@ -675,6 +686,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     ui->actionModeJS8Turbo->setActionGroup(modeActionGroup);
     ui->actionModeJS8Slow->setActionGroup(modeActionGroup);
     ui->actionModeJS8Ultra->setActionGroup(modeActionGroup);
+#ifdef JS8_ENABLE_FT2
+    ui->actionModeFT2->setActionGroup(modeActionGroup);
+#endif
 
     ui->modeButton->installEventFilter(new EventFilter::MouseButtonPress(
         [this](QMouseEvent *event) {

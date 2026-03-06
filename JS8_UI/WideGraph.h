@@ -126,8 +126,8 @@ class WideGraph : public QWidget {
     int m_filterWidth = 120;
     int m_filterMinWidth = 120;
     int m_nsmo = 1;
-    int m_TRperiod = 15;
-    int m_lastSecondInPeriod = 0;
+    int m_TRperiodMS = 15000;
+    int m_lastMsInPeriod = 0;
     int m_autoSyncTimeLeft = 0;
     int m_autoSyncDecodesLeft = 0;
     bool m_paused = false;

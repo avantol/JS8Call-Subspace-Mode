@@ -277,12 +277,16 @@ class StationDialog final : public QDialog {
 
         band_.setModel(filtered_bands_.data());
 
+        // Set UTC display for schedule time editors
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         switch_at_.setTimeZone(QTimeZone::utc());
+        switch_until_.setTimeZone(QTimeZone::utc());
+#else
+        switch_at_.setTimeSpec(Qt::UTC);
+        switch_until_.setTimeSpec(Qt::UTC);
+#endif
 
         switch_at_.setDisplayFormat("hh:mm");
-
-        switch_until_.setTimeZone(QTimeZone::utc());
-
         switch_until_.setDisplayFormat("hh:mm");
 
         auto form_layout = new QFormLayout();

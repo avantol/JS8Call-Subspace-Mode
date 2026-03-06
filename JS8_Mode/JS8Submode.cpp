@@ -57,15 +57,19 @@ class Data {
 
     constexpr Data(const char *const name,
                    unsigned int const samplesForOneSymbol,
-                   unsigned int const startDelayMS, unsigned int const period,
+                   unsigned int const startDelayMS,
+                   unsigned int const periodMS,
                    Costas::Type const costas, int const rxSNRThreshold,
-                   int const rxThreshold = 10)
+                   int const rxThreshold = 10,
+                   unsigned int const numSymbols = JS8_NUM_SYMBOLS,
+                   unsigned int const numTones = 8)
         : m_name(name), m_samplesForOneSymbol(samplesForOneSymbol),
-          m_startDelayMS(startDelayMS), m_period(period), m_costas(costas),
+          m_startDelayMS(startDelayMS), m_periodMS(periodMS),
+          m_costas(costas),
           m_rxSNRThreshold(rxSNRThreshold), m_rxThreshold(rxThreshold),
-          m_samplesForSymbols(JS8_NUM_SYMBOLS * samplesForOneSymbol),
-          m_bandwidth(8 * JS8_RX_SAMPLE_RATE / samplesForOneSymbol),
-          m_samplesPerPeriod(JS8_RX_SAMPLE_RATE * period),
+          m_samplesForSymbols(numSymbols * samplesForOneSymbol),
+          m_bandwidth(numTones * JS8_RX_SAMPLE_RATE / samplesForOneSymbol),
+          m_samplesPerPeriod(JS8_RX_SAMPLE_RATE * periodMS / 1000),
           m_toneSpacing(JS8_RX_SAMPLE_RATE / (double)samplesForOneSymbol),
           m_samplesNeeded(
               floor(m_samplesForSymbols +
@@ -80,7 +84,8 @@ class Data {
         return m_samplesForOneSymbol;
     }
     constexpr unsigned int startDelayMS() const { return m_startDelayMS; }
-    constexpr unsigned int period() const { return m_period; }
+    constexpr unsigned int period() const { return (m_periodMS + 999) / 1000; }
+    constexpr unsigned int periodMS() const { return m_periodMS; }
     constexpr Costas::Type costas() const { return m_costas; }
     constexpr int rxSNRThreshold() const { return m_rxSNRThreshold; }
     constexpr int rxThreshold() const { return m_rxThreshold; }
@@ -98,7 +103,7 @@ class Data {
     const char *m_name;
     unsigned int m_samplesForOneSymbol;
     unsigned int m_startDelayMS;
-    unsigned int m_period;
+    unsigned int m_periodMS;
     Costas::Type m_costas;
     int m_rxSNRThreshold;
     int m_rxThreshold;
@@ -117,32 +122,44 @@ class Data {
 // nevertheless, but it's in general disabled in the calling code.
 
 constexpr Data Normal = {
-    "NORMAL",        JS8A_SYMBOL_SAMPLES,    JS8A_START_DELAY_MS,
-    JS8A_TX_SECONDS, Costas::Type::ORIGINAL, -24};
+    "NORMAL",            JS8A_SYMBOL_SAMPLES,        JS8A_START_DELAY_MS,
+    JS8A_TX_SECONDS * 1000, Costas::Type::ORIGINAL, -24};
 constexpr Data Fast = {"FAST",
                        JS8B_SYMBOL_SAMPLES,
                        JS8B_START_DELAY_MS,
-                       JS8B_TX_SECONDS,
+                       JS8B_TX_SECONDS * 1000,
                        Costas::Type::MODIFIED,
                        -22,
                        16};
 constexpr Data Turbo = {"TURBO",
                         JS8C_SYMBOL_SAMPLES,
                         JS8C_START_DELAY_MS,
-                        JS8C_TX_SECONDS,
+                        JS8C_TX_SECONDS * 1000,
                         Costas::Type::MODIFIED,
                         -20,
                         32};
 constexpr Data Slow = {
-    "SLOW",          JS8E_SYMBOL_SAMPLES,    JS8E_START_DELAY_MS,
-    JS8E_TX_SECONDS, Costas::Type::MODIFIED, -28};
+    "SLOW",              JS8E_SYMBOL_SAMPLES,        JS8E_START_DELAY_MS,
+    JS8E_TX_SECONDS * 1000, Costas::Type::MODIFIED, -28};
 constexpr Data Ultra = {"ULTRA",
                         JS8I_SYMBOL_SAMPLES,
                         JS8I_START_DELAY_MS,
-                        JS8I_TX_SECONDS,
+                        JS8I_TX_SECONDS * 1000,
                         Costas::Type::MODIFIED,
                         -18,
                         50};
+
+#ifdef JS8_ENABLE_FT2
+constexpr Data Subspace = {"SUBSPACE",
+                           FT2_NSPS,
+                           FT2_START_DELAY_MS,
+                           FT2_TX_PERIOD_MS,
+                           Costas::Type::MODIFIED,
+                           -20,
+                           10,
+                           FT2_NUM_SYMBOLS,
+                           4};  // 4-GFSK (4 tones, not JS8's 8)
+#endif
 
 // Given a submode, return data for it, or, if we don't have any idea
 // what the caller is talking about, throw.
@@ -169,6 +186,10 @@ constexpr Data const &data(int const submode) {
         return Slow;
     case Varicode::JS8CallUltra:
         return Ultra;
+#ifdef JS8_ENABLE_FT2
+    case Varicode::JS8CallFT2:
+        return Subspace;
+#endif
     default: {
         throw error{QObject::tr("Invalid JS8 submode %1").arg(submode)};
     }
@@ -282,6 +303,13 @@ unsigned int samplesNeeded(int const submode) {
  * @return unsigned int
  */
 unsigned int period(int const submode) { return data(submode).period(); }
+/**
+ * @brief Get the period of the submode in milliseconds
+ *
+ * @param submode
+ * @return unsigned int
+ */
+unsigned int periodMS(int const submode) { return data(submode).periodMS(); }
 /**
  * @brief Get the receive SNR threshold of the submode
  *

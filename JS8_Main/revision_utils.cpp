@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1(v%2) de KN4CRD"}
+    return QString{"%1(v%2-build23) de KN4CRD"}
         .arg(QCoreApplication::applicationName())
         .arg(QCoreApplication::applicationVersion());
 }

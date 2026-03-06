@@ -83,22 +83,28 @@ void UI_Constructor::processRxActivity() {
         // first word callsigns and spot them :)
         if ((d.bits & Varicode::JS8CallFirst) == Varicode::JS8CallFirst &&
             !d.isDirected && !d.isCompound) {
+
+            QString theirCall;
+
             auto calls = Varicode::parseCallsigns(d.text);
             if (!calls.isEmpty()) {
-                auto theirCall = calls.first();
-                if (d.text.startsWith(theirCall) &&
-                    d.text.mid(theirCall.length(), 1) == ":") {
-                    CallDetail cd = {};
-                    cd.call = theirCall;
-                    cd.dial = d.dial;
-                    cd.offset = d.offset;
-                    cd.snr = d.snr;
-                    cd.bits = d.bits;
-                    cd.tdrift = d.tdrift;
-                    cd.utcTimestamp = d.utcTimestamp;
-                    cd.submode = d.submode;
-                    logCallActivity(cd, true);
-                }
+                auto call = calls.first();
+                if (d.text.startsWith(call) &&
+                    d.text.mid(call.length(), 1) == ":")
+                    theirCall = call;
+            }
+
+            if (!theirCall.isEmpty()) {
+                CallDetail cd = {};
+                cd.call = theirCall;
+                cd.dial = d.dial;
+                cd.offset = d.offset;
+                cd.snr = d.snr;
+                cd.bits = d.bits;
+                cd.tdrift = d.tdrift;
+                cd.utcTimestamp = d.utcTimestamp;
+                cd.submode = d.submode;
+                logCallActivity(cd, true);
             }
         }
 

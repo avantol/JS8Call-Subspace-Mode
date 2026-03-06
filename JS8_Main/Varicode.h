@@ -26,7 +26,8 @@ class Varicode {
         JS8CallFast = 1,
         JS8CallTurbo = 2,
         JS8CallSlow = 4,
-        JS8CallUltra = 8
+        JS8CallUltra = 8,
+        JS8CallFT2 = 16
     };
 
     // frame type transmitted via itype and decoded by the ft8 decoded

@@ -37,11 +37,19 @@ Costas::Type costas(int);
 
 /**
  * How long from one transmission start to the next transmission start,
- * in seconds.
+ * in seconds (rounded up for fractional periods like FT2's 3.75s).
  *
  * This is the usual number a typical users knows: 30 s for SLOW, 6 s for TURBO.
  */
 unsigned int period(int);
+
+/**
+ * How long from one transmission start to the next transmission start,
+ * in milliseconds. Use this for precise timing calculations.
+ *
+ * E.g., 15000 for NORMAL, 3750 for SUBSPACE/FT2.
+ */
+unsigned int periodMS(int);
 
 /** How many audio samples (at 12000 samples per second) it takes to transfer
  * one symbol. */

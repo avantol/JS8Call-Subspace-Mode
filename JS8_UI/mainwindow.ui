@@ -1976,6 +1976,7 @@ background-color: #22ff22;
     <addaction name="actionModeJS8Fast"/>
     <addaction name="actionModeJS8Turbo"/>
     <addaction name="actionModeJS8Ultra"/>
+    <addaction name="actionModeFT2"/>
     <addaction name="separator"/>
     <addaction name="actionModeMultiDecoder"/>
     <addaction name="separator"/>
@@ -2273,6 +2274,14 @@ background-color: #22ff22;
    </property>
    <property name="text">
     <string>JS8 (&amp;Ultra, 4s, 250Hz, ~60WPM)</string>
+   </property>
+  </action>
+  <action name="actionModeFT2">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>JS8 (&amp;Subspace, 4s, 4-GFSK, LDPC)</string>
    </property>
   </action>
   <action name="actionModeJS8HB">

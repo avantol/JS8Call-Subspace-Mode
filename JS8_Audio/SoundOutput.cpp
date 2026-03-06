@@ -99,6 +99,8 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
  * @param source The QIODevice to read audio data from.
  */
 void SoundOutput::restart(QIODevice *source) {
+    qWarning() << "[FT2-TX] SoundOutput::restart() source=" << source
+               << "isOpen=" << (source ? source->isOpen() : false);
     if (!m_device.isNull()) {
         m_stream.reset(new QAudioSink(m_device, m_format));
         qCDebug(soundout_js8)
@@ -218,19 +220,30 @@ void SoundOutput::resetAttenuation() {
  * @param newState The new state of the audio output.
  */
 void SoundOutput::handleStateChanged(QAudio::State newState) const {
+    const char *stateName = "Unknown";
+    switch (newState) {
+    case QAudio::IdleState:   stateName = "Idle";      break;
+    case QAudio::ActiveState: stateName = "Active";    break;
+    case QAudio::SuspendedState: stateName = "Suspended"; break;
+    case QAudio::StoppedState:   stateName = "Stopped";   break;
+    }
+    qWarning() << "[FT2-TX] SoundOutput state:" << stateName;
+    if (m_stream) {
+        auto err = m_stream->error();
+        if (err != QAudio::NoError)
+            qWarning() << "[FT2-TX] SoundOutput error:" << (int)err;
+    }
+
     switch (newState) {
     case QAudio::IdleState:
         Q_EMIT status(tr("Idle"));
         break;
-
     case QAudio::ActiveState:
         Q_EMIT status(tr("Sending"));
         break;
-
     case QAudio::SuspendedState:
         Q_EMIT status(tr("Suspended"));
         break;
-
     case QAudio::StoppedState:
         if (!checkStream()) {
             Q_EMIT status(tr("Error"));

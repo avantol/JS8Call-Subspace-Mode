@@ -12,6 +12,10 @@
 #include "ldpc_feedback.h"
 #include "soft_combiner.h"
 
+#ifdef JS8_ENABLE_FT2
+#include "JS8_Mode/DecodeFT2.h"
+#endif
+
 #include <QDebug>
 #include <QLoggingCategory>
 #include <QtGlobal>
@@ -2584,6 +2588,11 @@ class Worker : public QObject {
 
         struct dec_data &m_data;
 
+#ifdef JS8_ENABLE_FT2
+        // FT2 decoder (separate protocol, runs alongside JS8 modes)
+        ::JS8::DecodeFT2 m_ft2Decoder;
+#endif
+
         // Mode-specific decode strategy; we'll instantiate one of
         // these for each of the 5 modes; this class is an aggregate
         // of the 5 modes.
@@ -2660,6 +2669,14 @@ class Worker : public QObject {
                         entry.decode);
                 }
             }
+
+#ifdef JS8_ENABLE_FT2
+            // FT2 decode pass (separate protocol, bit 4 = 16)
+            if ((set & 16) == 16) {
+                sum += m_ft2Decoder(m_data, m_data.params.kposFT2,
+                                   m_data.params.kszFT2, emitEvent);
+            }
+#endif
 
             // Let any interested parties know the total number of decodes
             // performed during this run.

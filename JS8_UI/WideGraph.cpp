@@ -70,7 +70,7 @@ void setValueBlocked(bool const value, QCheckBox *block) {
 WideGraph::WideGraph(QSettings *settings, QWidget *parent)
     : QWidget{parent}, ui{new Ui::WideGraph}, m_settings{settings},
       m_drawTimer{new QTimer(this)}, m_autoSyncTimer{new QTimer(this)},
-      m_palettes_path{":/Palettes"}, m_timeFormat{timeFormat(m_TRperiod)} {
+      m_palettes_path{":/Palettes"}, m_timeFormat{timeFormat((m_TRperiodMS + 999) / 1000)} {
     ui->setupUi(this);
 
     setMaximumHeight(880);
@@ -276,14 +276,14 @@ WideGraph::WideGraph(QSettings *settings, QWidget *parent)
             // Draw the tr cycle horizontal lines if needed.
 
             auto const now = DriftingDateTime::currentDateTimeUtc();
-            auto const secondInToday = now.time().msecsSinceStartOfDay() / 1000;
-            int const secondInPeriod = secondInToday % m_TRperiod;
+            auto const msInToday = now.time().msecsSinceStartOfDay();
+            int const msInPeriod = msInToday % m_TRperiodMS;
 
-            if (secondInPeriod < m_lastSecondInPeriod) {
+            if (msInPeriod < m_lastMsInPeriod) {
                 ui->widePlot->drawLine(
                     now.toString(m_timeFormat).append(m_band));
             }
-            m_lastSecondInPeriod = secondInPeriod;
+            m_lastMsInPeriod = msInPeriod;
 
             // Draw the data, handing the plotter a copy, and informing them
             // of our current state.
@@ -614,9 +614,9 @@ void WideGraph::setFilterOpacityPercent(int const n) {
     ui->widePlot->setFilterOpacity(int((float(n) / 100.0) * 255));
 }
 
-void WideGraph::setPeriod(int const ntrperiod) {
-    m_TRperiod = ntrperiod;
-    m_timeFormat = timeFormat(m_TRperiod);
+void WideGraph::setPeriod(int const ntrperiodMS) {
+    m_TRperiodMS = ntrperiodMS;
+    m_timeFormat = timeFormat((m_TRperiodMS + 999) / 1000);
 }
 
 void WideGraph::setFreq(int const audio_qrg) {
@@ -779,20 +779,22 @@ void WideGraph::on_driftSpinBox_valueChanged(int const n) {
 
 void WideGraph::on_driftSyncButton_clicked() {
     auto const now = QDateTime::currentDateTimeUtc();
-    qint64 const pos = m_TRperiod - (now.time().second() % m_TRperiod);
-    qint64 const neg = (now.time().second() % m_TRperiod) - m_TRperiod;
-    qint64 const sec = abs(neg) < pos ? neg : pos;
+    qint64 const msNow = now.time().msecsSinceStartOfDay();
+    qint64 const pos = m_TRperiodMS - (msNow % m_TRperiodMS);
+    qint64 const neg = (msNow % m_TRperiodMS) - m_TRperiodMS;
+    qint64 const drift = abs(neg) < pos ? neg : pos;
 
-    emit want_new_drift(sec * 1000);
+    emit want_new_drift(drift);
 }
 
 void WideGraph::on_driftSyncEndButton_clicked() {
     auto const now = QDateTime::currentDateTimeUtc();
-    qint64 const pos = m_TRperiod - (now.time().second() % m_TRperiod);
-    qint64 const neg = (now.time().second() % m_TRperiod) - m_TRperiod;
-    qint64 const sec = abs(neg) < pos ? neg + 2 : pos - 2;
+    qint64 const msNow = now.time().msecsSinceStartOfDay();
+    qint64 const pos = m_TRperiodMS - (msNow % m_TRperiodMS);
+    qint64 const neg = (msNow % m_TRperiodMS) - m_TRperiodMS;
+    qint64 const drift = abs(neg) < pos ? neg + 2000 : pos - 2000;
 
-    emit want_new_drift(sec * 1000);
+    emit want_new_drift(drift);
 }
 
 void WideGraph::on_driftSyncMinuteButton_clicked() {

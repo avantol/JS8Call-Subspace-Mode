@@ -7,6 +7,11 @@
 
 #include "mainwindow.h"
 
+#ifdef JS8_ENABLE_FT2
+#include "JS8_Mode/ft2_bridge.h"
+#include <cstring>
+#endif
+
 #include "moc_mainwindow.cpp"
 
 // TODO: Move to member:
@@ -17,7 +22,13 @@ static int msgibits;
 // How many milliseconds to wait before releasing PTT at end of transmission.
 constexpr int TX_SWITCHOFF_DELAY = 200;
 
+#ifdef JS8_ENABLE_FT2
+int volatile itone[FT2_NUM_SYMBOLS]; // Max of JS8 (79) and FT2 (103)
+float ft2_txwave[FT2_NWAVE];         // Pre-computed FT2 GFSK waveform
+int ft2_txwave_len = 0;              // Actual waveform length
+#else
 int volatile itone[JS8_NUM_SYMBOLS]; // Audio tones for all Tx symbols
+#endif
 struct dec_data dec_data;            // for sharing with Fortran
 struct specData specData;            // Used by plotter
 std::mutex fftw_mutex;
@@ -681,6 +692,9 @@ void UI_Constructor::on_menuModeJS8_aboutToShow() {
     ui->actionModeJS8Turbo->setEnabled(canChangeMode);
     ui->actionModeJS8Slow->setEnabled(canChangeMode);
     ui->actionModeJS8Ultra->setEnabled(canChangeMode);
+#ifdef JS8_ENABLE_FT2
+    ui->actionModeFT2->setEnabled(canChangeMode);
+#endif
 
     // dynamically replace the autoreply menu item text
     auto autoreplyText = ui->actionModeAutoreply->text();
@@ -1223,6 +1237,9 @@ void UI_Constructor::setSubmode(int submode) {
     ui->actionModeJS8Turbo->setChecked(submode == Varicode::JS8CallTurbo);
     ui->actionModeJS8Slow->setChecked(submode == Varicode::JS8CallSlow);
     ui->actionModeJS8Ultra->setChecked(submode == Varicode::JS8CallUltra);
+#ifdef JS8_ENABLE_FT2
+    ui->actionModeFT2->setChecked(submode == Varicode::JS8CallFT2);
+#endif
     setupJS8();
     Q_EMIT submodeChanged(Varicode::intToSubmode(submode));
 }
@@ -1748,6 +1765,40 @@ bool UI_Constructor::decodeEnqueueReady(qint32 k, qint32 k0) {
     }
 #endif
 
+#ifdef JS8_ENABLE_FT2
+    // FT2 uses its own cycle calculation (not JS8::Submode which would throw)
+    {
+        static qint32 currentDecodeStartFT2 = -1;
+        static qint32 nextDecodeStartFT2 = -1;
+        constexpr qint32 ft2CycleFrames = FT2_TX_PERIOD_MS * JS8_RX_SAMPLE_RATE / 1000;
+        constexpr qint32 ft2FramesNeeded = FT2_NMAX;
+
+        if (m_nSubMode == Varicode::JS8CallFT2 ||
+            ui->actionModeMultiDecoder->isChecked()) {
+            qint32 currentCycle = (k / ft2CycleFrames) %
+                                  (JS8_RX_SAMPLE_SIZE / ft2CycleFrames);
+            qint32 delta = qAbs(k - k0);
+
+            if ((k < k0) || (delta > ft2CycleFrames) ||
+                (currentDecodeStartFT2 == -1) || (nextDecodeStartFT2 == -1)) {
+                currentDecodeStartFT2 = currentCycle * ft2CycleFrames;
+                nextDecodeStartFT2 = currentDecodeStartFT2 + ft2CycleFrames;
+            }
+
+            if (currentDecodeStartFT2 + ft2FramesNeeded <= k) {
+                DecodeParams d;
+                d.submode = Varicode::JS8CallFT2;
+                d.start = currentDecodeStartFT2;
+                d.sz = qMax(ft2FramesNeeded, k - currentDecodeStartFT2);
+                m_decoderQueue.append(d);
+                decodes++;
+                currentDecodeStartFT2 = nextDecodeStartFT2;
+                nextDecodeStartFT2 = currentDecodeStartFT2 + ft2CycleFrames;
+            }
+        }
+    }
+#endif
+
     return decodes > 0;
 }
 
@@ -1883,6 +1934,46 @@ bool UI_Constructor::decodeEnqueueReadyExperiment(qint32 k, qint32 /*k0*/) {
         }
     }
 
+#ifdef JS8_ENABLE_FT2
+    // FT2 handled separately — uses its own cycle params, not JS8::Submode
+    if (m_nSubMode == Varicode::JS8CallFT2 || multi) {
+        constexpr qint32 ft2CycleFrames = FT2_TX_PERIOD_MS * JS8_RX_SAMPLE_RATE / 1000;
+        constexpr qint32 ft2FramesNeeded = FT2_NMAX;
+        qint32 ft2Cycle = (k / ft2CycleFrames) %
+                          (maxSamples / ft2CycleFrames);
+
+        if (!m_lastDecodeStartMap.contains(Varicode::JS8CallFT2)) {
+            m_lastDecodeStartMap[Varicode::JS8CallFT2] = ft2Cycle * ft2CycleFrames;
+        }
+
+        qint32 lastDecodeStart = m_lastDecodeStartMap[Varicode::JS8CallFT2];
+        qint32 incrementedBy = k - lastDecodeStart;
+        if (k < lastDecodeStart) {
+            incrementedBy = maxSamples - lastDecodeStart + k;
+        }
+
+        qint32 cycleFramesReady = k - (ft2Cycle * ft2CycleFrames);
+        if (cycleFramesReady < 0) {
+            cycleFramesReady = k + (maxSamples - (ft2Cycle * ft2CycleFrames));
+        }
+
+        if ((incrementedBy >= 1.5 * oneSecondSamples &&
+             cycleFramesReady >= ft2FramesNeeded) ||
+            (incrementedBy >= oneSecondSamples &&
+             cycleFramesReady >= ft2FramesNeeded - 1.5 * oneSecondSamples) ||
+            (incrementedBy >= oneSecondSamples &&
+             cycleFramesReady < 1.5 * oneSecondSamples)) {
+            DecodeParams d;
+            d.submode = Varicode::JS8CallFT2;
+            d.start = ft2Cycle * ft2CycleFrames;
+            d.sz = cycleFramesReady;
+            m_decoderQueue.append(d);
+            decodes++;
+            m_lastDecodeStartMap[Varicode::JS8CallFT2] = k;
+        }
+    }
+#endif
+
     return decodes > 0;
 }
 
@@ -1976,6 +2067,13 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
             dec_data.params.kposI = params.start;
             dec_data.params.kszI = params.sz;
             dec_data.params.nsubmodes |= (params.submode << 1);
+            break;
+#endif
+#ifdef JS8_ENABLE_FT2
+        case Varicode::JS8CallFT2:
+            dec_data.params.kposFT2 = params.start;
+            dec_data.params.kszFT2 = params.sz;
+            dec_data.params.nsubmodes |= 16; // bit 4
             break;
 #endif
         }
@@ -2412,9 +2510,10 @@ void UI_Constructor::refuseToSendIn30mWSPRBand() {
 void UI_Constructor::prepareSending(qint64 nowMS) {
     // TX Duration in seconds.
     const double tx_duration = JS8::Submode::txDuration(m_nSubMode);
-    const unsigned period = JS8::Submode::period(m_nSubMode);
+    const unsigned periodMS = JS8::Submode::periodMS(m_nSubMode);
+    const double period = periodMS / 1000.0;
 
-    const double seconds_into_the_period = (nowMS % (period * 1000)) / 1000.0;
+    const double seconds_into_the_period = (nowMS % periodMS) / 1000.0;
     const double tx_delay = m_TxDelay;
 
     const bool time_is_in_tx_delay =
@@ -2448,6 +2547,10 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
                m_nSubMode == Varicode::JS8CallUltra) {
         // for the turbo and ultra mode, only allow 1/2 late threshold
         lateThreshold *= 0.5;
+    } else if (m_nSubMode == Varicode::JS8CallFT2) {
+        // FT2/Subspace has a very short 3.75s period — don't try to
+        // start mid-period, only trigger in the TX delay window
+        lateThreshold = 0.0;
     };
 
     // qCDebug(mainwindow_js8) << "nowMS" << nowMS << "period" << period <<
@@ -2468,6 +2571,10 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         // This signals the transmitter to switch to sending.
         // When that has happened, we get a callback from
         // handle_transceiver_update, which will start the audio.
+        if (m_nSubMode == Varicode::JS8CallFT2)
+            qWarning() << "[FT2-TX] prepareSending: m_iptt 0→1, emitPTT(true)"
+                        << "secInPeriod=" << seconds_into_the_period
+                        << "txDelay=" << time_is_in_tx_delay;
         m_iptt = 1;
         m_generateAudioWhenPttConfirmedByTX = true;
         setRig();
@@ -2495,7 +2602,43 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 
         if (m_tune) {
             itone[0] = 0;
-        } else {
+        }
+#ifdef JS8_ENABLE_FT2
+        else if (m_nSubMode == Varicode::JS8CallFT2) {
+            // FT2 native 72-bit framing: encode JS8 varicode frame
+            // into 77-bit FT2 payload (72 data + 5 metadata bits).
+            QString frame = QString::fromLatin1(message, 12);
+            quint8 rem = 0;
+            quint64 value = Varicode::unpack72bits(frame, &rem);
+
+            // Build 77-bit array: bits 0-71 = JS8 frame, 72-74 = flags
+            std::int8_t msgbits77[77] = {};
+            for (int i = 0; i < 64; ++i)
+                msgbits77[i] = (value >> (63 - i)) & 1;
+            for (int i = 0; i < 8; ++i)
+                msgbits77[64 + i] = (rem >> (7 - i)) & 1;
+            if (m_i3bit & Varicode::JS8CallFirst) msgbits77[72] = 1;
+            if (m_i3bit & Varicode::JS8CallLast)  msgbits77[73] = 1;
+            if (m_i3bit & Varicode::JS8CallData)   msgbits77[74] = 1;
+
+            ft2_encode_from_bits_c(msgbits77,
+                         const_cast<int *>(reinterpret_cast<volatile int *>(itone)));
+
+            // Generate the GFSK waveform at 48kHz
+            ft2_gen_wave_c(
+                const_cast<int *>(reinterpret_cast<volatile int *>(itone)),
+                FT2_NUM_SYMBOLS, FT2_TX_NSPS, 48000.0f,
+                static_cast<float>(freq()),
+                ft2_txwave, FT2_NWAVE);
+            ft2_txwave_len = FT2_NWAVE;
+
+            qWarning() << "[FT2-TX] native frame:" << frame
+                       << "bits=" << m_i3bit
+                       << "itone[0..4]=" << itone[0] << itone[1]
+                       << itone[2] << itone[3] << itone[4];
+        }
+#endif
+        else {
             JS8::encode(m_i3bit,
                         JS8::Costas::array(JS8::Submode::costas(m_nSubMode)),
                         message,
@@ -2582,8 +2725,11 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
     }
 
     // TODO: stop
-    if (!m_btxok && m_btxok0 && m_iptt == 1)
+    if (!m_btxok && m_btxok0 && m_iptt == 1) {
+        if (m_nSubMode == Varicode::JS8CallFT2)
+            qWarning() << "[FT2-TX] btxok edge: triggering stopTx()";
         stopTx();
+    }
 }
 
 void UI_Constructor::updateClockUI(const QDateTime &now) {
@@ -2760,17 +2906,19 @@ void UI_Constructor::startTx() {
 
 void UI_Constructor::transmit() {
     if (m_modulator->isIdle()) {
-        qDebug(mainwindow_js8) << "Asking the modulator to emit audio.";
+        qWarning() << "[FT2-TX] transmit(): modulator idle, emitting sendMessage"
+                    << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode;
         Q_EMIT sendMessage(freq() + m_XIT, m_nSubMode, m_TxDelay, m_soundOutput,
                            m_config.audio_output_channel());
         ui->signal_meter_widget->setValue(0, 0);
     } else {
-        qDebug(mainwindow_js8) << "Not asking the modulator to emit audio as "
-                                  "modulator isn't idle.";
+        qWarning() << "[FT2-TX] transmit(): modulator NOT idle, skipping!";
     }
 }
 
 void UI_Constructor::stopTx() {
+    if (m_nSubMode == Varicode::JS8CallFT2)
+        qWarning() << "[FT2-TX] stopTx() called";
     Q_EMIT endTransmitMessage();
 
     auto dt = DecodedText(m_currentMessage.trimmed(), m_currentMessageBits,
@@ -2800,8 +2948,15 @@ void UI_Constructor::stopTx() {
 #else
     bool shouldContinue = prepareNextMessageFrame();
 #endif
+    if (m_nSubMode == Varicode::JS8CallFT2)
+        qWarning() << "[FT2-TX] stopTx: shouldContinue=" << shouldContinue
+                   << "m_auto=" << m_auto << "m_txFrameCount=" << m_txFrameCount;
     if (!shouldContinue) {
         // TODO: jsherer - split this up...
+#ifdef JS8_ENABLE_FT2
+        // FT2: keep message text so user can re-send; JS8: clear it
+        if (m_nSubMode != Varicode::JS8CallFT2)
+#endif
         ui->extFreeTextMsgEdit->clear();
         ui->extFreeTextMsgEdit->setReadOnly(false);
         update_dynamic_property(ui->extFreeTextMsgEdit, "transmitting", false);
@@ -4002,6 +4157,8 @@ void UI_Constructor::on_actionModeJS8Slow_triggered() { setupJS8(); }
 
 void UI_Constructor::on_actionModeJS8Ultra_triggered() { setupJS8(); }
 
+void UI_Constructor::on_actionModeFT2_triggered() { setupJS8(); }
+
 void UI_Constructor::on_actionModeAutoreply_toggled(bool) {
     // update the HB ack option (needs autoreply on)
     prepareHeartbeatMode(canCurrentModeSendHeartbeat() &&
@@ -4081,6 +4238,10 @@ void UI_Constructor::setupJS8() {
         m_nSubMode = Varicode::JS8CallSlow;
     else if (ui->actionModeJS8Ultra->isChecked())
         m_nSubMode = Varicode::JS8CallUltra;
+#ifdef JS8_ENABLE_FT2
+    else if (ui->actionModeFT2->isChecked())
+        m_nSubMode = Varicode::JS8CallFT2;
+#endif
 
     // Only enable heartbeat for modes that support it
     prepareHeartbeatMode(canCurrentModeSendHeartbeat() &&
@@ -4102,7 +4263,7 @@ void UI_Constructor::setupJS8() {
     m_wideGraph->show();
 
     Q_ASSERT(JS8_NTMAX == 60);
-    m_wideGraph->setPeriod(m_TRperiod);
+    m_wideGraph->setPeriod(JS8::Submode::periodMS(m_nSubMode));
     m_detector->setTRPeriod(JS8_NTMAX); // TODO - not thread safe
 
     updateTextDisplay();
@@ -4431,11 +4592,10 @@ void UI_Constructor::sendCQ(bool repeat) {
         m_hb_loop->onLoopCancel();
     }
 
-    QString message = m_config.cq_message();
-    if (message.isEmpty()) {
-        QString mygrid = m_config.my_grid().left(4);
-        message = QString("CQ CQ CQ %1").arg(mygrid).trimmed();
-    }
+    QString message;
+    message = m_config.cq_message();
+    if (message.isEmpty())
+        message = QString("CQ CQ CQ %1").arg(m_config.my_grid().left(4)).trimmed();
 
     clearCallsignSelected();
 
@@ -4475,7 +4635,8 @@ void UI_Constructor::on_cqMacroButton_toggled(bool checked) {
     updateCQButtonDisplay();
 }
 
-void UI_Constructor::on_cqMacroButton_clicked() {}
+void UI_Constructor::on_cqMacroButton_clicked() {
+}
 
 void UI_Constructor::on_replyMacroButton_clicked() {
     QString call = callsignSelected();
@@ -5324,11 +5485,22 @@ void UI_Constructor::handle_transceiver_update(
         if (m_generateAudioWhenPttConfirmedByTX &&
             m_iptt) // waiting to Tx and still needed
         {
-            // The Modulator nicely emits silence during txDelay, so let us just
-            // tigger it.
+            qWarning() << "[FT2-TX] PTT confirmed, calling transmit()"
+                        << "m_iptt=" << m_iptt;
             transmit();
+        } else {
+            if (m_nSubMode == Varicode::JS8CallFT2)
+                qWarning() << "[FT2-TX] PTT update but NOT transmitting:"
+                            << "genAudio=" << m_generateAudioWhenPttConfirmedByTX
+                            << "m_iptt=" << m_iptt;
         }
         m_generateAudioWhenPttConfirmedByTX = false;
+    } else {
+        if (m_nSubMode == Varicode::JS8CallFT2 && new_rig_state.ptt())
+            qWarning() << "[FT2-TX] PTT update SKIPPED: hold_ptt="
+                        << m_config.hold_ptt()
+                        << "newPtt=" << new_rig_state.ptt()
+                        << "oldPtt=" << m_rigState.ptt();
     }
     m_rigState = new_rig_state;
 

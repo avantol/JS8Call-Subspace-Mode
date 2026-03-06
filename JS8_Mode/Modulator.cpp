@@ -13,6 +13,7 @@
 #include <QLoggingCategory>
 #include <QtMath>
 
+#include <algorithm>
 #include <limits>
 #include <numbers>
 
@@ -41,21 +42,32 @@ void Modulator::start(double const frequency, int const submode,
     Q_ASSERT(stream);
 
     const State current_state = m_state.load();
+    qWarning() << "[FT2-TX] Modulator::start() freq=" << frequency
+               << "submode=" << submode << "state=" << (int)current_state
+               << "tuning=" << m_tuning;
     if (current_state != State::Idle) {
-        qCDebug(modulator_js8)
-            << "Modulator does not find itself in state idle, but"
-            << (current_state == State::Active          ? "Active"
-                : current_state == State::Synchronizing ? "Synchronizing"
-                : current_state == State::Idle          ? "Idle"
-                                                        : "??What??")
-            << "so calling stop()";
+        qWarning() << "[FT2-TX] Modulator not idle, calling stop() first";
         stop();
     }
 
     m_quickClose = false;
     m_audioFrequency = frequency;
+#ifdef JS8_ENABLE_FT2
+    if (submode == 16 /* Varicode::JS8CallFT2 */ && !m_tuning) {
+        m_ft2Mode = true;
+        m_ft2Wave = ft2_txwave;
+        m_ft2WaveLen = ft2_txwave_len;
+        m_nsps = FT2_TX_NSPS;  // 1152 at 48kHz
+        m_toneSpacing = 12000.0 / FT2_NSPS;  // ~41.67 Hz
+    } else {
+        m_ft2Mode = false;
+        m_nsps = JS8::Submode::samplesForOneSymbol(submode);
+        m_toneSpacing = JS8::Submode::toneSpacing(submode);
+    }
+#else
     m_nsps = JS8::Submode::samplesForOneSymbol(submode);
     m_toneSpacing = JS8::Submode::toneSpacing(submode);
+#endif
     m_isym0 = std::numeric_limits<unsigned>::max();
     m_amp = std::numeric_limits<qint16>::max();
     m_audioFrequency0 = 0.0;
@@ -71,7 +83,7 @@ void Modulator::start(double const frequency, int const submode,
         // which millisecond of the current transmit period we're currently at.
 
         qint64 const nowMS = DriftingDateTime::currentMSecsSinceEpoch();
-        unsigned const periodMS = JS8::Submode::period(submode) * MS_PER_SEC;
+        unsigned const periodMS = JS8::Submode::periodMS(submode);
         auto const startDelayMS = JS8::Submode::startDelayMS(submode);
         unsigned const periodOffsetMS = nowMS % periodMS;
 
@@ -100,10 +112,16 @@ void Modulator::start(double const frequency, int const submode,
             m_silentFrames =
                 (startDelayMS - periodOffsetMS) * FRAME_RATE / MS_PER_SEC;
         } else {
-            qCWarning(modulator_js8)
-                << "Starting" << periodOffsetMS
-                << "ms late into transmission, cutting away initial symbol(s).";
-            m_ic = (periodOffsetMS - startDelayMS) * FRAME_RATE / MS_PER_SEC;
+            // Too late in the current period to start cleanly.
+            // Wait for the next period boundary + startDelay instead of
+            // cutting away initial symbols (which breaks GFSK sync).
+            unsigned const msToNextBoundary = periodMS - periodOffsetMS;
+            qCDebug(modulator_js8)
+                << "Too late by" << (periodOffsetMS - startDelayMS)
+                << "ms into period, waiting" << msToNextBoundary
+                << "ms for next period boundary.";
+            m_silentFrames = (msToNextBoundary + startDelayMS) *
+                             FRAME_RATE / MS_PER_SEC;
         }
     } else {
         qCDebug(modulator_js8) << "Modulator finds it is tuning.";
@@ -124,10 +142,13 @@ void Modulator::start(double const frequency, int const submode,
 
     m_stream = stream;
     if (m_stream) {
+        qWarning() << "[FT2-TX] Modulator::start() calling m_stream->restart()"
+                    << "ft2Mode=" << m_ft2Mode
+                    << "ft2WaveLen=" << m_ft2WaveLen
+                    << "state=" << (int)m_state.load();
         m_stream->restart(this);
     } else {
-        qCDebug(modulator_js8)
-            << "Modulator::start: no audio output stream assigned";
+        qWarning() << "[FT2-TX] Modulator::start: NO audio output stream!";
     }
 }
 
@@ -148,6 +169,7 @@ void Modulator::tune(bool const tuning) {
  * @param quickClose
  */
 void Modulator::stop(bool const quickClose) {
+    qWarning() << "[FT2-TX] Modulator::stop() quickClose=" << quickClose;
     m_quickClose = quickClose;
     close();
 }
@@ -207,7 +229,37 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         [[fallthrough]];
 
     case State::Active: {
-        // Fade out parameters; no fade out during tuning.
+#ifdef JS8_ENABLE_FT2
+        if (m_ft2Mode && m_ft2Wave && m_ft2WaveLen > 0) {
+            // FT2: play back pre-generated GFSK waveform
+            if (m_ic == 0)
+                qWarning() << "[FT2-TX] readData: starting waveform, len="
+                           << m_ft2WaveLen << "first sample="
+                           << m_ft2Wave[0] << m_ft2Wave[1] << m_ft2Wave[2]
+                           << "maxSize=" << maxSize
+                           << "bytesPerFrame=" << bytesPerFrame();
+            while (samples != samplesEnd &&
+                   m_ic < static_cast<unsigned>(m_ft2WaveLen)) {
+                auto sample = static_cast<qint16>(std::clamp(
+                    static_cast<double>(m_ft2Wave[m_ic]) * 32767.0,
+                    -32767.0, 32767.0));
+                samples = load(sample, samples);
+                ++framesGenerated;
+                ++m_ic;
+                if (m_ic == 2000)
+                    qWarning() << "[FT2-TX] readData: mid-waveform sample[2000]"
+                               << "float=" << m_ft2Wave[2000]
+                               << "qint16=" << sample;
+            }
+            // After waveform ends, stay Active and feed silence until
+            // stop() is called by stopTx(). Don't set State::Idle here —
+            // that causes readData to return 0, triggering QAudioSink
+            // UnderrunError which kills audio after a few cycles.
+            // Fall through to silence padding below.
+        } else
+#endif
+        {
+        // JS8: Fade out parameters; no fade out during tuning.
 
         unsigned int const i0 =
             (m_tuning ? 9999 : (JS8_NUM_SYMBOLS - 0.017) * 4.0) * m_nsps;
@@ -246,6 +298,7 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
             return framesGenerated * bytesPerFrame();
             m_phi = 0.0;
         }
+        } // end JS8 else block
 
         m_audioFrequency0 = m_audioFrequency;
 

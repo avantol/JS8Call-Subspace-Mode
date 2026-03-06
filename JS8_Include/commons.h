@@ -26,6 +26,17 @@
 #define JS8_ENABLE_JS8E    1
 #define JS8_ENABLE_JS8I    0
 
+// FT2 mode constants (different protocol from JS8: 4-GFSK, LDPC(174,91))
+#ifdef JS8_ENABLE_FT2
+#define FT2_NUM_SYMBOLS    103    // 16 sync + 87 data
+#define FT2_NSPS           288    // samples/symbol at 12kHz
+#define FT2_NMAX           45000  // 3.75s * 12000
+#define FT2_TX_PERIOD_MS   3750   // T/R period in milliseconds (3.75s)
+#define FT2_START_DELAY_MS 100
+#define FT2_TX_NSPS        1152   // samples/symbol at 48kHz
+#define FT2_NWAVE          120960 // (103+2)*1152
+#endif
+
 #define JS8A_SYMBOL_SAMPLES 1920
 #define JS8A_TX_SECONDS     15
 #define JS8A_START_DELAY_MS 500
@@ -69,7 +80,14 @@ extern struct dec_data
     int kszE;                   // number of frames for decode for submode E
     int kszI;                   // number of frames for decode for submode I
     int nsubmodes;              // which submodes to decode
+#ifdef JS8_ENABLE_FT2
+    int kposFT2;                // starting position of decode for FT2
+    int kszFT2;                 // number of frames for decode for FT2
+#endif
   } params;
+#ifdef JS8_ENABLE_FT2
+  std::int16_t ft2_d2[FT2_NMAX]; // FT2 sample buffer (3.75s at 12kHz)
+#endif
 } dec_data;
 
 extern struct

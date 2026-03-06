@@ -44,7 +44,7 @@ void TxLoop::onTimer() {
         qint64 next_activity_ms_raw =
             m_next_activity.toMSecsSinceEpoch() + m_loop_period_ms;
         qint64 mode_period_ms =
-            ((qint64)1000) * JS8::Submode::period(m_submode);
+            (qint64)JS8::Submode::periodMS(m_submode);
 
         // Make sure that we start when a node slot starts:
         qint64 into_mode_slot = next_activity_ms_raw % mode_period_ms;
@@ -142,7 +142,7 @@ void TxLoop::onModeChange(Varicode::SubmodeType new_submode) {
             << "to" << JS8::Submode::name(new_submode)
             << ", restarting transmission schedule from square one.";
         const qint64 submode_period_ms =
-            ((qint64)1000) * JS8::Submode::period(new_submode);
+            (qint64)JS8::Submode::periodMS(new_submode);
         if (m_loop_period_ms < submode_period_ms)
             throw std::invalid_argument{
                 boost::str(boost::format("Submode period of %1%ms does not fit "
@@ -197,7 +197,7 @@ void TxLoop::onTxLoopPeriodChangeStart(qint64 loop_period_ms) {
     QDateTime now = DriftingDateTime::currentDateTimeUtc();
     qint64 now_ms = now.currentMSecsSinceEpoch();
     qint64 earliest = now_ms + m_loop_period_ms;
-    qint64 mode_period_ms = ((qint64)1000) * JS8::Submode::period(m_submode);
+    qint64 mode_period_ms = (qint64)JS8::Submode::periodMS(m_submode);
     qint64 remainder = earliest % mode_period_ms;
     qint64 next_start =
         0 == remainder ? earliest : earliest + mode_period_ms - remainder;

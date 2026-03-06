@@ -128,7 +128,13 @@
 
 Q_DECLARE_LOGGING_CATEGORY(mainwindow_js8)
 
+#ifdef JS8_ENABLE_FT2
+extern int volatile itone[FT2_NUM_SYMBOLS]; // Max of JS8 (79) and FT2 (103)
+extern float ft2_txwave[FT2_NWAVE];         // Pre-computed FT2 GFSK waveform
+extern int ft2_txwave_len;                   // Actual waveform length
+#else
 extern int volatile itone[JS8_NUM_SYMBOLS]; // Audio tones for all Tx symbols
+#endif
 
 //--------------------------------------------------------------- mainwindow
 // How often to poll the UI, in MS.
@@ -354,6 +360,7 @@ class UI_Constructor : public QMainWindow {
     void on_actionModeJS8Turbo_triggered();
     void on_actionModeJS8Slow_triggered();
     void on_actionModeJS8Ultra_triggered();
+    void on_actionModeFT2_triggered();
     void on_actionHeartbeatAcknowledgements_toggled(bool checked);
     void on_actionModeMultiDecoder_toggled(bool checked);
     void on_actionModeAutoreply_toggled(bool checked);
