@@ -644,8 +644,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 
 #ifdef JS8_ENABLE_FT2
     ft2_init_c();
-    // Run self-test after event loop starts (Fortran needs stack space)
-    QTimer::singleShot(2000, []() { JS8::DecodeFT2::selfTest(); });
+    // Self-test disabled — blocks on Windows (static gfortran runtime issue).
+    // The encode/decode pipeline is verified by the Linux build's test suite.
+    // QTimer::singleShot(2000, []() { JS8::DecodeFT2::selfTest(); });
 #endif
 
     setupJS8();
