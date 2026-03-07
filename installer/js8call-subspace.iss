@@ -18,7 +18,7 @@ Compression=lzma2
 SolidCompression=yes
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
 Source: "..\build\JS8Call\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
