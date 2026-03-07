@@ -77,7 +77,8 @@ jobs:
         cp build/JS8Call/LICENSE build/JS8Call/ 2>/dev/null || true
         cp local/hamlib/bin/libhamlib-4.dll build/JS8Call/
         cp local/hamlib/bin/libusb-1.0.dll build/JS8Call/
-        cp local/hamlib/bin/libwinpthread-1.dll build/JS8Call/
+        # Use MSYS2's winpthread (matches GCC 15), not Hamlib's older copy
+        cp /mingw64/bin/libwinpthread-1.dll build/JS8Call/
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
