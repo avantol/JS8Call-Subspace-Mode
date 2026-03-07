@@ -63,7 +63,8 @@ jobs:
         cmake -B build \
           -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${QT_ROOT_DIR}" \
           -DCMAKE_BUILD_TYPE=${{ inputs.build-type || 'Release' }} \
-          -DCMAKE_Fortran_FLAGS="-static-libgfortran -static-libquadmath"
+          -DCMAKE_Fortran_FLAGS="-static-libgfortran -static-libquadmath" \
+          -DFFTW3F_LIBRARY=/mingw64/lib/libfftw3f.a
 
     - name: Build
       shell: msys2 {0}
@@ -74,7 +75,6 @@ jobs:
       run: |
         cp build/JS8Call.exe build/JS8Call/
         cp build/JS8Call/LICENSE build/JS8Call/ 2>/dev/null || true
-        cp /mingw64/bin/libfftw3f-3.dll build/JS8Call/
         cp local/hamlib/bin/libhamlib-4.dll build/JS8Call/
         cp local/hamlib/bin/libusb-1.0.dll build/JS8Call/
         cp local/hamlib/bin/libwinpthread-1.dll build/JS8Call/
