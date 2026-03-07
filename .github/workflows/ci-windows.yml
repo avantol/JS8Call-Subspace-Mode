@@ -82,8 +82,19 @@ jobs:
         cp /mingw64/bin/libstdc++-6.dll build/JS8Call/
         cp /mingw64/bin/libwinpthread-1.dll build/JS8Call/
 
+    - name: Create Installer
+      run: |
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion="2.5.0" installer\js8call-subspace.iss
+      shell: pwsh
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
       with:
         name: "JS8Call-Subspace_${{ github.sha }}_win64"
         path: ./build/JS8Call/
+
+    - name: Upload Installer
+      uses: actions/upload-artifact@v5
+      with:
+        name: "JS8Call-Subspace_${{ github.sha }}_setup"
+        path: ./installer/Output/JS8Call-Subspace-Setup.exe
