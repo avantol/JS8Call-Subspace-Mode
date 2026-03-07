@@ -61,7 +61,7 @@ jobs:
       shell: msys2 {0}
       run: |
         cmake -B build \
-          -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${Qt6_DIR}" \
+          -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${QT_ROOT_DIR}" \
           -DCMAKE_BUILD_TYPE=${{ inputs.build-type || 'Release' }}
 
     - name: Build
