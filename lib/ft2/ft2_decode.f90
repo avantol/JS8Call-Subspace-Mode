@@ -580,9 +580,7 @@ contains
             dt_avg=u*real(best_ibest_avg)/1333.33 + (1.0-u)*dt_avg
          endif
 
-! Write averaging status to avemsg.txt (unit 14)
-         write(14,1200) navg_ft2,nint(f_avg),dt_avg
-1200     format('FT2 avg:  navg=',i3,'  f=',i5,' Hz  dt=',f6.2,' s')
+! (Removed write(14,...) that leaked fort.14 — no open(14) in bridge mode)
 
 ! Try averaged decode if single-period failed and navg >= 2
          if(ndecodes.eq.0 .and. navg_ft2.ge.2) then
@@ -724,11 +722,7 @@ contains
 ! Report averaged decode with "a" flag via callback
                   call this%callback(best_sync_avg,nint(xsnr),    &
                        xdt,f_avg,message,iaptype,qual,message77)
-! Write decoded message to avemsg.txt
-                  write(14,1210) navg_ft2,nint(f_avg),xdt,        &
-                       trim(message)
-1210              format('FT2 avg:  navg=',i3,'  f=',i5,          &
-                       '  dt=',f6.2,'  ',a)
+! (Removed write(14,...) that leaked fort.14)
                   navg_ft2=0              !Reset after successful decode
                   bm_avg=0.0
                   exit

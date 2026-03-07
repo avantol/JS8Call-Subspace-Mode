@@ -1,72 +1,36 @@
-name: CI Build for Windows 10+ x64
-run-name: ${{ (github.event.inputs.environment) || (github.event.pull_request.title) || 'CI' }} Build for Windows 10+ x64
+name: Windows Build (Subspace)
 
-on: 
-  workflow_dispatch: 
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
     inputs:
       build-type:
         description: 'Build type (Debug/Release)'
         required: false
         type: string
         default: 'Release'
-      release-ver:
-        description: 'Release Version (v2.5.1)'
-        required: false
-        type: string
-        default: 'v2.5.1'
-      environment:
-        description: 'Environment to run in'
-        type: environment
-        default: CI
-        required: false
-  pull_request:
-  workflow_call:
-    inputs:
-      build-type:
-        description: 'Build type (Debug/Release)'
-        required: false
-        type: string
-        default: 'Debug'
-      release-ver:
-        description: 'Release Version (v2.5.1)'
-        required: false
-        type: string      
-        default: 'v2.5.1'        
-env:
-  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
-  BUILD_TYPE: Release
 
 jobs:
-  build_windows-2025:
+  build_windows:
     runs-on: windows-2025
-    permissions: write-all
-    environment: ${{ inputs.environment }}
-   
     steps:
     - run: git config --global core.autocrlf input
     - uses: actions/checkout@v5
+
     - uses: msys2/setup-msys2@v2
       with:
         update: true
         cache: true
         install: >-
-          git python base-devel make unzip zip tar
+          git base-devel make unzip
         pacboy: >-
           toolchain:p
-          autotools:p
           cmake:p
           ninja:p
           libusb:p
-          wget:p
           boost:p
           fftw:p
-          sqlite3:p
-          nsis:p
-          python:p
-
-    - name: Setup build directory
-      shell: msys2 {0}
-      run: mkdir -p build
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
@@ -76,151 +40,45 @@ jobs:
         arch: 'win64_mingw'
         modules: 'qtmultimedia qtserialport'
         cache: true
-        dir: 'D:/a/JS8Call-improved/JS8Call-improved/local/qt693'
 
-    - name: hamlib/hamlib release
+    - name: Download Hamlib
       uses: robinraju/release-downloader@v1.12
       with:
         repository: 'hamlib/hamlib'
         fileName: 'hamlib-w64-4.6.5.zip'
         tag: '4.6.5'
         extract: true
-        out-file-path: 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib465-tmp'
+        out-file-path: 'local/hamlib-tmp'
 
-    - name: Move hamlib directory to the right spot
+    - name: Setup Hamlib
       shell: msys2 {0}
       run: |
-        mv 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib465-tmp/hamlib-w64-4.6.5' 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib'
-        mv 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib/lib/gcc/libhamlib.dll.a' 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib/lib/libhamlib.dll.a'
+        mv local/hamlib-tmp/hamlib-w64-4.6.5 local/hamlib
+        mv local/hamlib/lib/gcc/libhamlib.dll.a local/hamlib/lib/libhamlib.dll.a
 
-    - name: Configure JS8Call
+    - name: Configure
       shell: msys2 {0}
       run: |
-        cd ./build
-        cmake -DCMAKE_PREFIX_PATH='D:/a/JS8Call-improved/JS8Call-improved/local/hamlib;D:/a/JS8Call-improved/JS8Call-improved/local/qt693/Qt/6.9.3/mingw_64' ..
+        cmake -B build \
+          -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${Qt6_DIR}" \
+          -DCMAKE_BUILD_TYPE=${{ inputs.build-type || 'Release' }}
 
-    - name: Build JS8Call (CI build)
-      if: ${{ !(inputs.environment) || (inputs.environment == 'CI') }}
+    - name: Build
+      shell: msys2 {0}
+      run: cmake --build build -j$(nproc)
+
+    - name: Package
       shell: msys2 {0}
       run: |
-        cd ./build
-        cmake --build . --config Debug
+        cp build/JS8Call.exe build/JS8Call/
+        cp build/JS8Call/LICENSE build/JS8Call/ 2>/dev/null || true
+        cp /mingw64/bin/libfftw3f-3.dll build/JS8Call/
+        cp local/hamlib/bin/libhamlib-4.dll build/JS8Call/
+        cp local/hamlib/bin/libusb-1.0.dll build/JS8Call/
+        cp local/hamlib/bin/libwinpthread-1.dll build/JS8Call/
 
-    - name: Build JS8Call (Release build)
-      if: ${{ inputs.environment == 'Release' }}
-      shell: msys2 {0}
-      run: |
-        cd ./build
-        cmake --build . --config Release
-
-    - name: Move exe into install directory
-      shell: msys2 {0}
-      run: |
-        cp ./build/JS8Call.exe ./build/JS8Call/
-        
-    - name: Move libraries and License to install directory
-      shell: msys2 {0}
-      run: |
-        cd ./build/
-        cp 'D:/a/JS8Call-improved/JS8Call-improved/LICENSE' JS8Call/
-        cp /mingw64/bin/libfftw3f-3.dll JS8Call/
-        cp 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib/bin/libhamlib-4.dll' JS8Call/
-        cp 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib/bin/libusb-1.0.dll' JS8Call/
-        cp 'D:/a/JS8Call-improved/JS8Call-improved/local/hamlib/bin/libwinpthread-1.dll' JS8Call/
-
-    - name: Get secrets (CI)
-      if: ${{ !(inputs.environment) || (inputs.environment == 'CI') }}
-      shell: pwsh
-      run: |
-        echo "${{ secrets.CI_CODE_SIGNING_PFX_BASE64 }}" > 'D:/a/JS8Call-improved/cert.base64'
-        certutil -decode 'D:/a/JS8Call-improved/cert.base64' 'D:/a/JS8Call-improved/certificate.pfx'
-      continue-on-error: true
-
-    - name: Get secrets (Release)
-      if: ${{ inputs.environment == 'Release' }}
-      shell: pwsh
-      run: |
-        echo "${{ secrets.RELEASE_CODE_SIGNING_PFX_BASE64 }}" > 'D:/a/JS8Call-improved/cert.base64'
-        certutil -decode 'D:/a/JS8Call-improved/cert.base64' 'D:/a/JS8Call-improved/certificate.pfx'
-      continue-on-error: false
-
-    - name: Sign JS8Call (CI)
-      if: ${{ !(inputs.environment) || (inputs.environment == 'CI') }}
-      shell: pwsh
-      env: 
-        PFX_CERTIFICATE_PASSWORD: ${{ secrets.CI_PFX_CERTIFICATE_PASSWORD }}
-      run: |
-        cd ./build/JS8Call/
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" *.exe
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libhamlib*.dll
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libusb*.dll
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libwinpthread*.dll
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libfftw3*.dll
-      continue-on-error: true
-
-    - name: Sign JS8Call (Release)
-      if: ${{ inputs.environment == 'Release' }}
-      shell: pwsh
-      env: 
-        PFX_CERTIFICATE_PASSWORD: ${{ secrets.RELEASE_PFX_CERTIFICATE_PASSWORD }}
-      run: |
-        cd ./build/JS8Call/
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" *.exe
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libhamlib*.dll
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libusb*.dll
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libwinpthread*.dll
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" libfftw3*.dll
-      continue-on-error: false
-
-    - name: INNO Setup (Release build)
-      if: ${{ (inputs.environment == 'Release') && (inputs.release-ver) }}
-      run: |
-        cd ./build/
-        & 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe' /F"JS8Call-installer-${{ inputs.release-ver }}_${{ runner.arch }}" ../.github/workflows/scripts/ci-windows-installer.iss
-
-    - name: INNO Setup (CI build)
-      if: ${{ !(inputs.environment) || (inputs.environment == 'CI') }}
-      run: |
-        cd ./build/
-        & 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe' /F"JS8Call-installer-devel_${{ runner.arch }}" ../.github/workflows/scripts/ci-windows-installer.iss
-
-    - name: Installer signtool run (CI build)
-      if: ${{ !(inputs.environment) || (inputs.environment == 'CI') }}
-      env:
-        PFX_CERTIFICATE_PASSWORD: ${{ secrets.CI_PFX_CERTIFICATE_PASSWORD }}
-      run: |
-        cd ./build/JS8Call/
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" JS8Call-installer-*.exe
-      continue-on-error: true
-
-    - name: Installer signtool run (Release build)
-      if: ${{ inputs.environment == 'Release' }}
-      env:
-        PFX_CERTIFICATE_PASSWORD: ${{ secrets.RELEASE_PFX_CERTIFICATE_PASSWORD }}
-      run: |
-        cd ./build/JS8Call/
-        & 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/signtool.exe' sign /fd SHA256 /v /f 'D:/a/JS8Call-improved/certificate.pfx' /p "$env:PFX_CERTIFICATE_PASSWORD" JS8Call-installer-*.exe
-      continue-on-error: false
-      
-    - name: Attestation (Release Only)
-      if: ${{ (inputs.environment == 'Release') && (inputs.release-ver) }}
-      uses: actions/attest-build-provenance@v3
-      with:
-        subject-path: '${{ github.workspace }}/build/JS8Call/*'
-        
-    - name: Upload Artifact (Release build)
-      if: ${{ (inputs.environment == 'Release') && (inputs.release-ver) }}
+    - name: Upload Artifact
       uses: actions/upload-artifact@v5
       with:
-        name: "JS8call-improved_${{ inputs.release-ver }}_${{ runner.arch }}_win64"
-        path: |
-          ./build/JS8Call/JS8Call-installer*
-
-    - name: Upload Artifact (CI build)
-      if: ${{ !(inputs.environment) || (inputs.environment == 'CI') }}
-      uses: actions/upload-artifact@v5
-      with:
-        name: "JS8call-improved_devel_${{ runner.arch }}_win64"
-        path: |
-          ./build/JS8Call/JS8Call-installer*
-          ./build/JS8Call/
+        name: "JS8Call-Subspace_${{ github.sha }}_win64"
+        path: ./build/JS8Call/
