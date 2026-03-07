@@ -26,6 +26,7 @@ jobs:
           git base-devel make unzip
         pacboy: >-
           toolchain:p
+          fc:p
           cmake:p
           ninja:p
           libusb:p
