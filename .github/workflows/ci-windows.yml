@@ -77,7 +77,9 @@ jobs:
         cp build/JS8Call/LICENSE build/JS8Call/ 2>/dev/null || true
         cp local/hamlib/bin/libhamlib-4.dll build/JS8Call/
         cp local/hamlib/bin/libusb-1.0.dll build/JS8Call/
-        # Use MSYS2's winpthread (matches GCC 15), not Hamlib's older copy
+        # Overwrite Qt's runtime DLLs with MSYS2's (must match GCC 15 that compiled the exe)
+        cp /mingw64/bin/libgcc_s_seh-1.dll build/JS8Call/
+        cp /mingw64/bin/libstdc++-6.dll build/JS8Call/
         cp /mingw64/bin/libwinpthread-1.dll build/JS8Call/
 
     - name: Upload Artifact
