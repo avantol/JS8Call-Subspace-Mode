@@ -313,6 +313,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                    ? DriftingDateTime::drift() / 1000.0
                                    : decodedtext.dt();
 
+                    // Always use the raw decoder DT for the running average
+                    // (d.tdrift may reflect the app's internal drift when
+                    // auto-sync is enabled, which is not the signal offset)
+                    m_dtSum += decodedtext.dt();
+                    m_dtCount++;
+                    updateAvgDTLabel();
+
                     // if we have any "first" frame, and a buffer is already
                     // established, clear it...
                     int prevBufferOffset = -1;

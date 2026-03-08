@@ -259,6 +259,11 @@ void UI_Constructor::displayCallActivity() {
 #else
             if (true) {
 #endif
+                auto tdriftItem = new QTableWidgetItem(
+                    QString(columnLabel("%1 ms")).arg((int)(1000 * d.tdrift)));
+                tdriftItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                ui->tableWidgetCalls->setItem(row, col++, tdriftItem);
+
                 auto ageItem = new QTableWidgetItem(since(d.utcTimestamp));
                 ageItem->setTextAlignment(Qt::AlignCenter);
                 ageItem->setToolTip(d.utcTimestamp.toString());
@@ -277,11 +282,6 @@ void UI_Constructor::displayCallActivity() {
                 offsetItem->setData(Qt::UserRole, QVariant(d.offset));
                 offsetItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
                 ui->tableWidgetCalls->setItem(row, col++, offsetItem);
-
-                auto tdriftItem = new QTableWidgetItem(
-                    QString(columnLabel("%1 ms")).arg((int)(1000 * d.tdrift)));
-                tdriftItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-                ui->tableWidgetCalls->setItem(row, col++, tdriftItem);
 
                 auto name = JS8::Submode::name(d.submode);
                 auto modeItem =
@@ -377,14 +377,14 @@ void UI_Constructor::displayCallActivity() {
                 ui->tableWidgetCalls->setItem(row, col++, logCommentItem);
 
             } else {
+                ui->tableWidgetCalls->setItem(
+                    row, col++, new QTableWidgetItem("")); // tdrift
                 ui->tableWidgetCalls->setItem(row, col++,
                                               new QTableWidgetItem("")); // age
                 ui->tableWidgetCalls->setItem(row, col++,
                                               new QTableWidgetItem("")); // snr
                 ui->tableWidgetCalls->setItem(row, col++,
                                               new QTableWidgetItem("")); // freq
-                ui->tableWidgetCalls->setItem(
-                    row, col++, new QTableWidgetItem("")); // tdrift
                 ui->tableWidgetCalls->setItem(row, col++,
                                               new QTableWidgetItem("")); // mode
                 ui->tableWidgetCalls->setItem(row, col++,
@@ -472,12 +472,12 @@ void UI_Constructor::displayCallActivity() {
         ui->tableWidgetCalls->setColumnHidden(0, !showIconColumn);
         ui->tableWidgetCalls->setColumnHidden(1,
                                               !showColumn("call", "callsign"));
-        ui->tableWidgetCalls->setColumnHidden(2,
-                                              !showColumn("call", "timestamp"));
-        ui->tableWidgetCalls->setColumnHidden(3, !showColumn("call", "snr"));
-        ui->tableWidgetCalls->setColumnHidden(4, !showColumn("call", "offset"));
         ui->tableWidgetCalls->setColumnHidden(
-            5, !showColumn("call", "tdrift", false));
+            2, !showColumn("call", "tdrift", false));
+        ui->tableWidgetCalls->setColumnHidden(3,
+                                              !showColumn("call", "timestamp"));
+        ui->tableWidgetCalls->setColumnHidden(4, !showColumn("call", "snr"));
+        ui->tableWidgetCalls->setColumnHidden(5, !showColumn("call", "offset"));
         ui->tableWidgetCalls->setColumnHidden(
             6, !showColumn("call", "submode", false));
         ui->tableWidgetCalls->setColumnHidden(

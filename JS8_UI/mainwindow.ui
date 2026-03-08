@@ -366,6 +366,151 @@ color : white;
             </widget>
            </item>
            <item>
+            <spacer name="horizontalSpacer_avgDT_left">
+             <property name="orientation">
+              <enum>Qt::Orientation::Horizontal</enum>
+             </property>
+             <property name="sizeType">
+              <enum>QSizePolicy::Policy::Expanding</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>10</width>
+               <height>10</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <widget class="QWidget" name="avgDTContainer">
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>42</height>
+              </size>
+             </property>
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <layout class="QVBoxLayout" name="avgDTLayout">
+              <property name="spacing">
+               <number>0</number>
+              </property>
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+              <item>
+               <widget class="QLabel" name="labAvgDT">
+                <property name="maximumSize">
+                 <size>
+                  <width>16777215</width>
+                  <height>16</height>
+                 </size>
+                </property>
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QLabel {
+color : white;
+background-color: black;
+padding: 0px;
+margin: 0px;
+}</string>
+                </property>
+                <property name="text">
+                 <string>AVG TIME DELTA: -- ms</string>
+                </property>
+                <property name="alignment">
+                 <set>Qt::AlignmentFlag::AlignCenter</set>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="avgDTButtonLayout">
+                <property name="spacing">
+                 <number>4</number>
+                </property>
+               <item>
+                <widget class="QPushButton" name="btnAdjustClockDT">
+                 <property name="enabled">
+                  <bool>false</bool>
+                 </property>
+                 <property name="minimumSize">
+                  <size>
+                   <width>100</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>100</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">QPushButton {
+	background-color:lightgray;
+	padding:0.25em 0.25em;
+	border-style:solid;
+	border-width:0px;
+	border-radius:2px;
+ }</string>
+                 </property>
+                 <property name="text">
+                  <string>ADJUST DRIFT</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="btnResetAvgDT">
+                 <property name="minimumSize">
+                  <size>
+                   <width>60</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>60</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">QPushButton {
+	background-color:lightgray;
+	padding:0.25em 0.25em;
+	border-style:solid;
+	border-width:0px;
+	border-radius:2px;
+ }</string>
+                 </property>
+                 <property name="text">
+                  <string>RESET</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+            </layout>
+            </widget>
+           </item>
+           <item>
             <spacer name="horizontalSpacer_9">
              <property name="orientation">
               <enum>Qt::Orientation::Horizontal</enum>
@@ -1065,17 +1210,17 @@ QPushButton:checked {
         </column>
         <column>
          <property name="text">
+          <string>Time Delta</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
           <string>Age</string>
          </property>
         </column>
         <column>
          <property name="text">
           <string>SNR</string>
-         </property>
-        </column>
-        <column>
-         <property name="text">
-          <string>Time Delta</string>
          </property>
         </column>
         <column>
@@ -1251,6 +1396,11 @@ QTextEdit[transmitting=&quot;true&quot;] {
          </column>
          <column>
           <property name="text">
+           <string>Time Delta</string>
+          </property>
+         </column>
+         <column>
+          <property name="text">
            <string>Age</string>
           </property>
          </column>
@@ -1262,11 +1412,6 @@ QTextEdit[transmitting=&quot;true&quot;] {
          <column>
           <property name="text">
            <string>Offset</string>
-          </property>
-         </column>
-         <column>
-          <property name="text">
-           <string>Time Delta</string>
           </property>
          </column>
          <column>

@@ -649,6 +649,23 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // QTimer::singleShot(2000, []() { JS8::DecodeFT2::selfTest(); });
 #endif
 
+    // Average DT display — Adjust Clock and Reset buttons
+    connect(ui->btnAdjustClockDT, &QPushButton::clicked, this, [this]() {
+        if (m_dtCount > 0) {
+            int avgMs = static_cast<int>(1000.0 * m_dtSum / m_dtCount);
+            setDrift(-avgMs);
+            // Reset average and disable button to prevent compounding
+            m_dtSum = 0.0;
+            m_dtCount = 0;
+            updateAvgDTLabel();
+        }
+    });
+    connect(ui->btnResetAvgDT, &QPushButton::clicked, this, [this]() {
+        m_dtSum = 0.0;
+        m_dtCount = 0;
+        updateAvgDTLabel();
+    });
+
     setupJS8();
 
     Q_EMIT transmitFrequency(freq() + m_XIT);

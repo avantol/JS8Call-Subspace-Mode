@@ -234,6 +234,12 @@ void UI_Constructor::displayBandActivity() {
                 offsetItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
                 ui->tableWidgetRXAll->setItem(row, col++, offsetItem);
 
+                auto tdriftItem = new QTableWidgetItem(
+                    QString(columnLabel("%1 ms")).arg((int)(1000 * tdrift)));
+                tdriftItem->setData(Qt::UserRole, QVariant(tdrift));
+                tdriftItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                ui->tableWidgetRXAll->setItem(row, col++, tdriftItem);
+
                 auto ageItem = new QTableWidgetItem(age);
                 ageItem->setTextAlignment(Qt::AlignCenter);
                 ageItem->setToolTip(timestamp.toString());
@@ -246,12 +252,6 @@ void UI_Constructor::displayBandActivity() {
                         : QString(columnLabel("%1 dB")).arg(snrText));
                 snrItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
                 ui->tableWidgetRXAll->setItem(row, col++, snrItem);
-
-                auto tdriftItem = new QTableWidgetItem(
-                    QString(columnLabel("%1 ms")).arg((int)(1000 * tdrift)));
-                tdriftItem->setData(Qt::UserRole, QVariant(tdrift));
-                tdriftItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-                ui->tableWidgetRXAll->setItem(row, col++, tdriftItem);
 
                 auto name = JS8::Submode::name(submode);
                 auto submodeItem =
@@ -373,11 +373,11 @@ void UI_Constructor::displayBandActivity() {
 
         // Hide columns
         ui->tableWidgetRXAll->setColumnHidden(0, !showColumn("band", "offset"));
-        ui->tableWidgetRXAll->setColumnHidden(1,
-                                              !showColumn("band", "timestamp"));
-        ui->tableWidgetRXAll->setColumnHidden(2, !showColumn("band", "snr"));
         ui->tableWidgetRXAll->setColumnHidden(
-            3, !showColumn("band", "tdrift", false));
+            1, !showColumn("band", "tdrift", false));
+        ui->tableWidgetRXAll->setColumnHidden(2,
+                                              !showColumn("band", "timestamp"));
+        ui->tableWidgetRXAll->setColumnHidden(3, !showColumn("band", "snr"));
         ui->tableWidgetRXAll->setColumnHidden(
             4, !showColumn("band", "submode", false));
 

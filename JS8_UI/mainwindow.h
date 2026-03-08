@@ -898,6 +898,11 @@ class UI_Constructor : public QMainWindow {
 
     QMap<QString, int> m_rxInboxCountCache; // call -> count
 
+    // Average DT tracking
+    double m_dtSum = 0.0;
+    int m_dtCount = 0;
+    void updateAvgDTLabel();
+
     QMap<QString, QMap<QString, CallDetail>>
         m_callActivityBandCache; // band -> call activity
     QMap<QString, QMap<int, QList<ActivityDetail>>>

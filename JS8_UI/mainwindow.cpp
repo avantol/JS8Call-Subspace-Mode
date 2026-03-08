@@ -7149,5 +7149,24 @@ QByteArray UI_Constructor::wisdomFileName() const {
         .toLocal8Bit();
 }
 
+void UI_Constructor::updateAvgDTLabel() {
+    if (m_dtCount > 0) {
+        int avgMs = static_cast<int>(1000.0 * m_dtSum / m_dtCount);
+        ui->labAvgDT->setText(QString("AVG TIME DELTA: %1 ms").arg(avgMs));
+        ui->btnAdjustClockDT->setEnabled(true);
+        ui->btnAdjustClockDT->setStyleSheet(
+            "QPushButton { background-color:#4CAF50; color:white; "
+            "padding:0.25em 0.25em; border-style:solid; "
+            "border-width:0px; border-radius:2px; }");
+    } else {
+        ui->labAvgDT->setText("AVG TIME DELTA: -- ms");
+        ui->btnAdjustClockDT->setEnabled(false);
+        ui->btnAdjustClockDT->setStyleSheet(
+            "QPushButton { background-color:lightgray; "
+            "padding:0.25em 0.25em; border-style:solid; "
+            "border-width:0px; border-radius:2px; }");
+    }
+}
+
 Q_LOGGING_CATEGORY(decoder_js8, "decoder.js8", QtWarningMsg)
 Q_LOGGING_CATEGORY(mainwindow_js8, "mainwindow.js8", QtWarningMsg)

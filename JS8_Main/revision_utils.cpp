@@ -24,9 +24,8 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1(v%2-build23) de KN4CRD"}
-        .arg(QCoreApplication::applicationName())
-        .arg(QCoreApplication::applicationVersion());
+    return QString{"%1 Subspace Edition (v2.6.0.25) by WM8Q"}
+        .arg(QCoreApplication::applicationName());
 }
 
 QString program_version() {
