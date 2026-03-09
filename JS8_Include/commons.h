@@ -83,6 +83,8 @@ extern struct dec_data
 #ifdef JS8_ENABLE_FT2
     int kposFT2;                // starting position of decode for FT2
     int kszFT2;                 // number of frames for decode for FT2
+    int kposFT2b;               // overlap decode start (half-cycle offset)
+    int kszFT2b;                // overlap decode size (0 = no overlap)
 #endif
   } params;
 #ifdef JS8_ENABLE_FT2

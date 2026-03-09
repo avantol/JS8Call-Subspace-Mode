@@ -505,6 +505,37 @@ margin: 0px;
                  </property>
                 </widget>
                </item>
+               <item>
+                <widget class="QSpinBox" name="spinDriftMs">
+                 <property name="minimumSize">
+                  <size>
+                   <width>100</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>120</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="minimum">
+                  <number>-5000</number>
+                 </property>
+                 <property name="maximum">
+                  <number>5000</number>
+                 </property>
+                 <property name="value">
+                  <number>0</number>
+                 </property>
+                 <property name="suffix">
+                  <string> ms</string>
+                 </property>
+                 <property name="toolTip">
+                  <string>Manual clock drift (ms). Positive = JS8Call clock later than system clock.</string>
+                 </property>
+                </widget>
+               </item>
               </layout>
              </item>
             </layout>

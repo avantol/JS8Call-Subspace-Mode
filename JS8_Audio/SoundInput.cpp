@@ -36,8 +36,10 @@ bool SoundInput::audioError() const {
             break;
 
         case QAudio::UnderrunError:
-            Q_EMIT error(tr("Audio data not being fed to the audio input "
-                            "device fast enough."));
+            // Non-fatal: input underruns happen on consumer hardware.
+            // Logging only — do not emit error (which would kill the stream).
+            qWarning() << "SoundInput: underrun detected, continuing...";
+            result = false;
             break;
 
         case QAudio::FatalError:
@@ -110,7 +112,8 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
  */
 void SoundInput::suspend() {
     if (m_stream) {
-        m_stream->suspend();
+        // Stop instead of suspend — more reliable on Linux and macOS
+        m_stream->stop();
         audioError();
     }
 }
@@ -119,14 +122,13 @@ void SoundInput::suspend() {
  * @brief Resumes audio input.
  */
 void SoundInput::resume() {
-    //  qCDebug(soundin_js8) << "Resume" <<
-    //  fmod(0.001*DriftingDateTime::currentMSecsSinceEpoch(),6.0);
     if (m_sink) {
         m_sink->reset();
     }
 
     if (m_stream) {
-        m_stream->resume();
+        // Restart instead of resume — more reliable on Linux and macOS
+        m_stream->start(m_sink);
         audioError();
     }
 }

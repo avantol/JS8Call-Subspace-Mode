@@ -1786,12 +1786,43 @@ bool UI_Constructor::decodeEnqueueReady(qint32 k, qint32 k0) {
             }
 
             if (currentDecodeStartFT2 + ft2FramesNeeded <= k) {
+                // Adaptive alignment — shift decode window using EMA of
+                // observed signal timing.  After 5 consecutive failures,
+                // reset to zero offset so Fortran gets full search range.
+                int dtOffsetSamples = 0;
+                if (m_ftConsecFails >= 5) {
+                    // Stale recovery: reset adaptive and let Fortran search
+                    m_dtEMA = 0.0;
+                    m_dtCount = 0;
+                    m_ftConsecFails = 0;
+                    updateAvgDTLabel();
+                    qCDebug(decoder_js8) << "[FT2-SYNC] adaptive reset after 5 consecutive failures";
+                } else if (m_dtCount > 3) {
+                    dtOffsetSamples = static_cast<int>(m_dtEMA * JS8_RX_SAMPLE_RATE);
+                    dtOffsetSamples = qBound(-ft2CycleFrames/2, dtOffsetSamples, ft2CycleFrames/2);
+                }
+
+                // Primary decode at cycle boundary (with adaptive offset)
                 DecodeParams d;
                 d.submode = Varicode::JS8CallFT2;
-                d.start = currentDecodeStartFT2;
+                d.start = currentDecodeStartFT2 + dtOffsetSamples;
+                if (d.start < 0) d.start += JS8_RX_SAMPLE_SIZE;
+                if (d.start >= JS8_RX_SAMPLE_SIZE) d.start -= JS8_RX_SAMPLE_SIZE;
                 d.sz = qMax(ft2FramesNeeded, k - currentDecodeStartFT2);
                 m_decoderQueue.append(d);
                 decodes++;
+
+                // Track consecutive failures (incremented here, reset on decode success)
+                m_ftConsecFails++;
+
+                qCDebug(decoder_js8) << "[FT2-SYNC] decodeEnqueueReady:"
+                    << "primary.start=" << d.start
+                    << "dtOffset=" << dtOffsetSamples
+                    << "dtEMA=" << m_dtEMA
+                    << "dtCount=" << m_dtCount
+                    << "consecFails=" << m_ftConsecFails
+                    << "k=" << k;
+
                 currentDecodeStartFT2 = nextDecodeStartFT2;
                 nextDecodeStartFT2 = currentDecodeStartFT2 + ft2CycleFrames;
             }
@@ -1963,12 +1994,41 @@ bool UI_Constructor::decodeEnqueueReadyExperiment(qint32 k, qint32 /*k0*/) {
              cycleFramesReady >= ft2FramesNeeded - 1.5 * oneSecondSamples) ||
             (incrementedBy >= oneSecondSamples &&
              cycleFramesReady < 1.5 * oneSecondSamples)) {
+            // Adaptive alignment using EMA + stale recovery
+            int dtOffsetSamples = 0;
+            if (m_ftConsecFails >= 5) {
+                m_dtEMA = 0.0;
+                m_dtCount = 0;
+                m_ftConsecFails = 0;
+                updateAvgDTLabel();
+                qCDebug(decoder_js8) << "[FT2-SYNC] adaptive reset after 5 consecutive failures";
+            } else if (m_dtCount > 3) {
+                dtOffsetSamples = static_cast<int>(m_dtEMA * JS8_RX_SAMPLE_RATE);
+                dtOffsetSamples = qBound(-ft2CycleFrames/2, dtOffsetSamples, ft2CycleFrames/2);
+            }
+
+            // Primary decode (with adaptive offset)
+            qint32 primaryStart = ft2Cycle * ft2CycleFrames + dtOffsetSamples;
+            if (primaryStart < 0) primaryStart += maxSamples;
+            if (primaryStart >= maxSamples) primaryStart -= maxSamples;
+
             DecodeParams d;
             d.submode = Varicode::JS8CallFT2;
-            d.start = ft2Cycle * ft2CycleFrames;
+            d.start = primaryStart;
             d.sz = cycleFramesReady;
             m_decoderQueue.append(d);
             decodes++;
+
+            m_ftConsecFails++;
+
+            qCDebug(decoder_js8) << "[FT2-SYNC] decodeEnqueueReadyExperiment:"
+                << "primary.start=" << primaryStart
+                << "dtOffset=" << dtOffsetSamples
+                << "dtEMA=" << m_dtEMA
+                << "dtCount=" << m_dtCount
+                << "consecFails=" << m_ftConsecFails
+                << "k=" << k;
+
             m_lastDecodeStartMap[Varicode::JS8CallFT2] = k;
         }
     }
@@ -2026,6 +2086,9 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
     // default to no submodes being decoded, then bitwise OR the modes together
     // to decode them all at once
     dec_data.params.nsubmodes = 0;
+#ifdef JS8_ENABLE_FT2
+    dec_data.params.kszFT2b = 0; // no overlap
+#endif
 
     while (!m_decoderQueue.isEmpty()) {
         auto params = m_decoderQueue.front();
@@ -7161,7 +7224,7 @@ QByteArray UI_Constructor::wisdomFileName() const {
 
 void UI_Constructor::updateAvgDTLabel() {
     if (m_dtCount > 0) {
-        int avgMs = static_cast<int>(1000.0 * m_dtSum / m_dtCount);
+        int avgMs = static_cast<int>(1000.0 * m_dtEMA);
         ui->labAvgDT->setText(QString("AVG TIME DELTA: %1 ms").arg(avgMs));
         ui->btnAdjustClockDT->setEnabled(true);
         ui->btnAdjustClockDT->setStyleSheet(

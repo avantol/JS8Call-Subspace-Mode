@@ -898,9 +898,10 @@ class UI_Constructor : public QMainWindow {
 
     QMap<QString, int> m_rxInboxCountCache; // call -> count
 
-    // Average DT tracking
-    double m_dtSum = 0.0;
-    int m_dtCount = 0;
+    // Average DT tracking (exponential moving average)
+    double m_dtEMA = 0.0;       // EMA of decoded dt values (seconds)
+    int m_dtCount = 0;          // total decode count (for initial ramp-up)
+    int m_ftConsecFails = 0;    // consecutive FT2 decode failures (for stale recovery)
     void updateAvgDTLabel();
 
     QMap<QString, QMap<QString, CallDetail>>

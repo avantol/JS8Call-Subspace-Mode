@@ -313,12 +313,20 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                    ? DriftingDateTime::drift() / 1000.0
                                    : decodedtext.dt();
 
-                    // Always use the raw decoder DT for the running average
-                    // (d.tdrift may reflect the app's internal drift when
-                    // auto-sync is enabled, which is not the signal offset)
-                    m_dtSum += decodedtext.dt();
-                    m_dtCount++;
-                    updateAvgDTLabel();
+                    // Update EMA of decoder DT for adaptive alignment.
+                    // Alpha=0.3 means ~3-4 new samples shift the average
+                    // substantially, allowing fast tracking of clock drift.
+                    {
+                        constexpr double alpha = 0.3;
+                        double dt = decodedtext.dt();
+                        if (m_dtCount == 0)
+                            m_dtEMA = dt;  // first sample: seed the EMA
+                        else
+                            m_dtEMA = alpha * dt + (1.0 - alpha) * m_dtEMA;
+                        m_dtCount++;
+                        m_ftConsecFails = 0;  // successful decode resets failure counter
+                        updateAvgDTLabel();
+                    }
 
                     // if we have any "first" frame, and a buffer is already
                     // established, clear it...

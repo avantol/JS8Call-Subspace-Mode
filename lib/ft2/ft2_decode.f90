@@ -311,8 +311,9 @@ contains
                if(iseg.eq.1) smax1=smax
                smaxthresh=0.9
                if(ndepth0.ge.3) smaxthresh=0.75
-               write(*,'(A,I3,A,F8.1,A,F8.3,A,F5.2)')                    &
-                  '[FT2-DIAG] icand=',icand,' f0=',f0,                    &
+               write(*,'(A,I3,A,I2,A,F8.1,A,I5,A,F8.3,A,F5.2)')          &
+                  '[FT2-SYNC] icand=',icand,' iseg=',iseg,               &
+                  ' f0=',f0,' ibest=',ibest,                             &
                   ' smax=',smax,' thresh=',smaxthresh
                if(smax.lt.smaxthresh) cycle
                if(iseg.gt.1 .and. smax.lt.smax1) cycle
@@ -550,6 +551,10 @@ contains
                      nsnr=nint(max(-21.0,xsnr))
                      xdt=ibest/1333.33 - 0.5
                      qual=1.0-(nharderror+dmin)/60.0
+                     write(*,'(A,F7.3,A,I4,A,F8.1,A,I3,A,F5.2)')        &
+                        '[FT2-SYNC] DECODED xdt=',xdt,                   &
+                        ' snr=',nsnr,' f=',f1,                           &
+                        ' iseg=',iseg,' qual=',qual
                      call this%callback(smax,nsnr,xdt,f1,message,iaptype, &
                                        qual,message77_save)
                      exit

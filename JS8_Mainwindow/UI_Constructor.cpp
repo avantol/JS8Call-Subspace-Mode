@@ -652,18 +652,29 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // Average DT display — Adjust Clock and Reset buttons
     connect(ui->btnAdjustClockDT, &QPushButton::clicked, this, [this]() {
         if (m_dtCount > 0) {
-            int avgMs = static_cast<int>(1000.0 * m_dtSum / m_dtCount);
-            setDrift(-avgMs);
-            // Reset average and disable button to prevent compounding
-            m_dtSum = 0.0;
+            int avgMs = static_cast<int>(1000.0 * m_dtEMA);
+            int newDrift = -avgMs;
+            setDrift(newDrift);
+            ui->spinDriftMs->blockSignals(true);
+            ui->spinDriftMs->setValue(newDrift);
+            ui->spinDriftMs->blockSignals(false);
+            // Reset EMA and disable button to prevent compounding
+            m_dtEMA = 0.0;
             m_dtCount = 0;
             updateAvgDTLabel();
         }
     });
     connect(ui->btnResetAvgDT, &QPushButton::clicked, this, [this]() {
-        m_dtSum = 0.0;
+        m_dtEMA = 0.0;
         m_dtCount = 0;
+        m_ftConsecFails = 0;
         updateAvgDTLabel();
+    });
+
+    // Manual drift spin box — directly sets DriftingDateTime offset
+    connect(ui->spinDriftMs, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int ms) {
+        setDrift(ms);
     });
 
     setupJS8();

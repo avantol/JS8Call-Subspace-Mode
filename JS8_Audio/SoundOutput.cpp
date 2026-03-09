@@ -33,8 +33,13 @@ bool SoundOutput::checkStream() const {
             break;
 
         case QAudio::UnderrunError:
-            Q_EMIT error(tr("Audio data not being fed to the audio output "
-                            "device fast enough."));
+            // Non-fatal: recover by resuming the stream instead of erroring out.
+            qWarning() << "SoundOutput: underrun detected, recovering...";
+            if (m_stream && (m_stream->state() == QAudio::IdleState
+                          || m_stream->state() == QAudio::SuspendedState)) {
+                m_stream->resume();
+            }
+            result = true;  // non-fatal, keep going
             break;
 
         case QAudio::FatalError:
