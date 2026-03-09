@@ -2632,10 +2632,20 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
                 ft2_txwave, FT2_NWAVE);
             ft2_txwave_len = FT2_NWAVE;
 
+            // Fill msgsent so the status label shows the TX message
+            std::fill_n(std::begin(msgsent), 22, ' ');
+            std::copy_n(std::begin(message), 12, std::begin(msgsent));
+            msgibits = m_i3bit;
+            msgsent[22] = 0;
+            m_currentMessage = QString::fromLatin1(msgsent).trimmed();
+            m_currentMessageBits = msgibits;
+
             qWarning() << "[FT2-TX] native frame:" << frame
                        << "bits=" << m_i3bit
                        << "itone[0..4]=" << itone[0] << itone[1]
                        << itone[2] << itone[3] << itone[4];
+
+            emitTones();
         }
 #endif
         else {
