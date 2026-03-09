@@ -473,7 +473,7 @@ void UI_Constructor::displayCallActivity() {
         ui->tableWidgetCalls->setColumnHidden(1,
                                               !showColumn("call", "callsign"));
         ui->tableWidgetCalls->setColumnHidden(
-            2, !showColumn("call", "tdrift", false));
+            2, !showColumn("call", "tdrift"));
         ui->tableWidgetCalls->setColumnHidden(3,
                                               !showColumn("call", "timestamp"));
         ui->tableWidgetCalls->setColumnHidden(4, !showColumn("call", "snr"));

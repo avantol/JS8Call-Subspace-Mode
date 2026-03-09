@@ -374,7 +374,7 @@ void UI_Constructor::displayBandActivity() {
         // Hide columns
         ui->tableWidgetRXAll->setColumnHidden(0, !showColumn("band", "offset"));
         ui->tableWidgetRXAll->setColumnHidden(
-            1, !showColumn("band", "tdrift", false));
+            1, !showColumn("band", "tdrift"));
         ui->tableWidgetRXAll->setColumnHidden(2,
                                               !showColumn("band", "timestamp"));
         ui->tableWidgetRXAll->setColumnHidden(3, !showColumn("band", "snr"));
