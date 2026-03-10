@@ -42,6 +42,8 @@ QChar submodeChar(int const submode) {
         return 'E';
     case Varicode::SubmodeType::JS8CallUltra:
         return 'I';
+    case Varicode::SubmodeType::JS8CallFT2:
+        return 'X';
     default:
         return '~';
     }

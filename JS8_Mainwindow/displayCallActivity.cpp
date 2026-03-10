@@ -284,8 +284,10 @@ void UI_Constructor::displayCallActivity() {
                 ui->tableWidgetCalls->setItem(row, col++, offsetItem);
 
                 auto name = JS8::Submode::name(d.submode);
-                auto modeItem =
-                    new QTableWidgetItem(name.left(1).replace("H", "N"));
+                auto displayChar = (d.submode == Varicode::JS8CallFT2)
+                    ? QString::fromUtf8("\u26A1")
+                    : name.left(1).replace("H", "N");
+                auto modeItem = new QTableWidgetItem(displayChar);
                 modeItem->setToolTip(name);
                 modeItem->setData(Qt::UserRole, QVariant(name));
                 modeItem->setTextAlignment(Qt::AlignCenter);
