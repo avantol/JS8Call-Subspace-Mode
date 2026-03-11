@@ -779,9 +779,6 @@ class UI_Constructor : public QMainWindow {
 
     QDateTime m_lastTxStartTime;
     QDateTime m_lastTxStopTime;
-    qint32 m_driftMsMMA;
-    qint32 m_driftMsMMA_N;
-
     // moved from mainwindow.cpp, is used in multiple functions
     auto replaceMacros(QString const &text,
                        QMap<QString, QString> const &values, bool const prune) {
@@ -899,11 +896,6 @@ class UI_Constructor : public QMainWindow {
 
     QMap<QString, int> m_rxInboxCountCache; // call -> count
 
-    // Average DT tracking (exponential moving average)
-    double m_dtEMA = 0.0;       // EMA of decoded dt values (seconds)
-    int m_dtCount = 0;          // total decode count (for initial ramp-up)
-    int m_ftConsecFails = 0;    // consecutive FT2 decode failures (for stale recovery)
-    void updateAvgDTLabel();
 
 #ifdef JS8_ENABLE_FT2
     // L2 async decode infrastructure
@@ -1028,7 +1020,6 @@ class UI_Constructor : public QMainWindow {
     void markOffsetDirected(int offset, bool isAllCall);
     void clearOffsetDirected(int offset);
     void processActivity(bool force = false);
-    void resetTimeDeltaAverage();
     void processRxActivity();
     void processIdleActivity();
     void processCompoundActivity();

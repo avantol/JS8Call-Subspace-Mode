@@ -54,7 +54,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
       m_first_error{true}, tx_status_label{"Receiving"},
       m_appDir{QApplication::applicationDirPath()}, m_palette{"Linrad"},
       m_txFrameCountEstimate{0}, m_txFrameCount{0}, m_txFrameCountSent{0},
-      m_txTextDirty{false}, m_driftMsMMA{0}, m_driftMsMMA_N{0},
+      m_txTextDirty{false},
       m_previousFreq{0}, m_hbInterval{0}, m_cqInterval{0}, m_hbPaused{false},
       m_msAudioOutputBuffered(0u),
       m_framesAudioInputBuffered(JS8_RX_SAMPLE_RATE / 10),
@@ -686,28 +686,6 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     m_l2Enabled = true;
     m_l2DecodeTimer.start(750);
 #endif
-
-    // Average DT display — Adjust Clock and Reset buttons
-    connect(ui->btnAdjustClockDT, &QPushButton::clicked, this, [this]() {
-        if (m_dtCount > 0) {
-            int avgMs = static_cast<int>(1000.0 * m_dtEMA);
-            int newDrift = -avgMs;
-            setDrift(newDrift);
-            ui->spinDriftMs->blockSignals(true);
-            ui->spinDriftMs->setValue(newDrift);
-            ui->spinDriftMs->blockSignals(false);
-            // Reset EMA and disable button to prevent compounding
-            m_dtEMA = 0.0;
-            m_dtCount = 0;
-            updateAvgDTLabel();
-        }
-    });
-    connect(ui->btnResetAvgDT, &QPushButton::clicked, this, [this]() {
-        m_dtEMA = 0.0;
-        m_dtCount = 0;
-        m_ftConsecFails = 0;
-        updateAvgDTLabel();
-    });
 
     // Manual drift spin box — directly sets DriftingDateTime offset
     connect(ui->spinDriftMs, QOverload<int>::of(&QSpinBox::valueChanged),

@@ -8,8 +8,6 @@
 #include "JS8_UI/mainwindow.h"
 
 void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
-    static QList<qint32> driftQueue;
-    static qint32 syncStart = -1;
 
     std::visit(
         [this](auto &&e) {
@@ -19,8 +17,6 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 if (m_wideGraph->shouldDisplayDecodeAttempts()) {
                     m_wideGraph->drawHorizontalLine(QColor(Qt::yellow), 0, 5);
                 }
-            } else if constexpr (std::is_same_v<T, JS8::Event::SyncStart>) {
-                syncStart = e.position;
             } else if constexpr (std::is_same_v<T, JS8::Event::SyncState>) {
                 if (m_wideGraph->shouldDisplayDecodeAttempts()) {
                     auto const drawDecodeLine =
@@ -49,48 +45,6 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                      << m_decoderBusyStartTime.msecsTo(
                                             QDateTime::currentDateTimeUtc())
                                      << "ms";
-
-                // TODO: move this into a function
-                if (!driftQueue.isEmpty()) {
-                    if (m_driftMsMMA_N == 0) {
-                        m_driftMsMMA_N = 1;
-                        m_driftMsMMA = DriftingDateTime::drift();
-                    }
-
-                    // let the widegraph know for timing control
-                    m_wideGraph->notifyDriftedSignalsDecoded(
-                        driftQueue.count());
-
-                    while (!driftQueue.isEmpty()) {
-                        qint32 newDrift = driftQueue.first();
-                        driftQueue.removeFirst();
-
-                        m_driftMsMMA =
-                            (((m_driftMsMMA_N - 1) * m_driftMsMMA) + newDrift) /
-                            m_driftMsMMA_N;
-                        if (m_driftMsMMA_N < 60)
-                            m_driftMsMMA_N++; // cap it to 60 observations
-                    }
-
-                // XXX The following lines do nothing; it's a completely dead
-                // store. For
-                //     now, just #ifdefing them out, but they were in
-                //     the 2.2.1-devel code, and presumably they were important;
-                //     need to see what the intent was here.
-#if 0
-          qint32 driftLimitMs = JS8::Submode::period(Varicode::JS8CallNormal) * 1000;
-          qint32 newDriftMs   = m_driftMsMMA;
-          if(newDriftMs < 0){
-              newDriftMs = -((-newDriftMs) % driftLimitMs);
-          } else {
-              newDriftMs = ((newDriftMs) % driftLimitMs);
-          }
-#endif
-
-                    setDrift(m_driftMsMMA);
-                    // writeNoticeTextToUI(QDateTime::currentDateTimeUtc(),
-                    // QString("Automatic Drift: %1").arg(driftAvg));
-                }
 
                 m_bDecoded = e.decoded > 0;
                 decodeDone();
@@ -140,95 +94,6 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     << JS8::Submode::name(decodedtext.submode())
                     << "decoded text" << decodedtext.message();
 #endif
-                // TODO: move this into a function
-                // compute time drift for non-dupe messages
-                if (m_wideGraph->shouldAutoSyncSubmode(decodedtext.submode())) {
-                    int m = decodedtext.submode();
-                    float xdt = decodedtext.dt();
-
-                    // if we're here at this point, we _should_ be operating a
-                    // decode every second
-                    //
-                    // so we need to figure out where:
-                    //
-                    //   1) this current decode started
-                    //   2) when that cycle _should_ have started
-                    //   3) compute the delta
-                    //   4) apply the drift
-
-                    qint32 periodMs = JS8::Submode::periodMS(m);
-
-                    // writeNoticeTextToUI(now, QString("Decode at %1 (kin: %2,
-                    // lastDecoded:
-                    // %3)").arg(syncStart).arg(dec_data.params.kin).arg(m_lastDecodeStartMap.value(m)));
-
-                    float expectedStartDelay =
-                        JS8::Submode::startDelayMS(m) / 1000.0;
-
-                    float decodedSignalTime =
-                        (float)syncStart / (float)JS8_RX_SAMPLE_RATE;
-
-                    // writeNoticeTextToUI(now, QString("--> started at %1
-                    // seconds into the start of my drifted
-                    // minute").arg(decodedSignalTime));
-
-                    // writeNoticeTextToUI(now, QString("--> we add a time delta
-                    // of %1 seconds into the start of the cycle").arg(xdt));
-
-                    // adjust for expected start delay
-                    decodedSignalTime -= expectedStartDelay;
-
-                    // adjust for time delta
-                    decodedSignalTime += xdt;
-
-                    // ensure that we are within a 60 second minute
-                    if (decodedSignalTime < 0) {
-                        decodedSignalTime += 60.0f;
-                    } else if (decodedSignalTime > 60) {
-                        decodedSignalTime -= 60.0f;
-                    }
-
-                    // writeNoticeTextToUI(now, QString("--> so signal adjusted
-                    // started at %1 seconds into the start of my drifted
-                    // minute").arg(decodedSignalTime));
-
-                    qint32 decodedSignalTimeMs = 1000 * decodedSignalTime;
-                    qint32 cycleStartTimeMs =
-                        (decodedSignalTimeMs / periodMs) * periodMs;
-                    qint32 driftMs = cycleStartTimeMs - decodedSignalTimeMs;
-
-                    // writeNoticeTextToUI(now, QString("--> which is a drift
-                    // adjustment of %1 milliseconds").arg(driftMs));
-
-                    // if we have a large negative offset (say -14000), use the
-                    // positive inverse of +1000
-                    if (driftMs + periodMs < qAbs(driftMs)) {
-                        driftMs += periodMs;
-                    }
-                    // if we have a large positive offset (say 14000, use the
-                    // negative inverse of -1000)
-                    else if (qAbs(driftMs - periodMs) < driftMs) {
-                        driftMs -= periodMs;
-                    }
-
-                    // writeNoticeTextToUI(now, QString("--> which is a
-                    // corrected drift adjustment of %1
-                    // milliseconds").arg(driftMs));
-
-                    qint32 newDrift = DriftingDateTime::drift() + driftMs;
-                    if (newDrift < 0) {
-                        newDrift %= -periodMs;
-                    } else {
-                        newDrift %= periodMs;
-                    }
-
-                    // writeNoticeTextToUI(now, QString("--> which is rounded to
-                    // a total drift of %1 milliseconds for this
-                    // period").arg(newDrift));
-
-                    driftQueue.append(newDrift);
-                }
-
                 // if the frame is valid, cache it!
                 m_messageDupeCache.insert_or_assign(
                     dedupeKey, QDateTime::currentDateTimeUtc());
@@ -316,21 +181,6 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     d.tdrift = m_wideGraph->shouldAutoSyncSubmode(d.submode)
                                    ? DriftingDateTime::drift() / 1000.0
                                    : decodedtext.dt();
-
-                    // Update EMA of decoder DT for adaptive alignment.
-                    // Alpha=0.3 means ~3-4 new samples shift the average
-                    // substantially, allowing fast tracking of clock drift.
-                    {
-                        constexpr double alpha = 0.3;
-                        double dt = decodedtext.dt();
-                        if (m_dtCount == 0)
-                            m_dtEMA = dt;  // first sample: seed the EMA
-                        else
-                            m_dtEMA = alpha * dt + (1.0 - alpha) * m_dtEMA;
-                        m_dtCount++;
-                        m_ftConsecFails = 0;  // successful decode resets failure counter
-                        updateAvgDTLabel();
-                    }
 
                     // if we have any "first" frame, and a buffer is already
                     // established, clear it...
