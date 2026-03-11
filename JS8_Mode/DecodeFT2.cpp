@@ -136,6 +136,69 @@ std::size_t DecodeFT2::operator()(struct dec_data &data, int kposFT2,
     return ctx.count;
 }
 
+std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
+                                int nfqso, int nfa, int nfb, int utc,
+                                Event::Emitter emitEvent) {
+    int snr_out[20] = {};
+    float dt_out[20] = {};
+    float freq_out[20] = {};
+    std::int8_t msgbits_out[77 * 20] = {};
+    int ndecoded = 0;
+
+    ft2_triggered_decode_c(samples, nfqso, nfa, nfb, 3,
+                           snr_out, dt_out, freq_out,
+                           msgbits_out, &ndecoded);
+
+    std::size_t count = 0;
+    for (int d = 0; d < ndecoded; ++d) {
+        const std::int8_t *bits = &msgbits_out[d * 77];
+        int snr = snr_out[d];
+        float dt = dt_out[d];
+        float freq = freq_out[d];
+
+        // Extract JS8 72-bit frame (same logic as decodeCallback)
+        quint64 value = 0;
+        for (int i = 0; i < 64; ++i)
+            value |= (static_cast<quint64>(bits[i] & 1) << (63 - i));
+        quint8 rem = 0;
+        for (int i = 0; i < 8; ++i)
+            rem |= ((bits[64 + i] & 1) << (7 - i));
+
+        QString frame = Varicode::pack72bits(value, rem);
+
+        int frameBits = 0;
+        if (bits[72] & 1) frameBits |= Varicode::JS8CallFirst;
+        if (bits[73] & 1) frameBits |= Varicode::JS8CallLast;
+        if (bits[74] & 1) frameBits |= Varicode::JS8CallData;
+
+        // Filter garbage: reserved bits 75-76 must be 0, SNR >= -10
+        bool garbage = (bits[75] & 1) || (bits[76] & 1) || snr < -10;
+
+        qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
+                   << "freq=" << freq << "bits=" << frameBits
+                   << "frame=" << frame
+                   << (garbage ? "FILTERED" : "");
+
+        if (garbage)
+            continue;
+
+        emitEvent(Event::Decoded{
+            .utc = utc,
+            .snr = snr,
+            .xdt = dt,
+            .frequency = freq,
+            .data = frame.toStdString(),
+            .type = frameBits,
+            .quality = 0.0f,
+            .mode = 16 // Varicode::JS8CallFT2
+        });
+
+        ++count;
+    }
+
+    return count;
+}
+
 void DecodeFT2::clearAveraging() { ft2_clravg_c(); }
 
 static void selfTestCallback(float sync, int snr, float dt, float freq,

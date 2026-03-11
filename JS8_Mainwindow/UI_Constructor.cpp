@@ -647,6 +647,44 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // Self-test disabled — blocks on Windows (static gfortran runtime issue).
     // The encode/decode pipeline is verified by the Linux build's test suite.
     // QTimer::singleShot(2000, []() { JS8::DecodeFT2::selfTest(); });
+
+    // L2 async decode: timer fires every 750ms, runs triggered decoder on ring buffer
+    connect(&m_l2DecodeWatcher, &QFutureWatcher<void>::finished,
+            this, &UI_Constructor::l2DecodeDone);
+    connect(&m_l2DecodeTimer, &QTimer::timeout, this, [this]() {
+        if (!m_l2Enabled || m_l2Decoding || m_decoderBusy) {
+            return;
+        }
+        if (m_l2RingPos < 30000) {
+            return;
+        }
+        qWarning() << "[FT2-L2] timer: launching decode, ringPos=" << m_l2RingPos;
+
+        // Copy ring buffer to a heap-allocated contiguous buffer.
+        // The ring buffer is circular — linearize so newest sample is last.
+        auto buf = std::make_shared<std::array<std::int16_t, FT2_NMAX>>();
+        int writePos = m_l2RingPos % FT2_NMAX;
+        // [writePos..end] is older data, [0..writePos) is newer data
+        std::copy_n(&m_l2RingBuf[writePos], FT2_NMAX - writePos, buf->data());
+        std::copy_n(&m_l2RingBuf[0], writePos, &(*buf)[FT2_NMAX - writePos]);
+
+        int nfqso = dec_data.params.nfqso;
+        int nfa = dec_data.params.nfa;
+        int nfb = dec_data.params.nfb;
+        int utc = dec_data.params.nutc;
+
+        m_l2Decoding = true;
+        m_l2DecodeWatcher.setFuture(QtConcurrent::run([buf, nfqso, nfa, nfb, utc, this]() {
+            JS8::DecodeFT2::decodeL2(buf->data(), nfqso, nfa, nfb, utc,
+                [this](JS8::Event::Variant const &ev) {
+                    QMetaObject::invokeMethod(this, [this, ev]() {
+                        processDecodeEvent(ev);
+                    }, Qt::QueuedConnection);
+                });
+        }));
+    });
+    m_l2Enabled = true;
+    m_l2DecodeTimer.start(750);
 #endif
 
     // Average DT display — Adjust Clock and Reset buttons

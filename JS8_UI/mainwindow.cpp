@@ -1425,6 +1425,10 @@ void UI_Constructor::closeEvent(QCloseEvent *e) {
     m_config.transceiver_offline();
     writeSettings();
     m_guiTimer.stop();
+#ifdef JS8_ENABLE_FT2
+    m_l2DecodeTimer.stop();
+    m_l2DecodeWatcher.waitForFinished();
+#endif
     m_prefixes.reset();
     m_shortcuts.reset();
     m_mouseCmnds.reset();
@@ -2193,6 +2197,17 @@ void UI_Constructor::decodeStart() {
         qCDebug(decoder_js8) << "--> decoder cannot start...busy (busy flag)";
         return;
     }
+
+#ifdef JS8_ENABLE_FT2
+    // Wait for L2 async decode to finish — shared Fortran save variables
+    // are not thread-safe, so standard and L2 decoders must not overlap.
+    if (m_l2Decoding) {
+        qCDebug(decoder_js8) << "--> decoder deferred: L2 async decode in progress";
+        // Re-check in 100ms
+        QTimer::singleShot(100, this, [this]() { decodeStart(); });
+        return;
+    }
+#endif
 
     // Mark the decoder busy; decodeDone is responsible for marking
     // the decode _not_ busy
@@ -7240,6 +7255,12 @@ void UI_Constructor::updateAvgDTLabel() {
             "border-width:0px; border-radius:2px; }");
     }
 }
+
+#ifdef JS8_ENABLE_FT2
+void UI_Constructor::l2DecodeDone() {
+    m_l2Decoding = false;
+}
+#endif
 
 Q_LOGGING_CATEGORY(decoder_js8, "decoder.js8", QtWarningMsg)
 Q_LOGGING_CATEGORY(mainwindow_js8, "mainwindow.js8", QtWarningMsg)

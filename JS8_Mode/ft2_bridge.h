@@ -86,6 +86,27 @@ void ft2_gen_wave_c(
     float fsample, float f0,
     float *wave, int nwave);
 
+/**
+ * Level 2 sync-triggered FT2 decoder.
+ * Two-phase: Costas scan -> targeted LDPC at confirmed sync positions.
+ * Returns raw message77 bits (up to 20 decodes).
+ *
+ * @param iwave     Audio samples at 12000 S/s (int16), 45000 samples
+ * @param nfqso     Expected signal frequency in Hz
+ * @param nfa       Low frequency search limit in Hz
+ * @param nfb       High frequency search limit in Hz
+ * @param ndepth    Decode depth (bits 0-2: 1-3)
+ * @param snr_out   Output: SNR for each decode (array of 20)
+ * @param dt_out    Output: DT for each decode (array of 20)
+ * @param freq_out  Output: frequency for each decode (array of 20)
+ * @param msgbits_out Output: raw 77 message bits for each decode (77x20)
+ * @param ndecoded  Output: number of successful decodes
+ */
+void ft2_triggered_decode_c(
+    const std::int16_t *iwave, int nfqso, int nfa, int nfb, int ndepth,
+    int *snr_out, float *dt_out, float *freq_out,
+    std::int8_t *msgbits_out, int *ndecoded);
+
 /** Clear multi-period averaging state (call on band/mode change). */
 void ft2_clravg_c(void);
 

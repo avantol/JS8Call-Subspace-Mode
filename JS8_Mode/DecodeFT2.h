@@ -33,6 +33,22 @@ class DecodeFT2 {
     std::size_t operator()(struct dec_data &data, int kposFT2, int kszFT2,
                            Event::Emitter emitEvent);
 
+    /**
+     * Run L2 sync-triggered decode on a contiguous audio buffer.
+     * Called from QtConcurrent::run on the async decode timer.
+     *
+     * @param samples  Contiguous audio buffer (45000 samples at 12kHz)
+     * @param nfqso    Expected signal frequency in Hz
+     * @param nfa      Low frequency search limit in Hz
+     * @param nfb      High frequency search limit in Hz
+     * @param utc      UTC timestamp for decoded events
+     * @param emitEvent Event emitter for decode results
+     * @return Number of successful decodes
+     */
+    static std::size_t decodeL2(const std::int16_t *samples,
+                                int nfqso, int nfa, int nfb, int utc,
+                                Event::Emitter emitEvent);
+
     /** Clear multi-period averaging state (call on band/mode change). */
     void clearAveraging();
 

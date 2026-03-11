@@ -108,6 +108,7 @@
 #include <QVariant>
 #include <QVector>
 #include <QVersionNumber>
+#include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtGui>
 #include <boost/crc.hpp>
@@ -903,6 +904,22 @@ class UI_Constructor : public QMainWindow {
     int m_dtCount = 0;          // total decode count (for initial ramp-up)
     int m_ftConsecFails = 0;    // consecutive FT2 decode failures (for stale recovery)
     void updateAvgDTLabel();
+
+#ifdef JS8_ENABLE_FT2
+    // L2 async decode infrastructure
+    QTimer m_l2DecodeTimer;                     // fires every 750ms
+    QFutureWatcher<void> m_l2DecodeWatcher;     // monitors async decode
+    std::int16_t m_l2RingBuf[FT2_NMAX] = {};   // 7.5s ring buffer (45000 samples)
+    int m_l2RingPos = 0;                        // write position
+    bool m_l2Decoding = false;                  // decode in progress
+    bool m_l2Enabled = false;                   // L2 decode active
+    void l2DecodeDone();                        // called when async decode finishes
+
+    // L2 deduplication (5s window, best SNR wins)
+    struct L2DedupeEntry { int snr; qint64 msec; };
+    QMap<QString, L2DedupeEntry> m_l2Dedup;
+    qint64 m_l2DedupLastPurge = 0;
+#endif
 
     QMap<QString, QMap<QString, CallDetail>>
         m_callActivityBandCache; // band -> call activity

@@ -105,19 +105,23 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 //       manner, likely by sorting the raw take from the initial
                 //       selection pass.
 
+                qWarning() << "[DECODE-EVENT] processDecodeEvent received:"
+                           << "snr=" << e.snr << "freq=" << e.frequency
+                           << "mode=" << e.mode << "data=" << QString::fromStdString(e.data);
+
                 DecodedText decodedtext(e);
                 FrameCacheKey dedupeKey(decodedtext.submode(),
                                         decodedtext.frame());
+
+                qWarning() << "[DECODE-EVENT] DecodedText: submode=" << decodedtext.submode()
+                           << "frame=" << decodedtext.frame()
+                           << "msg=" << decodedtext.message();
 
                 if (auto const it = m_messageDupeCache.find(dedupeKey);
                     it != m_messageDupeCache.end()) {
                     if (it->second.secsTo(QDateTime::currentDateTimeUtc()) <
                         0.5 * JS8::Submode::period(decodedtext.submode())) {
-                        qCDebug(mainwindow_js8)
-                            << "duplicate frame at" << it->second << "using key"
-                            << QString("%1:%2")
-                                   .arg(dedupeKey.submode)
-                                   .arg(dedupeKey.frame);
+                        qWarning() << "[DECODE-EVENT] DUPLICATE, skipping";
                         return;
                     }
                 }

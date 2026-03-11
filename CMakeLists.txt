@@ -369,6 +369,7 @@ if(ENABLE_FT2)
     lib/ft2/ft2_iwave.f90
     lib/ft2/ft2_gfsk_iwave.f90
     lib/ft2/ft2_decode.f90
+    lib/ft2/ft2_triggered_decode.f90
     lib/ft2/ft2_bridge.f90
   )
 

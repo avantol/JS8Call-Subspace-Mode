@@ -179,6 +179,36 @@ contains
     call get_ft2_tones_from_77bits(msgbits, i4tone)
   end subroutine ft2_encode_from_bits_c
 
+  ! Level 2 sync-triggered decoder, callable from C
+  ! Returns raw message77 bits for each decode (up to 20)
+  subroutine ft2_triggered_decode_c(iwave, nfqso, nfa, nfb, ndepth, &
+       snr_out, dt_out, freq_out, msgbits_out, ndecoded) &
+       bind(C, name='ft2_triggered_decode_c')
+    integer(c_int16_t), intent(in) :: iwave(*)
+    integer(c_int), value, intent(in) :: nfqso
+    integer(c_int), value, intent(in) :: nfa
+    integer(c_int), value, intent(in) :: nfb
+    integer(c_int), value, intent(in) :: ndepth
+    integer(c_int), intent(out) :: snr_out(20)
+    real(c_float), intent(out) :: dt_out(20)
+    real(c_float), intent(out) :: freq_out(20)
+    integer(c_int8_t), intent(out) :: msgbits_out(77, 20)
+    integer(c_int), intent(out) :: ndecoded
+
+    character(len=12) :: mycall, hiscall
+    integer :: nQSOProgress, ncontest
+
+    nQSOProgress = 0
+    ncontest = 0
+    mycall = '            '
+    hiscall = '            '
+
+    call ft2_triggered_decode(iwave, nQSOProgress, nfqso, nfa, nfb, &
+         ndepth, ncontest, mycall, hiscall, &
+         snr_out, dt_out, freq_out, msgbits_out, ndecoded)
+
+  end subroutine ft2_triggered_decode_c
+
   ! Initialize FFTW patience common block
   subroutine ft2_init_c() bind(C, name='ft2_init_c')
     common/patience/npatience,nthreads

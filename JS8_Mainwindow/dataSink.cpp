@@ -137,6 +137,20 @@ void UI_Constructor::dataSink(qint64 frames) {
         m_px = sq > 0.0f ? 10.0f * log10(sq / (k - k0)) : 0.0f;
         m_pxmax = pxmax > 0.0f ? 20.0f * log10(pxmax) : 0.0f;
 
+        // L2 async decode: fill ring buffer with latest samples
+#ifdef JS8_ENABLE_FT2
+        if (m_l2Enabled && k > k0) {
+            int nsamples = k - k0;
+            for (int i = 0; i < nsamples; ++i) {
+                m_l2RingBuf[m_l2RingPos % FT2_NMAX] = dec_data.d2[k0 + i];
+                ++m_l2RingPos;
+            }
+            // Clamp position to prevent overflow while preserving modular fill
+            if (m_l2RingPos >= FT2_NMAX * 2)
+                m_l2RingPos = FT2_NMAX + (m_l2RingPos % FT2_NMAX);
+        }
+#endif
+
         k0 = k;
         ja += jstep;
 
