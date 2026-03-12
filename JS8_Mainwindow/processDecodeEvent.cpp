@@ -73,9 +73,11 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
 
                 if (auto const it = m_messageDupeCache.find(dedupeKey);
                     it != m_messageDupeCache.end()) {
-                    if (it->second.secsTo(QDateTime::currentDateTimeUtc()) <
-                        0.5 * JS8::Submode::period(decodedtext.submode())) {
-                        qWarning() << "[DECODE-EVENT] DUPLICATE, skipping";
+                    auto ageSecs = it->second.secsTo(QDateTime::currentDateTimeUtc());
+                    auto window = 0.5 * JS8::Submode::period(decodedtext.submode());
+                    if (ageSecs < window) {
+                        qWarning() << "[DECODE-EVENT] DUPLICATE, skipping frame=" << decodedtext.frame()
+                                   << "age=" << ageSecs << "s, window=" << window << "s";
                         return;
                     }
                 }

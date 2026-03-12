@@ -48,11 +48,8 @@ subroutine genft2(msg0,ichk,msgsent,msgbits,i4tone)
 
   i3=-1
   n3=-1
-  write(*,'(A,A37,A)') '[FT2-DIAG] genft2 input: [', message, ']'
   call pack77(message,i3,n3,c77)
   call unpack77(c77,0,msgsent,unpk77_success) !Unpack to get msgsent
-  write(*,'(A,I2,A,I2,A,A37,A,L1)') '[FT2-DIAG] genft2 pack77: i3=', i3, &
-       ' n3=', n3, ' msgsent=[', msgsent, '] ok=', unpk77_success
 
   if(ichk.eq.1) go to 999
   read(c77,'(77i1)',err=1) msgbits

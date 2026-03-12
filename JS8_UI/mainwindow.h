@@ -2,6 +2,8 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include <atomic>
+
 #include "JS8_Audio/AudioDevice.h"
 #include "JS8_Audio/NotificationAudio.h"
 #include "JS8_Audio/SoundInput.h"
@@ -779,6 +781,7 @@ class UI_Constructor : public QMainWindow {
 
     QDateTime m_lastTxStartTime;
     QDateTime m_lastTxStopTime;
+    QDateTime m_txQueueStartTime;  // wall-clock when first frame TX began (for countdown)
     // moved from mainwindow.cpp, is used in multiple functions
     auto replaceMacros(QString const &text,
                        QMap<QString, QString> const &values, bool const prune) {
@@ -901,8 +904,8 @@ class UI_Constructor : public QMainWindow {
     // L2 async decode infrastructure
     QTimer m_l2DecodeTimer;                     // fires every 750ms
     QFutureWatcher<void> m_l2DecodeWatcher;     // monitors async decode
-    std::int16_t m_l2RingBuf[FT2_NMAX] = {};   // 7.5s ring buffer (45000 samples)
-    int m_l2RingPos = 0;                        // write position
+    std::int16_t m_l2RingBuf[FT2_L2_RINGSIZE] = {};  // 7.5s ring buffer (90000 samples, 2 periods)
+    std::atomic<int> m_l2RingPos{0};              // write position (atomic: audio thread writes, main thread reads)
     bool m_l2Decoding = false;                  // decode in progress
     bool m_l2Enabled = false;                   // L2 decode active
     void l2DecodeDone();                        // called when async decode finishes

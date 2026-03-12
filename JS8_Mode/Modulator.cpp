@@ -41,12 +41,15 @@ void Modulator::start(double const frequency, int const submode,
                       Channel const channel) {
     Q_ASSERT(stream);
 
+    ++m_txCycleCount;
     const State current_state = m_state.load();
-    qWarning() << "[FT2-TX] Modulator::start() freq=" << frequency
+    qWarning() << "[FT2-TX] Modulator::start() cycle#" << m_txCycleCount
+               << "freq=" << frequency
                << "submode=" << submode << "state=" << (int)current_state
                << "tuning=" << m_tuning;
     if (current_state != State::Idle) {
-        qWarning() << "[FT2-TX] Modulator not idle, calling stop() first";
+        qWarning() << "[FT2-TX] Modulator not idle, calling stop() first"
+                    << "cycle#" << m_txCycleCount;
         stop();
     }
 
@@ -143,6 +146,7 @@ void Modulator::start(double const frequency, int const submode,
     m_stream = stream;
     if (m_stream) {
         qWarning() << "[FT2-TX] Modulator::start() calling m_stream->restart()"
+                    << "cycle#" << m_txCycleCount
                     << "ft2Mode=" << m_ft2Mode
                     << "ft2WaveLen=" << m_ft2WaveLen
                     << "state=" << (int)m_state.load();
@@ -169,7 +173,8 @@ void Modulator::tune(bool const tuning) {
  * @param quickClose
  */
 void Modulator::stop(bool const quickClose) {
-    qWarning() << "[FT2-TX] Modulator::stop() quickClose=" << quickClose;
+    qWarning() << "[FT2-TX] Modulator::stop() quickClose=" << quickClose
+               << "cycle#" << m_txCycleCount;
     m_quickClose = quickClose;
     close();
 }
@@ -233,7 +238,8 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         if (m_ft2Mode && m_ft2Wave && m_ft2WaveLen > 0) {
             // FT2: play back pre-generated GFSK waveform
             if (m_ic == 0)
-                qWarning() << "[FT2-TX] readData: starting waveform, len="
+                qWarning() << "[FT2-TX] readData: starting waveform, cycle#"
+                           << m_txCycleCount << "len="
                            << m_ft2WaveLen << "first sample="
                            << m_ft2Wave[0] << m_ft2Wave[1] << m_ft2Wave[2]
                            << "maxSize=" << maxSize

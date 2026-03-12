@@ -489,7 +489,11 @@ void UI_Constructor::readSettings() {
     if (!verticalState.isEmpty()) {
         ui->textVerticalSplitter->restoreState(verticalState);
     }
-    setDrift(m_settings->value("TimeDrift", 0).toInt());
+    {
+        int savedDrift = m_settings->value("TimeDrift", 0).toInt();
+        setDrift(savedDrift);
+        ui->spinDriftMs->setValue(savedDrift);
+    }
     ui->actionShow_Waterfall_Controls->setChecked(
         m_wideGraph->controlsVisible());
     ui->actionShow_Waterfall_Time_Drift_Controls->setChecked(
@@ -2098,7 +2102,13 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
         case Varicode::JS8CallFT2:
             dec_data.params.kposFT2 = params.start;
             dec_data.params.kszFT2 = params.sz;
-            dec_data.params.nsubmodes |= 16; // bit 4
+            // Both standard FT2 and L2 run cooperatively via
+            // DecodeFT2::fortranLock (atomic CAS).  Standard FT2 has
+            // AP decoding, averaging, subtraction; L2 has full DT
+            // coverage.  Skip standard only if L2 holds the Fortran
+            // lock RIGHT NOW (rare — L2 Fortran takes ~100-200ms).
+            if (!m_l2Decoding)
+                dec_data.params.nsubmodes |= 16; // bit 4
             break;
 #endif
         }
@@ -2157,14 +2167,8 @@ void UI_Constructor::decodeStart() {
     }
 
 #ifdef JS8_ENABLE_FT2
-    // Wait for L2 async decode to finish — shared Fortran save variables
-    // are not thread-safe, so standard and L2 decoders must not overlap.
-    if (m_l2Decoding) {
-        qCDebug(decoder_js8) << "--> decoder deferred: L2 async decode in progress";
-        // Re-check in 100ms
-        QTimer::singleShot(100, this, [this]() { decodeStart(); });
-        return;
-    }
+    // Standard FT2 decoder is disabled when L2 is active (nsubmodes bit 4
+    // not set), so no Fortran state overlap — no need to defer.
 #endif
 
     // Mark the decoder busy; decodeDone is responsible for marking
@@ -2564,6 +2568,10 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 
     // TODO: stop
     if (msgLength == 0 && !m_tune) {
+        if (m_nSubMode == Varicode::JS8CallFT2 && m_btxok)
+            qWarning() << "[FT2-TX] prepareSending: msgLength=0, stopping TX"
+                        << "btxok=" << m_btxok << "iptt=" << m_iptt
+                        << "auto=" << m_auto;
         m_stopTxButtonIsLongterm = false;
         this->on_stopTxButton_clicked();
         m_stopTxButtonIsLongterm = true;
@@ -2589,15 +2597,19 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         lateThreshold = 0.0;
     };
 
-    // qCDebug(mainwindow_js8) << "nowMS" << nowMS << "period" << period <<
-    // "tx_delay" << tx_delay
-    //                         << "seconds_into_the_period" <<
-    //                         seconds_into_the_period
-    //                         << "time_is_in_tx_delay" << time_is_in_tx_delay
-    //                         << "fraction_of_tx_slot" << fraction_of_tx_slot
-    //                         << "m_iptt" << m_iptt << "m_timeToSend" <<
-    //                         m_timeToSend << "msgLength" << msgLength <<
-    //                         "m_tune" << m_tune;
+    // FT2 per-period diagnostic: log once per period at the TX delay window
+    if (m_nSubMode == Varicode::JS8CallFT2 && time_is_in_tx_delay &&
+        m_iptt == 0 && !m_tune) {
+        qWarning() << "[FT2-TX] prepareSending state:"
+                    << "sec=" << seconds_into_the_period
+                    << "timeToSend=" << m_timeToSend
+                    << "btxok=" << m_btxok
+                    << "iptt=" << m_iptt
+                    << "auto=" << m_auto
+                    << "transmitting=" << m_transmitting
+                    << "msgLen=" << msgLength
+                    << "msg=" << m_nextFreeTextMsg.left(20);
+    }
 
     if (m_iptt == 0 &&
         ((m_timeToSend &&
@@ -2618,9 +2630,9 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         emitPTT(true);
     }
 
-    // TODO: stop
+    // Stop transmitting when the time window expires.
     if (!m_timeToSend and !m_tune)
-        m_btxok = false; // Time to stop transmitting
+        m_btxok = false;
 
     // Calculate Tx tones when needed
     if ((m_iptt == 1 && m_iptt0 == 0) || m_restart) {
@@ -2664,7 +2676,7 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
             ft2_gen_wave_c(
                 const_cast<int *>(reinterpret_cast<volatile int *>(itone)),
                 FT2_NUM_SYMBOLS, FT2_TX_NSPS, 48000.0f,
-                static_cast<float>(freq()),
+                static_cast<float>(freq() + m_XIT),
                 ft2_txwave, FT2_NWAVE);
             ft2_txwave_len = FT2_NWAVE;
 
@@ -2764,10 +2776,21 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 
         // TODO: jsherer - perhaps an on_transmitting signal?
         m_lastTxStartTime = DriftingDateTime::currentDateTimeUtc();
+        // Record wall-clock start of first frame for countdown display
+        if (m_txFrameQueue.count() == m_txFrameCount - 1) {
+            // First dequeue already happened, so queue is count-1
+            m_txQueueStartTime = m_lastTxStartTime;
+        }
 
         m_transmitting = true;
         transmitDisplay(true);
         statusUpdate();
+
+        // Start modulator immediately rather than waiting for async PTT
+        // callback. The rig may not reliably report PTT off→on transitions
+        // between cycles, especially for short-period modes.
+        m_generateAudioWhenPttConfirmedByTX = false;
+        transmit();
     }
 
     // TODO: stop
@@ -2812,6 +2835,16 @@ void UI_Constructor::guiUpdate() {
     if (m_transmitting or m_auto or m_tune) {
         refuseToSendIn30mWSPRBand();
         prepareSending(now.toMSecsSinceEpoch());
+    } else if (m_nSubMode == Varicode::JS8CallFT2) {
+        // Log once per second when TX loop is inactive
+        static qint64 lastLogSec = 0;
+        if (seconds_since_epoch != lastLogSec) {
+            lastLogSec = seconds_since_epoch;
+            qWarning() << "[FT2-TX] guiUpdate: NOT calling prepareSending"
+                        << "transmitting=" << m_transmitting
+                        << "auto=" << m_auto
+                        << "tune=" << m_tune;
+        }
     }
 
     // Once per second:
@@ -2951,15 +2984,15 @@ void UI_Constructor::startTx() {
 }
 
 void UI_Constructor::transmit() {
-    if (m_modulator->isIdle()) {
-        qWarning() << "[FT2-TX] transmit(): modulator idle, emitting sendMessage"
-                    << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode;
-        Q_EMIT sendMessage(freq() + m_XIT, m_nSubMode, m_TxDelay, m_soundOutput,
-                           m_config.audio_output_channel());
-        ui->signal_meter_widget->setValue(0, 0);
-    } else {
-        qWarning() << "[FT2-TX] transmit(): modulator NOT idle, skipping!";
-    }
+    // Note: Modulator::start() handles non-idle state by calling stop() first,
+    // so we don't guard on isIdle() here. The endTransmitMessage → stop() signal
+    // is cross-thread queued and may not have been processed yet.
+    qWarning() << "[FT2-TX] transmit(): emitting sendMessage"
+                << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode
+                << "modIdle=" << m_modulator->isIdle();
+    Q_EMIT sendMessage(freq() + m_XIT, m_nSubMode, m_TxDelay, m_soundOutput,
+                       m_config.audio_output_channel());
+    ui->signal_meter_widget->setValue(0, 0);
 }
 
 void UI_Constructor::stopTx() {
@@ -3617,6 +3650,7 @@ void UI_Constructor::resetMessageTransmitQueue() {
     m_txFrameCount = 0;
     m_txFrameCountSent = 0;
     m_txFrameQueue.clear();
+    m_txQueueStartTime = QDateTime();  // invalidate countdown start
     // Note: m_txMessageQueue is intentionally NOT cleared here.
     // It holds pending messages (e.g., APRS relay messages) that should
     // be transmitted after the current transmission completes.
@@ -5972,15 +6006,19 @@ void UI_Constructor::updateTxButtonDisplay() {
         QString buttonText;
         if (m_tune) {
             buttonText = State::Tuning.toString();
-        } else if (m_transmitting) {
-            buttonText =
-                State::timed(State::Sending, ((left + 1) * m_TRperiod) -
-                                                 ((m_sec0 + 1) % m_TRperiod));
-        } else {
+        } else if (m_transmitting || sent > 0) {
+            // Elapsed-time countdown: total expected - wall-clock elapsed
+            int totalExpected = count * m_TRperiod;
+            int elapsed = m_txQueueStartTime.isValid()
+                ? static_cast<int>(m_txQueueStartTime.secsTo(
+                      DriftingDateTime::currentDateTimeUtc()))
+                : 0;
+            int secs = qMax(0, totalExpected - elapsed);
+            qDebug("[TX-BTN] %s: left=%d count=%d sent=%d elapsed=%d total=%d secs=%d",
+                   m_transmitting ? "SENDING" : "READY",
+                   left, count, sent, elapsed, totalExpected, secs);
             buttonText = State::timed(
-                State::Ready, sent == 1 ? ((left + 1) * m_TRperiod)
-                                        : (((left + 2) * m_TRperiod) -
-                                           ((m_sec0 + 1) % m_TRperiod)));
+                m_transmitting ? State::Sending : State::Ready, secs);
         }
         ui->startTxButton->setText(buttonText);
         ui->startTxButton->setEnabled(false);

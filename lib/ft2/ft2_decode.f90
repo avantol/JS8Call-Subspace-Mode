@@ -247,12 +247,7 @@ contains
          call getcandidates2(dd,fa,fb,syncmin,nfqso,MAXCAND,savg,candidate,   &
             ncand,sbase)
          call timer('getcand2',1)
-         write(*,'(A,I3,A,I4,A,F8.1,A,F8.1,A,F5.2)')                     &
-            '[FT2-DIAG] isp=',isp,' ncand=',ncand,                        &
-            ' fa=',fa,' fb=',fb,' syncmin=',syncmin
-         if(ncand.gt.0) write(*,'(A,5F8.1)')                              &
-            '[FT2-DIAG] cand freqs: ',                                     &
-            (candidate(1,min(j,ncand)),j=1,min(5,ncand))
+!        Diagnostics removed — flooding log during L2
          dobigfft=.true.
          do icand=1,ncand
             f0=candidate(1,icand)
@@ -357,11 +352,7 @@ contains
                nsync_qual=ns1+ns2+ns3+ns4
                nsync_qual_min=15
                if(ndepth0.ge.3) nsync_qual_min=12
-               write(*,'(A,4I3,A,I3,A,I3)')                              &
-                  '[FT2-DIAG] nsync_qual:',ns1,ns2,ns3,ns4,              &
-                  ' total=',nsync_qual,' min=',nsync_qual_min
-               write(*,'(A,8I2)') '[FT2-DIAG] hbits1-8: ',hbits(1:8)
-               write(*,'(A,8I2)') '[FT2-DIAG] expect : ', 0,0,0,1,1,0,1,1
+!              Diagnostics removed
                if(nsync_qual.lt.nsync_qual_min) cycle
 
                scalefac=2.83
@@ -493,32 +484,12 @@ contains
                   if(.not.doosd) maxosd = -1
                   call timer('dec174_91 ',0)
                   Keff=91
-                  if(ipass.eq.1 .and. icand.le.2) then
-                     write(*,'(A,I2,A,F8.1,A,5F7.2)')                    &
-                        '[FT2-DIAG] LDPC ipass=',ipass,' f1=',f1,        &
-                        ' llr[1:5]=',llr(1:5)
-                     ! Count initial hard-decision parity checks
-                     block
-                       integer*1 tcw(174)
-                       integer tncheck, tsyn
-                       tcw=0
-                       where(llr .gt. 0.) tcw=1
-                       tncheck=0
-                       write(*,'(A,10I2)') '[FT2-DIAG] hard bits[1:10]=',tcw(1:10)
-                       write(*,'(A,F7.2,A,F7.2,A,F7.2)')                 &
-                          '[FT2-DIAG] llr range: min=',minval(llr),       &
-                          ' max=',maxval(llr),' mean=',sum(llr)/174.0
-                     end block
-                  endif
+!                 Diagnostics removed
                   call decode174_91(llr,Keff,maxosd,ndeep,apmask,message91,cw, &
                                     ntype,nharderror,dmin)
                   message77=message91(1:77)
                   call timer('dec174_91 ',1)
-                  if(ipass.eq.1 .and. icand.le.2) then
-                     write(*,'(A,I5,A,F7.1,A,I3)')                       &
-                        '[FT2-DIAG] LDPC result: nharderror=',            &
-                        nharderror,' dmin=',dmin,' ntype=',ntype
-                  endif
+!                 Diagnostics removed
 
                   if(sum(message77).eq.0) cycle
                   if( nharderror.ge.0 ) then

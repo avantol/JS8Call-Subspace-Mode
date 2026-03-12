@@ -137,17 +137,22 @@ void UI_Constructor::dataSink(qint64 frames) {
         m_px = sq > 0.0f ? 10.0f * log10(sq / (k - k0)) : 0.0f;
         m_pxmax = pxmax > 0.0f ? 20.0f * log10(pxmax) : 0.0f;
 
-        // L2 async decode: fill ring buffer with latest samples
+        // L2 async decode: fill ring buffer with latest samples.
+        // m_l2RingPos is std::atomic<int> — audio thread (here) is the
+        // sole writer; main thread (L2 timer) is the sole reader.
+        // SPSC ring buffer: no mutex needed, atomic position suffices.
 #ifdef JS8_ENABLE_FT2
         if (m_l2Enabled && k > k0) {
             int nsamples = k - k0;
+            int pos = m_l2RingPos.load(std::memory_order_relaxed);
             for (int i = 0; i < nsamples; ++i) {
-                m_l2RingBuf[m_l2RingPos % FT2_NMAX] = dec_data.d2[k0 + i];
-                ++m_l2RingPos;
+                m_l2RingBuf[pos % FT2_L2_RINGSIZE] = dec_data.d2[k0 + i];
+                ++pos;
             }
             // Clamp position to prevent overflow while preserving modular fill
-            if (m_l2RingPos >= FT2_NMAX * 2)
-                m_l2RingPos = FT2_NMAX + (m_l2RingPos % FT2_NMAX);
+            if (pos >= FT2_L2_RINGSIZE * 2)
+                pos = FT2_L2_RINGSIZE + (pos % FT2_L2_RINGSIZE);
+            m_l2RingPos.store(pos, std::memory_order_release);
         }
 #endif
 

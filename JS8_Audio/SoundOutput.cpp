@@ -105,14 +105,26 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
  */
 void SoundOutput::restart(QIODevice *source) {
     qWarning() << "[FT2-TX] SoundOutput::restart() source=" << source
-               << "isOpen=" << (source ? source->isOpen() : false);
+               << "isOpen=" << (source ? source->isOpen() : false)
+               << "hasStream=" << (m_stream != nullptr);
+
+    // Always create a fresh QAudioSink. Reusing via stop()+start() causes
+    // Active→Idle oscillation on Qt 6.4 / PipeWire after several cycles.
     if (!m_device.isNull()) {
+        // Fully stop and disconnect the old sink before destroying it.
+        // Without this, the PipeWire callback thread may still reference
+        // the old sink's buffers when QScopedPointer deletes it, causing
+        // heap corruption ("double free or corruption").
+        if (m_stream) {
+            m_stream->disconnect(this);
+            m_stream->reset();
+            m_stream->stop();
+        }
         m_stream.reset(new QAudioSink(m_device, m_format));
         qCDebug(soundout_js8)
             << "SoundOutput::restart Selected audio output format:"
             << m_stream->format();
         checkStream();
-        m_stream->setVolume(m_volume);
         m_error = false;
 
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
@@ -128,6 +140,8 @@ void SoundOutput::restart(QIODevice *source) {
     } else {
         m_error = false;
     }
+
+    m_stream->setVolume(m_volume);
 
     // we have to set this before every start on the stream because the
     // Windows implementation seems to forget the buffer size after a

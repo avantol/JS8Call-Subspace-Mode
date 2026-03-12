@@ -35,6 +35,10 @@ class Modulator final : public AudioDevice {
      * This method is thread-safe, i.e., can be called from a different thread.
      */
     bool isIdle() const { return m_state.load() == State::Idle; }
+    bool isFT2WaveformDone() const {
+        return m_state.load() == State::Idle
+            || (m_ft2Mode && m_ic >= static_cast<unsigned>(m_ft2WaveLen));
+    }
 
     // Manipulators
 
@@ -97,6 +101,7 @@ class Modulator final : public AudioDevice {
     float *m_ft2Wave = nullptr;    // Pointer to pre-generated waveform
     int m_ft2WaveLen = 0;          // Length of pre-generated waveform
 #endif
+    unsigned m_txCycleCount = 0;   // TX cycle counter for diagnostics
 };
 
 #endif

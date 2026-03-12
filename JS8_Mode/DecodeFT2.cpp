@@ -145,9 +145,14 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
     std::int8_t msgbits_out[77 * 20] = {};
     int ndecoded = 0;
 
+    // ndepth=3: deep thresholds (0.50/0.65) for better sensitivity.
+    // OSD capped at depth 2 in Fortran (was 4 which caused lockups).
     ft2_triggered_decode_c(samples, nfqso, nfa, nfb, 3,
                            snr_out, dt_out, freq_out,
                            msgbits_out, &ndecoded);
+
+    if (ndecoded > 0)
+        qWarning() << "[FT2-L2] ft2_triggered_decode returned ndecoded=" << ndecoded;
 
     std::size_t count = 0;
     for (int d = 0; d < ndecoded; ++d) {
@@ -172,11 +177,17 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         if (bits[74] & 1) frameBits |= Varicode::JS8CallData;
 
         // Filter garbage: reserved bits 75-76 must be 0, SNR >= -10
-        bool garbage = (bits[75] & 1) || (bits[76] & 1) || snr < -10;
+        bool reservedBad = (bits[75] & 1) || (bits[76] & 1);
+        bool snrBad = snr < -10;
+        bool garbage = reservedBad || snrBad;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
                    << "freq=" << freq << "bits=" << frameBits
                    << "frame=" << frame
+                   << "raw72-76=" << int(bits[72]) << int(bits[73])
+                   << int(bits[74]) << int(bits[75]) << int(bits[76])
+                   << (reservedBad ? "RESERVED-BAD" : "")
+                   << (snrBad ? "SNR-BAD" : "")
                    << (garbage ? "FILTERED" : "");
 
         if (garbage)
@@ -189,7 +200,7 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
             .frequency = freq,
             .data = frame.toStdString(),
             .type = frameBits,
-            .quality = 0.0f,
+            .quality = 1.0f,  // LDPC-verified decode — not low confidence
             .mode = 16 // Varicode::JS8CallFT2
         });
 

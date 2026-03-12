@@ -2671,10 +2671,17 @@ class Worker : public QObject {
             }
 
 #ifdef JS8_ENABLE_FT2
-            // FT2 decode pass (separate protocol, bit 4 = 16)
+            // FT2 decode pass (separate protocol, bit 4 = 16).
+            // Acquire Fortran lock via CAS — L2 async decoder uses
+            // the same Fortran save variables.  If L2 holds the lock
+            // we skip standard FT2 this cycle (L2 is doing Fortran work).
             if ((set & 16) == 16) {
-                sum += m_ft2Decoder(m_data, m_data.params.kposFT2,
-                                   m_data.params.kszFT2, emitEvent);
+                bool expected = false;
+                if (::JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true)) {
+                    sum += m_ft2Decoder(m_data, m_data.params.kposFT2,
+                                       m_data.params.kszFT2, emitEvent);
+                    ::JS8::DecodeFT2::fortranLock.store(false);
+                }
             }
 #endif
 

@@ -8,6 +8,7 @@
 #include "Varicode.h"
 
 #include <QLoggingCategory>
+#include <QScrollBar>
 
 #include <iterator>
 
@@ -340,8 +341,15 @@ void TransmitTextEdit::highlightCharsSent() {
 }
 
 void TransmitTextEdit::highlight() {
+    // Save scroll position to prevent viewport jumps during block formatting
+    auto *sb = verticalScrollBar();
+    int savedScroll = sb ? sb->value() : 0;
+
     highlightBase();
     highlightCharsSent();
+
+    // Restore scroll position
+    if (sb) sb->setValue(savedScroll);
 }
 
 QTextCursor::MoveOperation deleteKeyEventToMoveOperation(QKeyEvent *e) {

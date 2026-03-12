@@ -652,21 +652,30 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(&m_l2DecodeWatcher, &QFutureWatcher<void>::finished,
             this, &UI_Constructor::l2DecodeDone);
     connect(&m_l2DecodeTimer, &QTimer::timeout, this, [this]() {
-        if (!m_l2Enabled || m_l2Decoding || m_decoderBusy) {
+        if (!m_l2Enabled || m_l2Decoding || m_transmitting) {
             return;
         }
-        if (m_l2RingPos < 30000) {
-            return;
+        int pos = m_l2RingPos.load();
+        if (pos < FT2_NMAX) {
+            return;  // need at least one period of audio
         }
-        qWarning() << "[FT2-L2] timer: launching decode, ringPos=" << m_l2RingPos;
 
-        // Copy ring buffer to a heap-allocated contiguous buffer.
-        // The ring buffer is circular — linearize so newest sample is last.
+        // Acquire Fortran lock via CAS — standard FT2 decoder on the
+        // decoder thread uses the same Fortran save variables.
+        bool expected = false;
+        if (!JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true)) {
+            return;  // standard FT2 has the lock — try next tick
+        }
+
+        qWarning() << "[FT2-L2] timer: launching decode, ringPos=" << pos;
+
+        // Extract last 45000 samples from the 90000-sample ring buffer.
+        // Single sliding window — matches Decodium's approach.
         auto buf = std::make_shared<std::array<std::int16_t, FT2_NMAX>>();
-        int writePos = m_l2RingPos % FT2_NMAX;
-        // [writePos..end] is older data, [0..writePos) is newer data
-        std::copy_n(&m_l2RingBuf[writePos], FT2_NMAX - writePos, buf->data());
-        std::copy_n(&m_l2RingBuf[0], writePos, &(*buf)[FT2_NMAX - writePos]);
+        int start = ((pos - FT2_NMAX) % FT2_L2_RINGSIZE + FT2_L2_RINGSIZE) % FT2_L2_RINGSIZE;
+        for (int i = 0; i < FT2_NMAX; ++i) {
+            (*buf)[i] = m_l2RingBuf[(start + i) % FT2_L2_RINGSIZE];
+        }
 
         int nfqso = dec_data.params.nfqso;
         int nfa = dec_data.params.nfa;
@@ -681,6 +690,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                         processDecodeEvent(ev);
                     }, Qt::QueuedConnection);
                 });
+            // Release Fortran lock as soon as Fortran work is done.
+            // m_l2Decoding stays true until l2DecodeDone() fires on
+            // the main thread — this prevents the next L2 tick from
+            // launching while results are still being delivered, but
+            // does NOT block standard FT2 from acquiring the lock.
+            JS8::DecodeFT2::fortranLock.store(false);
         }));
     });
     m_l2Enabled = true;

@@ -94,6 +94,11 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
   call getcandidates2(dd, real(nfa), real(nfb), 0.50, nfqso, MAXCAND, &
        savg, candidate, ncand, sbase)
 
+  write(*,'(A,I4,A,I5,A,I5)') '[FT2-L2] Phase1: ncand=', ncand, &
+       ' nfqso=', nfqso, ' ndepth=', ndepth0
+  if(ncand.gt.0) write(*,'(A,5F8.1)') '[FT2-L2] cand freqs:', &
+       (candidate(1,min(i,ncand)), i=1,min(5,ncand))
+
 ! For each candidate, coarse sync search only
   dobigfft = .true.
   do icand = 1, ncand
@@ -132,8 +137,13 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
       hit_idf(nhits) = idfbest_c
       hit_sync(nhits) = smax_c
       hit_snr(nhits) = snr0
+      write(*,'(A,I3,A,F7.1,A,F5.2,A,I5,A,I3)') &
+           '[FT2-L2] Phase1 HIT #', nhits, ' f=', f0, &
+           ' sync=', smax_c, ' ibest=', ibest_c, ' idf=', idfbest_c
     endif
   enddo
+
+  write(*,'(A,I3)') '[FT2-L2] Phase1 total hits=', nhits
 
 ! ============================================
 ! PHASE 2: Targeted Decode at Sync Positions
@@ -170,7 +180,12 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 ! Decode threshold (stricter than scan trigger)
     smaxthresh = 0.80
     if(ndepth0.ge.3) smaxthresh = 0.65
-    if(smax.lt.smaxthresh) cycle
+    if(smax.lt.smaxthresh) then
+      write(*,'(A,I3,A,F7.1,A,F5.2,A,F5.2)') &
+           '[FT2-L2] Phase2 REJECT sync: hit#', ihit, ' f=', f0, &
+           ' smax=', smax, ' thresh=', smaxthresh
+      cycle
+    endif
 
 ! Corrected frequency
     f1 = f0 + real(idfbest)
@@ -193,7 +208,12 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 
 ! Bit metrics
     call get_ft2_bitmetrics(cd, bitmetrics, badsync)
-    if(badsync) cycle
+    if(badsync) then
+      write(*,'(A,I3,A,F7.1,A,F5.2)') &
+           '[FT2-L2] Phase2 REJECT badsync: hit#', ihit, &
+           ' f=', f1, ' smax=', smax
+      cycle
+    endif
 
 ! Sub-sample DT refinement via parabolic interpolation
     if(ibest.gt.0 .and. ibest.lt.NDMAX-1) then
@@ -217,9 +237,17 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
     ns3 = count(hbits(133:140).eq.(/1,1,1,0,0,1,0,0/))
     ns4 = count(hbits(199:206).eq.(/1,0,1,1,0,0,0,1/))
     nsync_qual = ns1 + ns2 + ns3 + ns4
-    nsync_qual_min = 13
-    if(ndepth0.ge.3) nsync_qual_min = 10
-    if(nsync_qual.lt.nsync_qual_min) cycle
+    nsync_qual_min = 20
+    if(ndepth0.ge.3) nsync_qual_min = 18
+    if(nsync_qual.lt.nsync_qual_min) then
+      write(*,'(A,I3,A,F7.1,A,I3,A,I3)') &
+           '[FT2-L2] Phase2 REJECT nsync: hit#', ihit, &
+           ' f=', f1, ' nsync=', nsync_qual, ' min=', nsync_qual_min
+      cycle
+    endif
+    write(*,'(A,I3,A,F7.1,A,I3,A,F5.2,A,I5)') &
+         '[FT2-L2] Phase2 PASS: hit#', ihit, ' f=', f1, &
+         ' nsync=', nsync_qual, ' smax=', smax, ' ibest=', ibest
 
 ! Scale LLRs from bitmetrics (3 metric types)
     scalefac = 2.83
@@ -270,6 +298,11 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
       message77 = message91(1:77)
 
       if(sum(message77).eq.0) cycle
+      if(nharderror.lt.0 .and. ipass.eq.5) then
+        write(*,'(A,I3,A,F7.1,A,I3)') &
+             '[FT2-L2] Phase2 LDPC FAIL: hit#', ihit, &
+             ' f=', f1, ' nharderror=', nharderror
+      endif
       if(nharderror.ge.0) then
         message77 = mod(message77 + rvec, 2)
 

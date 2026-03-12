@@ -71,7 +71,7 @@ subroutine decode174_91(llr,Keff,maxosd,norder,apmask,message91,cw,ntype,nharder
          synd(i)=sum(cw(Nm(1:nrw(i),i)))
          if( mod(synd(i),2) .ne. 0 ) ncheck=ncheck+1
       enddo
-      if(iter.eq.0) then
+      if(.false. .and. iter.eq.0) then
          write(*,'(A,I4,A,I4)') '[FT2-DIAG] BP iter=0 ncheck=',ncheck, &
             ' nhardbits1=',count(cw.eq.1)
       endif
@@ -81,7 +81,7 @@ subroutine decode174_91(llr,Keff,maxosd,norder,apmask,message91,cw,ntype,nharder
          m96(83:96)=cw(78:91)
          call get_crc14(m96,96,nbadcrc)
          nharderror=count( (2*cw-1)*llr .lt. 0.0 )
-         if(iter.le.2) then
+         if(.false. .and. iter.le.2) then
             write(*,'(A,I4,A,I4,A,I4)') '[FT2-DIAG] BP codeword found iter=', &
                iter,' nbadcrc=',nbadcrc,' nharderror=',nharderror
          endif

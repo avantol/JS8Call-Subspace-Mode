@@ -9,6 +9,7 @@
 #ifdef JS8_ENABLE_FT2
 
 #include "JS8_Mode/JS8.h"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -19,6 +20,15 @@ namespace JS8 {
 class DecodeFT2 {
   public:
     DecodeFT2() = default;
+
+    /**
+     * Atomic gate for Fortran mutual exclusion.
+     * FT2 standard decoder and L2 share Fortran save variables
+     * (ft2_downsample, getcandidates2, sync2d, decode174_91) and
+     * must never execute simultaneously.  Both sides acquire via
+     * compare_exchange_strong; the loser skips that tick/cycle.
+     */
+    static inline std::atomic<bool> fortranLock{false};
 
     /**
      * Run FT2 decode on audio data from dec_data.

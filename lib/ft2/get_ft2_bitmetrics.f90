@@ -60,12 +60,7 @@ subroutine get_ft2_bitmetrics(cd,bitmetrics,badsync)
       if(icos4d(k-1).eq.(ip(1)-1)) is4=is4+1
    enddo
    nsync=is1+is2+is3+is4   !Number of correct hard sync symbols, 0-16
-   write(*,'(A,4I3,A,I3)') '[FT2-DIAG] sync: is=',               &
-      is1,is2,is3,is4,' nsync=',nsync
-   write(*,'(A,4F8.2)') '[FT2-DIAG] s4 sym1: ',s4(0:3,1)
-   write(*,'(A,4F8.2)') '[FT2-DIAG] s4 sym2: ',s4(0:3,2)
-   write(*,'(A,4F8.2)') '[FT2-DIAG] s4 sym3: ',s4(0:3,3)
-   write(*,'(A,4F8.2)') '[FT2-DIAG] s4 sym4: ',s4(0:3,4)
+!  Diagnostics removed — were flooding log during L2 continuous decode
    if(nsync .lt. 4) then
       badsync=.true.
       return
