@@ -193,7 +193,7 @@ void UI_Constructor::dataSink(qint64 frames) {
 
             fftw_real = reinterpret_cast<float *>(fftw_complex);
             fftw_plan = fftwf_plan_dft_r2c_1d(nfft3, fftw_real, fftw_complex,
-                                              FFTW_ESTIMATE_PATIENT);
+                                              FFTW_ESTIMATE);
 
             if (!fftw_plan) {
                 fftwf_free(fftw_complex);

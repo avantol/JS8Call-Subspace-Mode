@@ -46,8 +46,10 @@ void DecodeFT2::decodeCallback(float /*sync*/, int snr, float dt, float freq,
     if (msgbits77[73] & 1) frameBits |= Varicode::JS8CallLast;
     if (msgbits77[74] & 1) frameBits |= Varicode::JS8CallData;
 
-    // Filter garbage decodes: reserved bits 75-76 must be 0, SNR >= -10
-    bool garbage = (msgbits77[75] & 1) || (msgbits77[76] & 1) || snr < -10;
+    // Filter garbage decodes: reserved bits 75-76 must be 0, SNR >= -10,
+    // and at least one flag bit must be set (our TX always sets First, Data, or Last)
+    bool garbage = (msgbits77[75] & 1) || (msgbits77[76] & 1) || snr < -10
+                   || frameBits == 0;
 
     qWarning() << "[FT2-RX] DECODED: snr=" << snr << "dt=" << dt
                << "freq=" << freq << "nap=" << nap
@@ -176,10 +178,12 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         if (bits[73] & 1) frameBits |= Varicode::JS8CallLast;
         if (bits[74] & 1) frameBits |= Varicode::JS8CallData;
 
-        // Filter garbage: reserved bits 75-76 must be 0, SNR >= -10
+        // Filter garbage: reserved bits 75-76 must be 0, SNR >= -10,
+        // and at least one flag bit must be set (First, Data, or Last)
         bool reservedBad = (bits[75] & 1) || (bits[76] & 1);
         bool snrBad = snr < -10;
-        bool garbage = reservedBad || snrBad;
+        bool noFlags = (frameBits == 0);
+        bool garbage = reservedBad || snrBad || noFlags;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
                    << "freq=" << freq << "bits=" << frameBits
@@ -188,6 +192,7 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                    << int(bits[74]) << int(bits[75]) << int(bits[76])
                    << (reservedBad ? "RESERVED-BAD" : "")
                    << (snrBad ? "SNR-BAD" : "")
+                   << (noFlags ? "NO-FLAGS" : "")
                    << (garbage ? "FILTERED" : "");
 
         if (garbage)

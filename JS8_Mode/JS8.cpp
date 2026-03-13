@@ -2368,7 +2368,7 @@ template <typename Mode> class DecodeMode {
             fftw_plan = fftwf_plan_dft_1d(
                 Mode::NMAX, reinterpret_cast<fftwf_complex *>(filter.data()),
                 reinterpret_cast<fftwf_complex *>(filter.data()), FFTW_FORWARD,
-                FFTW_ESTIMATE_PATIENT);
+                FFTW_ESTIMATE);
 
             if (!fftw_plan) {
                 throw std::runtime_error("Failed to create FFT plan");
@@ -2397,32 +2397,32 @@ template <typename Mode> class DecodeMode {
         plans[Plan::DS] = fftwf_plan_dft_1d(
             Mode::NDFFT2, reinterpret_cast<fftwf_complex *>(cd0.data()),
             reinterpret_cast<fftwf_complex *>(cd0.data()), FFTW_BACKWARD,
-            FFTW_ESTIMATE_PATIENT);
+            FFTW_ESTIMATE);
 
         plans[Plan::BB] = fftwf_plan_dft_r2c_1d(
             Mode::NDFFT1, reinterpret_cast<float *>(ds_cx.data()),
             reinterpret_cast<fftwf_complex *>(ds_cx.data()),
-            FFTW_ESTIMATE_PATIENT);
+            FFTW_ESTIMATE);
 
         plans[Plan::CF] = fftwf_plan_dft_1d(
             Mode::NMAX, reinterpret_cast<fftwf_complex *>(cfilt.data()),
             reinterpret_cast<fftwf_complex *>(cfilt.data()), FFTW_FORWARD,
-            FFTW_ESTIMATE_PATIENT);
+            FFTW_ESTIMATE);
 
         plans[Plan::CB] = fftwf_plan_dft_1d(
             Mode::NMAX, reinterpret_cast<fftwf_complex *>(cfilt.data()),
             reinterpret_cast<fftwf_complex *>(cfilt.data()), FFTW_BACKWARD,
-            FFTW_ESTIMATE_PATIENT);
+            FFTW_ESTIMATE);
 
         plans[Plan::SD] = fftwf_plan_dft_r2c_1d(
             Mode::NFFT1, reinterpret_cast<float *>(sd.data()),
             reinterpret_cast<fftwf_complex *>(sd.data()),
-            FFTW_ESTIMATE_PATIENT);
+            FFTW_ESTIMATE);
 
         plans[Plan::CS] = fftwf_plan_dft_1d(
             Mode::NDOWNSPS, reinterpret_cast<fftwf_complex *>(csymb.data()),
             reinterpret_cast<fftwf_complex *>(csymb.data()), FFTW_FORWARD,
-            FFTW_ESTIMATE_PATIENT);
+            FFTW_ESTIMATE);
 
         for (auto plan : plans) {
             if (!plan)
