@@ -288,8 +288,8 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 
       message77 = 0
       dmin = 0.0
-      maxosd = 3
-      if(ndepth0.ge.3) maxosd = 4
+      maxosd = 2
+      if(ndepth0.ge.3) maxosd = 3
       if(.not.doosd) maxosd = -1
 
       Keff = 91

@@ -652,11 +652,21 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(&m_l2DecodeWatcher, &QFutureWatcher<void>::finished,
             this, &UI_Constructor::l2DecodeDone);
     connect(&m_l2DecodeTimer, &QTimer::timeout, this, [this]() {
+        static qint64 lastTickMs = 0;
+        qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        qint64 deltaMs = lastTickMs ? (nowMs - lastTickMs) : 0;
+        lastTickMs = nowMs;
+
         if (!m_l2Enabled || m_l2Decoding || m_transmitting) {
+            if (m_l2Enabled && !m_transmitting) {
+                if (m_l2Decoding)
+                    qWarning() << "[FT2-L2] timer: skip (decoding) dt=" << deltaMs << "ms";
+            }
             return;
         }
         int pos = m_l2RingPos.load();
         if (pos < FT2_NMAX) {
+            qWarning() << "[FT2-L2] timer: skip (filling) pos=" << pos << "dt=" << deltaMs << "ms";
             return;  // need at least one period of audio
         }
 
@@ -664,6 +674,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         // decoder thread uses the same Fortran save variables.
         bool expected = false;
         if (!JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true)) {
+            qWarning() << "[FT2-L2] timer: skip (lock busy) dt=" << deltaMs << "ms";
             return;  // standard FT2 has the lock — try next tick
         }
 
@@ -679,7 +690,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         auto buf = linear;
 
         qWarning() << "[FT2-L2] timer: validSamples=" << validSamples
-                   << "ringPos=" << pos;
+                   << "ringPos=" << pos << "dt=" << deltaMs << "ms";
 
         int nfqso = dec_data.params.nfqso;
         int nfa = dec_data.params.nfa;
