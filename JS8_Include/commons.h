@@ -30,7 +30,7 @@
 #ifdef JS8_ENABLE_FT2
 #define FT2_NUM_SYMBOLS    103    // 16 sync + 87 data
 #define FT2_NSPS           288    // samples/symbol at 12kHz
-#define FT2_NMAX           45000  // 3.75s * 12000
+#define FT2_NMAX           90000  // 7.5s * 12000 (2 periods, matches Fortran NMAX)
 #define FT2_L2_RINGSIZE    90000  // 7.5s ring buffer (2 periods) for L2 async decode
 #define FT2_TX_PERIOD_MS   3750   // T/R period in milliseconds (3.75s)
 #define FT2_START_DELAY_MS 100

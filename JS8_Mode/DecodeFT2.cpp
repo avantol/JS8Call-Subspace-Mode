@@ -81,8 +81,8 @@ std::size_t DecodeFT2::operator()(struct dec_data &data, int kposFT2,
     if (kszFT2 <= 0)
         return 0;
 
-    // The Fortran decoder always reads FT2_NMAX (45000) samples regardless
-    // of what we pass. We must provide a full, clean buffer every time.
+    // The Fortran decoder reads FT2_NMAX (90000) samples.
+    // We must provide a full, clean buffer every time.
     // Skip decode if we don't have enough samples for the signal (~2.5s).
     int nsamples = std::min(kszFT2, FT2_NMAX);
     if (nsamples < 30000) {

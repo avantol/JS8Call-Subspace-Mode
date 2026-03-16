@@ -9,7 +9,7 @@ subroutine subtractft2(dd,itone,f0,dt)
 
   use timer_module, only: timer
 
-  parameter (NMAX=45000,NSPS=288,NFFT=NMAX,NFILT=700)
+  parameter (NMAX=90000,NSPS=288,NFFT=NMAX,NFILT=700)
   parameter (NFRAME=(103+2)*NSPS)
   real*4  dd(NMAX), window(-NFILT/2:NFILT/2), xjunk
   complex cref,camp,cfilt,cw

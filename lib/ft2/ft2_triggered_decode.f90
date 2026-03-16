@@ -116,7 +116,7 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
     idfbest_c = 0
     smax_c = -99.
     do idf = -12, 12, 3
-      do istart = -688, 2024, 4
+      do istart = -688, NDMAX-NN*NSS+320, 4
         call sync2d(cd2, istart, ctwk2(:,idf), 1, sync)
         if(sync.gt.smax_c) then
           smax_c = sync
@@ -193,7 +193,7 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 
 ! Final downsample at corrected frequency
     call ft2_downsample(dd, .false., f1, cb)
-    sum2 = sum(abs(cb)**2)/(real(NSS)*NN)
+    sum2 = sum(abs(cb)**2)/real(NDMAX)
     if(sum2.gt.0.0) cb = cb/sqrt(sum2)
 
 ! Extract signal at known position (DT eliminated)

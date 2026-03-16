@@ -122,6 +122,12 @@ void UI_Constructor::dataSink(qint64 frames) {
             ssum.fill(0.0f);
             m_ihsym = 0;
             std::fill(std::begin(dec_data.d2) + k, std::end(dec_data.d2), 0);
+#ifdef JS8_ENABLE_FT2
+            // Reset L2 ring buffer so it refills with fresh audio.
+            // Without this, stale/zeroed samples from d2 contaminate
+            // the ring buffer across the 60s period boundary.
+            m_l2RingPos.store(0, std::memory_order_release);
+#endif
         }
 
         float gain = pow(10.0f, 0.1f * m_inGain);

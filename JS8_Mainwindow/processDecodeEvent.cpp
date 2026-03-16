@@ -74,7 +74,11 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 if (auto const it = m_messageDupeCache.find(dedupeKey);
                     it != m_messageDupeCache.end()) {
                     auto ageSecs = it->second.secsTo(QDateTime::currentDateTimeUtc());
-                    auto window = 0.5 * JS8::Submode::period(decodedtext.submode());
+                    // FT2 L2: 90K buffer holds ~7.5s, same frame re-decodes for ~5s.
+                    // Use 6s dedup window for FT2, half-period for other modes.
+                    auto window = (decodedtext.submode() == Varicode::JS8CallFT2)
+                        ? 6.0
+                        : 0.5 * JS8::Submode::period(decodedtext.submode());
                     if (ageSecs < window) {
                         qWarning() << "[DECODE-EVENT] DUPLICATE, skipping frame=" << decodedtext.frame()
                                    << "age=" << ageSecs << "s, window=" << window << "s";

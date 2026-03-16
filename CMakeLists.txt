@@ -381,7 +381,7 @@ if(ENABLE_FT2)
 
   target_link_libraries(ft2_fortran PRIVATE ${FFTW3_LIBRARIES})
 
-  target_sources(${TARGET} PRIVATE JS8_Mode/DecodeFT2.cpp)
+  target_sources(${TARGET} PRIVATE JS8_Mode/DecodeFT2.cpp JS8_Mode/FT2OnsetDetector.cpp)
   target_compile_definitions(${TARGET} PRIVATE JS8_ENABLE_FT2=1)
   target_link_libraries(${TARGET} PRIVATE ft2_fortran)
 endif()

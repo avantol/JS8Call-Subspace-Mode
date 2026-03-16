@@ -266,14 +266,14 @@ contains
                      idfmax=12
                      idfstp=3
                      ibmin=-688
-                     ibmax=2024
+                     ibmax=NDMAX-NN*NSS+320
                      if(iseg.eq.1) then
                         ibmin=216
-                        ibmax=1120
+                        ibmax=(NDMAX-NN*NSS+320)/2
                      elseif(iseg.eq.2) then
                         smax1=smax
-                        ibmin=1120
-                        ibmax=2024
+                        ibmin=(NDMAX-NN*NSS+320)/2
+                        ibmax=NDMAX-NN*NSS+320
                      elseif(iseg.eq.3) then
                         ibmin=-688
                         ibmax=216

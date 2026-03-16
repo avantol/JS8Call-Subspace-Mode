@@ -91,7 +91,7 @@ void ft2_gen_wave_c(
  * Two-phase: Costas scan -> targeted LDPC at confirmed sync positions.
  * Returns raw message77 bits (up to 20 decodes).
  *
- * @param iwave     Audio samples at 12000 S/s (int16), 45000 samples
+ * @param iwave     Audio samples at 12000 S/s (int16), 90000 samples
  * @param nfqso     Expected signal frequency in Hz
  * @param nfa       Low frequency search limit in Hz
  * @param nfb       High frequency search limit in Hz

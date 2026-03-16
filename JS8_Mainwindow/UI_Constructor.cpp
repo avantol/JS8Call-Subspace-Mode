@@ -667,15 +667,19 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             return;  // standard FT2 has the lock — try next tick
         }
 
-        qWarning() << "[FT2-L2] timer: launching decode, ringPos=" << pos;
+        // Linearize the ring buffer into a contiguous array
+        int validSamples = std::min(pos, FT2_L2_RINGSIZE);
+        auto linear = std::make_shared<std::array<std::int16_t, FT2_L2_RINGSIZE>>();
+        int ringStart = ((pos - validSamples) % FT2_L2_RINGSIZE + FT2_L2_RINGSIZE) % FT2_L2_RINGSIZE;
+        for (int i = 0; i < validSamples; ++i)
+            (*linear)[i] = m_l2RingBuf[(ringStart + i) % FT2_L2_RINGSIZE];
 
-        // Extract last 45000 samples from the 90000-sample ring buffer.
-        // Single sliding window — matches Decodium's approach.
-        auto buf = std::make_shared<std::array<std::int16_t, FT2_NMAX>>();
-        int start = ((pos - FT2_NMAX) % FT2_L2_RINGSIZE + FT2_L2_RINGSIZE) % FT2_L2_RINGSIZE;
-        for (int i = 0; i < FT2_NMAX; ++i) {
-            (*buf)[i] = m_l2RingBuf[(start + i) % FT2_L2_RINGSIZE];
-        }
+        // Pass full 90K buffer to Fortran — no windowing needed.
+        // NMAX=90000 lets the decoder search the entire ring buffer.
+        auto buf = linear;
+
+        qWarning() << "[FT2-L2] timer: validSamples=" << validSamples
+                   << "ringPos=" << pos;
 
         int nfqso = dec_data.params.nfqso;
         int nfa = dec_data.params.nfa;
@@ -690,11 +694,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                         processDecodeEvent(ev);
                     }, Qt::QueuedConnection);
                 });
-            // Release Fortran lock as soon as Fortran work is done.
+            // Release Fortran lock after decode completes.
             // m_l2Decoding stays true until l2DecodeDone() fires on
-            // the main thread — this prevents the next L2 tick from
-            // launching while results are still being delivered, but
-            // does NOT block standard FT2 from acquiring the lock.
+            // the main thread — prevents re-entry but does NOT block
+            // standard FT2 from acquiring the lock.
             JS8::DecodeFT2::fortranLock.store(false);
         }));
     });
