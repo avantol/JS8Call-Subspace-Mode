@@ -122,12 +122,8 @@ void UI_Constructor::dataSink(qint64 frames) {
             ssum.fill(0.0f);
             m_ihsym = 0;
             std::fill(std::begin(dec_data.d2) + k, std::end(dec_data.d2), 0);
-#ifdef JS8_ENABLE_FT2
-            // Reset L2 ring buffer so it refills with fresh audio.
-            // Without this, stale/zeroed samples from d2 contaminate
-            // the ring buffer across the 60s period boundary.
-            m_l2RingPos.store(0, std::memory_order_release);
-#endif
+            // L2 ring buffer is fed directly from Detector::writeData,
+            // independent of d2's period boundary — no reset needed.
         }
 
         float gain = pow(10.0f, 0.1f * m_inGain);
@@ -143,24 +139,8 @@ void UI_Constructor::dataSink(qint64 frames) {
         m_px = sq > 0.0f ? 10.0f * log10(sq / (k - k0)) : 0.0f;
         m_pxmax = pxmax > 0.0f ? 20.0f * log10(pxmax) : 0.0f;
 
-        // L2 async decode: fill ring buffer with latest samples.
-        // m_l2RingPos is std::atomic<int> — audio thread (here) is the
-        // sole writer; main thread (L2 timer) is the sole reader.
-        // SPSC ring buffer: no mutex needed, atomic position suffices.
-#ifdef JS8_ENABLE_FT2
-        if (m_l2Enabled && k > k0) {
-            int nsamples = k - k0;
-            int pos = m_l2RingPos.load(std::memory_order_relaxed);
-            for (int i = 0; i < nsamples; ++i) {
-                m_l2RingBuf[pos % FT2_L2_RINGSIZE] = dec_data.d2[k0 + i];
-                ++pos;
-            }
-            // Clamp position to prevent overflow while preserving modular fill
-            if (pos >= FT2_L2_RINGSIZE * 2)
-                pos = FT2_L2_RINGSIZE + (pos % FT2_L2_RINGSIZE);
-            m_l2RingPos.store(pos, std::memory_order_release);
-        }
-#endif
+        // L2 ring buffer is now filled in Detector::writeData directly
+        // from the downsampled audio stream, before d2 period logic.
 
         k0 = k;
         ja += jstep;

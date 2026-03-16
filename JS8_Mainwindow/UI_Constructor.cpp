@@ -95,6 +95,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     m_soundOutput->moveToThread(&m_audioThread);
     m_modulator->moveToThread(&m_audioThread);
     m_soundInput->moveToThread(&m_audioThread);
+#ifdef JS8_ENABLE_FT2
+    m_detector->setL2RingBuffer(m_l2RingBuf, FT2_L2_RINGSIZE, &m_l2RingPos);
+#endif
     m_detector->moveToThread(&m_audioThread);
 
     // notification audio operates in its own thread at a lower priority
@@ -664,7 +667,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             }
             return;
         }
-        int pos = m_l2RingPos.load();
+        int pos = m_l2RingPos.load(std::memory_order_acquire);
         if (pos < FT2_NMAX) {
             qWarning() << "[FT2-L2] timer: skip (filling) pos=" << pos << "dt=" << deltaMs << "ms";
             return;  // need at least one period of audio

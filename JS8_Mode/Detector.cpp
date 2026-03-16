@@ -199,14 +199,32 @@ qint64 Detector::writeData(char const *const data, qint64 const maxSize) {
         m_bufferPos += numFramesProcessed;
 
         if (m_bufferPos == m_samplesPerFFT * Filter::NDOWN) {
-            if (dec_data.params.kin >= 0 &&
+            bool const d2ok = dec_data.params.kin >= 0 &&
                 dec_data.params.kin <
-                    static_cast<int>(JS8_NTMAX * 12000 - m_samplesPerFFT)) {
-                for (std::size_t i = 0; i < m_samplesPerFFT; ++i) {
-                    dec_data.d2[dec_data.params.kin++] =
-                        m_filter.downSample(&m_buffer[i * Filter::NDOWN]);
+                    static_cast<int>(JS8_NTMAX * 12000 - m_samplesPerFFT);
+
+            // Always run the downsampler so filter state stays correct
+            // and L2 ring buffer is fed continuously, even when d2 is full.
+            int l2pos = m_l2RingBuf ? m_l2RingPos->load(std::memory_order_relaxed) : 0;
+            for (std::size_t i = 0; i < m_samplesPerFFT; ++i) {
+                auto sample = m_filter.downSample(&m_buffer[i * Filter::NDOWN]);
+                if (d2ok)
+                    dec_data.d2[dec_data.params.kin++] = sample;
+
+                // Feed L2 ring buffer directly from the audio stream,
+                // bypassing d2's period-boundary zeroing.
+                if (m_l2RingBuf) {
+                    m_l2RingBuf[l2pos % m_l2RingSize] = sample;
+                    l2pos++;
+                    if (l2pos >= m_l2RingSize * 2)
+                        l2pos = m_l2RingSize + (l2pos % m_l2RingSize);
                 }
             }
+            // Single atomic store after the batch — reader sees all
+            // samples at once, avoiding per-sample race.
+            if (m_l2RingBuf)
+                m_l2RingPos->store(l2pos, std::memory_order_release);
+
             Q_EMIT framesWritten(dec_data.params.kin);
             m_bufferPos = 0;
         }

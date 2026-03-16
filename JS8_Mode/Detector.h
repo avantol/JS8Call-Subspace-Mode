@@ -7,6 +7,7 @@
 #include <vendor/Eigen/Dense>
 
 #include <array>
+#include <atomic>
 
 // Output device that distributes data in predefined chunks via a signal;
 // underlying device for this abstraction is just the buffer that stores
@@ -84,6 +85,9 @@ class Detector : public AudioDevice {
 
     QMutex *getMutex() { return &m_lock; }
     void setTRPeriod(unsigned p) { m_period = p; }
+    void setL2RingBuffer(std::int16_t *buf, int size, std::atomic<int> *pos) {
+        m_l2RingBuf = buf; m_l2RingSize = size; m_l2RingPos = pos;
+    }
 
     // Accessors
 
@@ -118,6 +122,11 @@ class Detector : public AudioDevice {
     Buffer::size_type m_bufferPos = 0;
     std::size_t m_samplesPerFFT = MaxBufferSize;
     qint32 m_ns = 999;
+
+    // L2 ring buffer (owned by UI_Constructor, written here on audio thread)
+    std::int16_t *m_l2RingBuf = nullptr;
+    int m_l2RingSize = 0;
+    std::atomic<int> *m_l2RingPos = nullptr;
 };
 
 #endif
