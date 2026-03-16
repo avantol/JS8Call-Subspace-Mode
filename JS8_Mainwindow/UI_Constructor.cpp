@@ -702,12 +702,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 
         m_l2Decoding = true;
         m_l2DecodeWatcher.setFuture(QtConcurrent::run([buf, nfqso, nfa, nfb, utc, this]() {
+            auto t0 = QDateTime::currentMSecsSinceEpoch();
             JS8::DecodeFT2::decodeL2(buf->data(), nfqso, nfa, nfb, utc,
                 [this](JS8::Event::Variant const &ev) {
                     QMetaObject::invokeMethod(this, [this, ev]() {
                         processDecodeEvent(ev);
                     }, Qt::QueuedConnection);
                 });
+            auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
+            qWarning() << "[FT2-L2] decode took" << elapsed << "ms";
             // Release Fortran lock after decode completes.
             // m_l2Decoding stays true until l2DecodeDone() fires on
             // the main thread — prevents re-entry but does NOT block
