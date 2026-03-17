@@ -296,8 +296,15 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
       llre(i) = (llra(i) + llrb(i) + llrc(i))/3.0
     enddo
 
-! 5 metric passes — try best-of and average first (highest success rate)
-    do ipass = 1, 5
+! Progressive LDPC: adaptive pass count by sync quality
+! Strong sync (nsync>28): llrd almost always succeeds — try 1 pass
+! Medium sync (22-28): try llrd + llre — 2 passes
+! Weak sync (<22): try all 5 passes for best chance
+    npassmax = 5
+    if(nsync_qual.gt.28) npassmax = 1
+    if(nsync_qual.gt.22 .and. nsync_qual.le.28) npassmax = 2
+
+    do ipass = 1, npassmax
       if(ipass.eq.1) llr = llrd    ! best-of-3 (most likely to succeed)
       if(ipass.eq.2) llr = llre    ! average-of-3
       if(ipass.eq.3) llr = llra    ! 1-symbol coherence
@@ -324,6 +331,9 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
       endif
       if(nharderror.ge.0) then
         message77 = mod(message77 + rvec, 2)
+        write(*,'(A,I3,A,I1,A,I1,A,I3,A,I3)') &
+             '[FT2-L2] LDPC OK: hit#', ihit, ' pass=', ipass, &
+             '/', npassmax, ' nsync=', nsync_qual, ' nhard=', nharderror
 
 ! Check duplicate within this call AND against known frames
         idupe = 0
