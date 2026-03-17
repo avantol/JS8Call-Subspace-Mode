@@ -7276,10 +7276,54 @@ void UI_Constructor::l2TryDecode(char const *source) {
     m_l2DecodeWatcher.setFuture(QtConcurrent::run(
         [buf, nfqso, nfa, nfb, utc, knownSnap, nknownSnap, this]() {
         auto t0 = QDateTime::currentMSecsSinceEpoch();
+
+        // --- Sync monitor: scan for Costas tones before full decode ---
+        // Build frequency grid: if we have a known signal freq, scan tight
+        // around it; otherwise scan the full passband in 50 Hz steps.
+        int useNfqsoOnly = 0;
+        int scanNfqso = nfqso;
+        float syncBest = -99.0f;
+        float syncFreq = 0.0f;
+        int syncIbest = -1, syncIdf = 0;
+
+        constexpr int MAX_SCAN_FREQS = 40;
+        float scanFreqs[MAX_SCAN_FREQS];
+        int nScanFreqs = 0;
+
+        if (nfqso > 0 && nfqso >= nfa && nfqso <= nfb) {
+            // Known signal frequency — scan ±100 Hz in 25 Hz steps
+            for (int f = std::max(nfa, nfqso - 100);
+                 f <= std::min(nfb, nfqso + 100) && nScanFreqs < MAX_SCAN_FREQS;
+                 f += 25)
+                scanFreqs[nScanFreqs++] = static_cast<float>(f);
+        } else {
+            // No known frequency — scan full passband in 50 Hz steps
+            for (int f = nfa; f <= nfb && nScanFreqs < MAX_SCAN_FREQS; f += 50)
+                scanFreqs[nScanFreqs++] = static_cast<float>(f);
+        }
+
+        if (nScanFreqs > 0) {
+            auto tSync = QDateTime::currentMSecsSinceEpoch();
+            ft2_sync_scan_c(buf->data(), nScanFreqs, scanFreqs,
+                            &syncBest, &syncFreq, &syncIbest, &syncIdf);
+            auto syncMs = QDateTime::currentMSecsSinceEpoch() - tSync;
+
+            qWarning() << "[FT2-L2] sync scan:" << syncMs << "ms"
+                       << "nfreqs=" << nScanFreqs
+                       << "sync=" << syncBest << "freq=" << syncFreq
+                       << "ibest=" << syncIbest << "idf=" << syncIdf;
+
+            if (syncBest >= 3.00f) {
+                // Strong sync well above noise floor (~2.6) — skip getcandidates2
+                useNfqsoOnly = 1;
+                scanNfqso = static_cast<int>(syncFreq + 0.5f);
+            }
+        }
+
         std::int8_t newBits[77 * 20] = {};
         int nNewDecoded = 0;
         float decodedFreq = 0.0f;
-        JS8::DecodeFT2::decodeL2(buf->data(), nfqso, nfa, nfb, utc,
+        JS8::DecodeFT2::decodeL2(buf->data(), scanNfqso, nfa, nfb, utc,
             [this](JS8::Event::Variant const &ev) {
                 QMetaObject::invokeMethod(this, [this, ev]() {
                     processDecodeEvent(ev);
@@ -7287,10 +7331,12 @@ void UI_Constructor::l2TryDecode(char const *source) {
             },
             knownSnap, nknownSnap,
             newBits, &nNewDecoded,
-            0, &decodedFreq);
+            useNfqsoOnly, &decodedFreq);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
         qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
-                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap;
+                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
+                    << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
+                    << "sync=" << syncBest;
 
         // Expire known frames older than one full buffer (90K samples)
         int curPos = m_l2RingPos.load(std::memory_order_relaxed);

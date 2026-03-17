@@ -109,6 +109,23 @@ void ft2_triggered_decode_c(
     const std::int8_t *known_bits, int nknown,
     int nfqso_only);
 
+/**
+ * Lightweight sync scanner: downsample + sync2d at a frequency grid.
+ * Returns best sync quality across all input frequencies.
+ * Used by C++ sync monitor to detect Costas tones before full decode.
+ *
+ * @param iwave     Audio samples at 12000 S/s (int16), 90000 samples
+ * @param nfreqs    Number of frequencies to scan
+ * @param freqs     Array of frequencies to scan (Hz)
+ * @param sync_out  Output: best sync quality found
+ * @param freq_out  Output: frequency of best sync
+ * @param ibest_out Output: best time position (downsampled samples)
+ * @param idf_out   Output: best frequency offset index
+ */
+void ft2_sync_scan_c(
+    const std::int16_t *iwave, int nfreqs, const float *freqs,
+    float *sync_out, float *freq_out, int *ibest_out, int *idf_out);
+
 /** Clear multi-period averaging state (call on band/mode change). */
 void ft2_clravg_c(void);
 

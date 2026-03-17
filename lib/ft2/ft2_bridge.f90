@@ -214,6 +214,23 @@ contains
 
   end subroutine ft2_triggered_decode_c
 
+  ! Lightweight sync scanner: downsample + sync2d at a frequency grid
+  ! Returns best sync quality across all input frequencies
+  subroutine ft2_sync_scan_c(iwave, nfreqs, freqs, sync_out, freq_out, &
+       ibest_out, idf_out) bind(C, name='ft2_sync_scan_c')
+    integer(c_int16_t), intent(in) :: iwave(*)
+    integer(c_int), value, intent(in) :: nfreqs
+    real(c_float), intent(in) :: freqs(nfreqs)
+    real(c_float), intent(out) :: sync_out
+    real(c_float), intent(out) :: freq_out
+    integer(c_int), intent(out) :: ibest_out
+    integer(c_int), intent(out) :: idf_out
+
+    call ft2_sync_scan(iwave, nfreqs, freqs, sync_out, freq_out, &
+         ibest_out, idf_out)
+
+  end subroutine ft2_sync_scan_c
+
   ! Initialize FFTW patience common block
   subroutine ft2_init_c() bind(C, name='ft2_init_c')
     common/patience/npatience,nthreads
