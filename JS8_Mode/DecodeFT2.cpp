@@ -46,9 +46,10 @@ void DecodeFT2::decodeCallback(float /*sync*/, int snr, float dt, float freq,
     if (msgbits77[73] & 1) frameBits |= Varicode::JS8CallLast;
     if (msgbits77[74] & 1) frameBits |= Varicode::JS8CallData;
 
-    // Filter garbage decodes: reserved bits 75-76 must be 0, SNR >= -10,
+    // Filter garbage decodes: reserved bits 75-76 must be 0,
     // and at least one flag bit must be set (our TX always sets First, Data, or Last)
-    bool garbage = (msgbits77[75] & 1) || (msgbits77[76] & 1) || snr < -10
+    // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup
+    bool garbage = (msgbits77[75] & 1) || (msgbits77[76] & 1)
                    || frameBits == 0;
 
     qWarning() << "[FT2-RX] DECODED: snr=" << snr << "dt=" << dt
@@ -140,18 +141,34 @@ std::size_t DecodeFT2::operator()(struct dec_data &data, int kposFT2,
 
 std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                                 int nfqso, int nfa, int nfb, int utc,
-                                Event::Emitter emitEvent) {
+                                Event::Emitter emitEvent,
+                                const std::int8_t *known_bits,
+                                int nknown,
+                                std::int8_t *decoded_bits_out,
+                                int *ndecoded_out,
+                                int nfqso_only,
+                                float *decoded_freq_out) {
     int snr_out[20] = {};
     float dt_out[20] = {};
     float freq_out[20] = {};
     std::int8_t msgbits_out[77 * 20] = {};
     int ndecoded = 0;
 
+    // Provide empty known_bits if caller didn't supply any
+    std::int8_t empty_known[77 * 20] = {};
+    if (!known_bits) {
+        known_bits = empty_known;
+        nknown = 0;
+    }
+
     // ndepth=3: deep thresholds (0.50/0.65) for better sensitivity.
     // OSD capped at depth 2 in Fortran (was 4 which caused lockups).
+    // nfqso_only: 0=getcandidates2 full scan (default for now)
+    // Future: sync monitor can set nfqso_only=1 with known frequency
     ft2_triggered_decode_c(samples, nfqso, nfa, nfb, 3,
                            snr_out, dt_out, freq_out,
-                           msgbits_out, &ndecoded);
+                           msgbits_out, &ndecoded,
+                           known_bits, nknown, nfqso_only);
 
     if (ndecoded > 0)
         qWarning() << "[FT2-L2] ft2_triggered_decode returned ndecoded=" << ndecoded;
@@ -178,12 +195,12 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         if (bits[73] & 1) frameBits |= Varicode::JS8CallLast;
         if (bits[74] & 1) frameBits |= Varicode::JS8CallData;
 
-        // Filter garbage: reserved bits 75-76 must be 0, SNR >= -10,
+        // Filter garbage: reserved bits 75-76 must be 0,
         // and at least one flag bit must be set (First, Data, or Last)
+        // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup
         bool reservedBad = (bits[75] & 1) || (bits[76] & 1);
-        bool snrBad = snr < -10;
         bool noFlags = (frameBits == 0);
-        bool garbage = reservedBad || snrBad || noFlags;
+        bool garbage = reservedBad || noFlags;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
                    << "freq=" << freq << "bits=" << frameBits
@@ -191,7 +208,6 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                    << "raw72-76=" << int(bits[72]) << int(bits[73])
                    << int(bits[74]) << int(bits[75]) << int(bits[76])
                    << (reservedBad ? "RESERVED-BAD" : "")
-                   << (snrBad ? "SNR-BAD" : "")
                    << (noFlags ? "NO-FLAGS" : "")
                    << (garbage ? "FILTERED" : "");
 
@@ -211,6 +227,16 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
 
         ++count;
     }
+
+    // Return raw decoded bits so caller can build known-frame list
+    if (decoded_bits_out && ndecoded_out) {
+        std::memcpy(decoded_bits_out, msgbits_out, 77 * 20);
+        *ndecoded_out = ndecoded;
+    }
+
+    // Return first decoded frequency so caller can target future decodes
+    if (decoded_freq_out && ndecoded > 0)
+        *decoded_freq_out = freq_out[0];
 
     return count;
 }

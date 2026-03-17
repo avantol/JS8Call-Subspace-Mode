@@ -8,6 +8,7 @@
 #include "mainwindow.h"
 
 #ifdef JS8_ENABLE_FT2
+#include "JS8_Mode/DecodeFT2.h"
 #include "JS8_Mode/ft2_bridge.h"
 #include <cstring>
 #endif
@@ -2102,12 +2103,10 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
         case Varicode::JS8CallFT2:
             dec_data.params.kposFT2 = params.start;
             dec_data.params.kszFT2 = params.sz;
-            // Both standard FT2 and L2 run cooperatively via
-            // DecodeFT2::fortranLock (atomic CAS).  Standard FT2 has
-            // AP decoding, averaging, subtraction; L2 has full DT
-            // coverage.  Skip standard only if L2 holds the Fortran
-            // lock RIGHT NOW (rare — L2 Fortran takes ~100-200ms).
-            if (!m_l2Decoding)
+            // TEMPORARY: Standard FT2 decoder disabled while L2 is enabled.
+            // L2 provides full async coverage; standard decoder causes ~1s
+            // waterfall blackout at each period boundary.
+            if (!m_l2Enabled)
                 dec_data.params.nsubmodes |= 16; // bit 4
             break;
 #endif
@@ -7233,6 +7232,106 @@ QByteArray UI_Constructor::wisdomFileName() const {
 #ifdef JS8_ENABLE_FT2
 void UI_Constructor::l2DecodeDone() {
     m_l2Decoding = false;
+    // Immediately start next decode — no waiting for timer.
+    l2TryDecode("chain");
+}
+
+void UI_Constructor::l2TryDecode(char const *source) {
+    if (!m_l2Enabled || m_l2Decoding || m_transmitting)
+        return;
+
+    int pos = m_l2RingPos.load(std::memory_order_acquire);
+    if (pos < FT2_NMAX)
+        return;  // ring buffer not yet full
+
+    // Acquire Fortran lock via CAS
+    bool expected = false;
+    if (!JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true))
+        return;  // standard FT2 has the lock — will retry on next trigger
+
+    // Linearize the ring buffer into a contiguous array
+    int validSamples = std::min(pos, FT2_L2_RINGSIZE);
+    auto linear = std::make_shared<std::array<std::int16_t, FT2_L2_RINGSIZE>>();
+    int ringStart = ((pos - validSamples) % FT2_L2_RINGSIZE + FT2_L2_RINGSIZE) % FT2_L2_RINGSIZE;
+    for (int i = 0; i < validSamples; ++i)
+        (*linear)[i] = m_l2RingBuf[(ringStart + i) % FT2_L2_RINGSIZE];
+
+    auto buf = linear;
+
+    qWarning() << "[FT2-L2]" << source << ": validSamples=" << validSamples
+               << "ringPos=" << pos << "nknown=" << m_l2NKnown;
+
+    // Use last decoded frequency for candidate prioritization (not UI cursor)
+    int nfqso = m_l2SignalFreq > 0 ? m_l2SignalFreq : dec_data.params.nfqso;
+    int nfa = dec_data.params.nfa;
+    int nfb = dec_data.params.nfb;
+    int utc = dec_data.params.nutc;
+
+    // Snapshot known bits for the async thread
+    std::int8_t knownSnap[77 * 20];
+    std::memcpy(knownSnap, m_l2KnownBits, sizeof(knownSnap));
+    int nknownSnap = m_l2NKnown;
+
+    m_l2Decoding = true;
+    m_l2DecodeWatcher.setFuture(QtConcurrent::run(
+        [buf, nfqso, nfa, nfb, utc, knownSnap, nknownSnap, this]() {
+        auto t0 = QDateTime::currentMSecsSinceEpoch();
+        std::int8_t newBits[77 * 20] = {};
+        int nNewDecoded = 0;
+        float decodedFreq = 0.0f;
+        JS8::DecodeFT2::decodeL2(buf->data(), nfqso, nfa, nfb, utc,
+            [this](JS8::Event::Variant const &ev) {
+                QMetaObject::invokeMethod(this, [this, ev]() {
+                    processDecodeEvent(ev);
+                }, Qt::QueuedConnection);
+            },
+            knownSnap, nknownSnap,
+            newBits, &nNewDecoded,
+            0, &decodedFreq);
+        auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
+        qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
+                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap;
+
+        // Expire known frames older than one full buffer (90K samples)
+        int curPos = m_l2RingPos.load(std::memory_order_relaxed);
+        int i = 0;
+        while (i < m_l2NKnown) {
+            int age = curPos - m_l2KnownPos[i];
+            if (age < 0) age += FT2_L2_RINGSIZE * 2;
+            if (age > FT2_L2_RINGSIZE) {
+                // This known frame is old enough to have left the buffer
+                qWarning() << "[FT2-L2] expiring known frame" << i
+                            << "age=" << age;
+                int remaining = m_l2NKnown - i - 1;
+                if (remaining > 0) {
+                    std::memmove(m_l2KnownBits + i * 77,
+                                 m_l2KnownBits + (i + 1) * 77,
+                                 remaining * 77);
+                    std::memmove(m_l2KnownPos + i,
+                                 m_l2KnownPos + i + 1,
+                                 remaining * sizeof(int));
+                }
+                m_l2NKnown--;
+            } else {
+                i++;
+            }
+        }
+
+        // Add newly decoded frames to known list
+        if (nNewDecoded > 0) {
+            for (int d = 0; d < nNewDecoded && m_l2NKnown < 20; d++) {
+                std::memcpy(m_l2KnownBits + m_l2NKnown * 77,
+                            newBits + d * 77, 77);
+                m_l2KnownPos[m_l2NKnown] = curPos;
+                m_l2NKnown++;
+            }
+            // Track signal frequency for candidate prioritization
+            if (decodedFreq > 0.0f)
+                m_l2SignalFreq = static_cast<int>(decodedFreq + 0.5f);
+        }
+
+        JS8::DecodeFT2::fortranLock.store(false);
+    }));
 }
 #endif
 

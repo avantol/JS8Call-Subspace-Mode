@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 Subspace Edition (v2.6.0.42-contring) by WM8Q"}
+    return QString{"%1 Subspace Edition (v2.6.0.45) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

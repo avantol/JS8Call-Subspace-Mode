@@ -1,6 +1,7 @@
 subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
      ndepth, ncontest, mycall, hiscall, &
-     snr_out, dt_out, freq_out, msgbits_out, ndecoded)
+     snr_out, dt_out, freq_out, msgbits_out, ndecoded, &
+     known_bits, nknown, nfqso_only)
 
 ! Level 2: Sync-Triggered FT2 Decoder (JS8Call-Subspace variant)
 ! ==============================================================
@@ -33,6 +34,13 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
   real, intent(out) :: dt_out(MAXDEC)
   real, intent(out) :: freq_out(MAXDEC)
   integer*1, intent(out) :: msgbits_out(77, MAXDEC)
+
+! Known (already-decoded) frames to skip — avoids re-decoding stale sync
+  integer*1, intent(in) :: known_bits(77, MAXDEC)
+  integer, intent(in) :: nknown
+
+! nfqso_only=1: skip getcandidates2, use single candidate at nfqso
+  integer, intent(in) :: nfqso_only
 
 ! Phase 1 hit storage
   real hit_freq(MAXHITS), hit_sync(MAXHITS), hit_snr(MAXHITS)
@@ -90,12 +98,21 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 ! ============================================
   nhits = 0
 
-! Get candidate frequencies from spectrogram
-  call getcandidates2(dd, real(nfa), real(nfb), 0.50, nfqso, MAXCAND, &
-       savg, candidate, ncand, sbase)
+! Get candidate frequencies
+  if(nfqso_only.eq.1) then
+! L2 mode: skip getcandidates2 spectrogram (308 FFTs + baseline)
+! Just use nfqso as the single candidate — we know the frequency
+    ncand = 1
+    candidate(1,1) = real(nfqso)
+    candidate(2,1) = 0.0
+  else
+    ! TEMPORARY: threshold raised from 0.50 to 0.60 to reduce false candidates on noise
+    call getcandidates2(dd, real(nfa), real(nfb), 0.60, nfqso, MAXCAND, &
+         savg, candidate, ncand, sbase)
+  endif
 
-  write(*,'(A,I4,A,I5,A,I5)') '[FT2-L2] Phase1: ncand=', ncand, &
-       ' nfqso=', nfqso, ' ndepth=', ndepth0
+  write(*,'(A,I4,A,I5,A,I5,A,I2)') '[FT2-L2] Phase1: ncand=', ncand, &
+       ' nfqso=', nfqso, ' ndepth=', ndepth0, ' nfqso_only=', nfqso_only
   if(ncand.gt.0) write(*,'(A,5F8.1)') '[FT2-L2] cand freqs:', &
        (candidate(1,min(i,ncand)), i=1,min(5,ncand))
 
@@ -112,11 +129,12 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
     if(sum2.gt.0.0) cd2 = cd2/sqrt(sum2)
 
 ! Coarse sync search: full DT range, freq +/-12 Hz step 3
+! DT step 8 (was 4): halves Phase 1 cost, sync2d pattern is 128 samples wide
     ibest_c = -1
     idfbest_c = 0
     smax_c = -99.
     do idf = -12, 12, 3
-      do istart = -688, NDMAX-NN*NSS+320, 4
+      do istart = -688, NDMAX-NN*NSS+320, 8
         call sync2d(cd2, istart, ctwk2(:,idf), 1, sync)
         if(sync.gt.smax_c) then
           smax_c = sync
@@ -161,13 +179,14 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
     sum2 = sum(cd2*conjg(cd2))/(real(NMAX)/real(NDOWN))
     if(sum2.gt.0.0) cd2 = cd2/sqrt(sum2)
 
-! Fine sync: +/-5 samples, +/-4 Hz around coarse position
+! Fine sync: +/-8 samples, +/-4 Hz around coarse position
 ! DT is KNOWN from Phase 1 — just refine it
+! Wider than original ±5 to compensate for Phase 1 coarser DT step (8 vs 4)
     ibest = ibest0
     idfbest = idf0
     smax = -99.
     do idf = max(-16, idf0-4), min(16, idf0+4)
-      do istart = ibest0-5, ibest0+5
+      do istart = ibest0-8, ibest0+8
         call sync2d(cd2, istart, ctwk2(:,idf), 1, sync)
         if(sync.gt.smax) then
           smax = sync
@@ -277,13 +296,13 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
       llre(i) = (llra(i) + llrb(i) + llrc(i))/3.0
     enddo
 
-! 5 metric passes (no AP in triggered mode for speed)
+! 5 metric passes — try best-of and average first (highest success rate)
     do ipass = 1, 5
-      if(ipass.eq.1) llr = llra
-      if(ipass.eq.2) llr = llrb
-      if(ipass.eq.3) llr = llrc
-      if(ipass.eq.4) llr = llrd
-      if(ipass.eq.5) llr = llre
+      if(ipass.eq.1) llr = llrd    ! best-of-3 (most likely to succeed)
+      if(ipass.eq.2) llr = llre    ! average-of-3
+      if(ipass.eq.3) llr = llra    ! 1-symbol coherence
+      if(ipass.eq.4) llr = llrb    ! 2-symbol coherence
+      if(ipass.eq.5) llr = llrc    ! 4-symbol coherence
       apmask = 0
 
       message77 = 0
@@ -298,7 +317,7 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
       message77 = message91(1:77)
 
       if(sum(message77).eq.0) cycle
-      if(nharderror.lt.0 .and. ipass.eq.5) then
+      if(nharderror.lt.0 .and. ipass.ge.5) then
         write(*,'(A,I3,A,F7.1,A,I3)') &
              '[FT2-L2] Phase2 LDPC FAIL: hit#', ihit, &
              ' f=', f1, ' nharderror=', nharderror
@@ -306,10 +325,13 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
       if(nharderror.ge.0) then
         message77 = mod(message77 + rvec, 2)
 
-! Check duplicate within this call (compare raw bits)
+! Check duplicate within this call AND against known frames
         idupe = 0
         do i = 1, ndecoded
           if(all(prev_bits(:,i).eq.message77)) idupe = 1
+        enddo
+        do i = 1, min(nknown, MAXDEC)
+          if(all(known_bits(:,i).eq.message77)) idupe = 1
         enddo
         if(idupe.eq.1) exit
 

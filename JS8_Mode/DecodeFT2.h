@@ -57,7 +57,13 @@ class DecodeFT2 {
      */
     static std::size_t decodeL2(const std::int16_t *samples,
                                 int nfqso, int nfa, int nfb, int utc,
-                                Event::Emitter emitEvent);
+                                Event::Emitter emitEvent,
+                                const std::int8_t *known_bits = nullptr,
+                                int nknown = 0,
+                                std::int8_t *decoded_bits_out = nullptr,
+                                int *ndecoded_out = nullptr,
+                                int nfqso_only = 0,
+                                float *decoded_freq_out = nullptr);
 
     /** Clear multi-period averaging state (call on band/mode change). */
     void clearAveraging();

@@ -909,6 +909,15 @@ class UI_Constructor : public QMainWindow {
     bool m_l2Decoding = false;                  // decode in progress
     bool m_l2Enabled = false;                   // L2 decode active
     void l2DecodeDone();                        // called when async decode finishes
+    void l2TryDecode(char const *source);       // attempt to start an L2 decode
+
+    // L2 known-frame suppression: pass last decoded frame's raw bits to
+    // Fortran so it skips the stale sync instead of re-decoding it
+    std::int8_t m_l2KnownBits[77 * 20] = {};   // known frames' raw bits
+    int m_l2KnownPos[20] = {};                  // ringPos when each frame was added
+    int m_l2NKnown = 0;                         // number of known frames
+    int m_l2SignalFreq = 0;                     // last decoded signal freq (Hz), 0=unknown
+    int m_l2EmptyCycles = 0;                    // consecutive empty decode cycles
 
     // L2 deduplication (5s window, best SNR wins)
     struct L2DedupeEntry { int snr; qint64 msec; };

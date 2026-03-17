@@ -651,75 +651,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // The encode/decode pipeline is verified by the Linux build's test suite.
     // QTimer::singleShot(2000, []() { JS8::DecodeFT2::selfTest(); });
 
-    // L2 async decode: timer fires every 750ms, runs triggered decoder on ring buffer
+    // L2 async decode: event-driven — each decode triggers the next.
+    // Timer is watchdog only (2s), kicks off decode if nothing is running.
     connect(&m_l2DecodeWatcher, &QFutureWatcher<void>::finished,
             this, &UI_Constructor::l2DecodeDone);
     connect(&m_l2DecodeTimer, &QTimer::timeout, this, [this]() {
-        static qint64 lastTickMs = 0;
-        qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-        qint64 deltaMs = lastTickMs ? (nowMs - lastTickMs) : 0;
-        lastTickMs = nowMs;
-
-        if (!m_l2Enabled || m_l2Decoding || m_transmitting) {
-            if (m_l2Enabled && !m_transmitting) {
-                if (m_l2Decoding)
-                    qWarning() << "[FT2-L2] timer: skip (decoding) dt=" << deltaMs << "ms";
-            }
-            return;
-        }
-        int pos = m_l2RingPos.load(std::memory_order_acquire);
-        if (pos < FT2_NMAX) {
-            qWarning() << "[FT2-L2] timer: skip (filling) pos=" << pos << "dt=" << deltaMs << "ms";
-            return;  // need at least one period of audio
-        }
-
-        // Acquire Fortran lock via CAS — standard FT2 decoder on the
-        // decoder thread uses the same Fortran save variables.
-        bool expected = false;
-        if (!JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true)) {
-            qWarning() << "[FT2-L2] timer: skip (lock busy) dt=" << deltaMs << "ms";
-            return;  // standard FT2 has the lock — try next tick
-        }
-
-        // Linearize the ring buffer into a contiguous array
-        int validSamples = std::min(pos, FT2_L2_RINGSIZE);
-        auto linear = std::make_shared<std::array<std::int16_t, FT2_L2_RINGSIZE>>();
-        int ringStart = ((pos - validSamples) % FT2_L2_RINGSIZE + FT2_L2_RINGSIZE) % FT2_L2_RINGSIZE;
-        for (int i = 0; i < validSamples; ++i)
-            (*linear)[i] = m_l2RingBuf[(ringStart + i) % FT2_L2_RINGSIZE];
-
-        // Pass full 90K buffer to Fortran — no windowing needed.
-        // NMAX=90000 lets the decoder search the entire ring buffer.
-        auto buf = linear;
-
-        qWarning() << "[FT2-L2] timer: validSamples=" << validSamples
-                   << "ringPos=" << pos << "dt=" << deltaMs << "ms";
-
-        int nfqso = dec_data.params.nfqso;
-        int nfa = dec_data.params.nfa;
-        int nfb = dec_data.params.nfb;
-        int utc = dec_data.params.nutc;
-
-        m_l2Decoding = true;
-        m_l2DecodeWatcher.setFuture(QtConcurrent::run([buf, nfqso, nfa, nfb, utc, this]() {
-            auto t0 = QDateTime::currentMSecsSinceEpoch();
-            JS8::DecodeFT2::decodeL2(buf->data(), nfqso, nfa, nfb, utc,
-                [this](JS8::Event::Variant const &ev) {
-                    QMetaObject::invokeMethod(this, [this, ev]() {
-                        processDecodeEvent(ev);
-                    }, Qt::QueuedConnection);
-                });
-            auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-            qWarning() << "[FT2-L2] decode took" << elapsed << "ms";
-            // Release Fortran lock after decode completes.
-            // m_l2Decoding stays true until l2DecodeDone() fires on
-            // the main thread — prevents re-entry but does NOT block
-            // standard FT2 from acquiring the lock.
-            JS8::DecodeFT2::fortranLock.store(false);
-        }));
+        l2TryDecode("watchdog");
     });
     m_l2Enabled = true;
-    m_l2DecodeTimer.start(750);
+    m_l2DecodeTimer.start(2000);  // watchdog only — normal path is l2DecodeDone → l2TryDecode
 #endif
 
     // Manual drift spin box — directly sets DriftingDateTime offset

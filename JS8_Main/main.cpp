@@ -58,14 +58,13 @@ class MessageTimestamper {
     static void message_handler(QtMsgType type,
                                 QMessageLogContext const &context,
                                 QString const &msg) {
-        QString timestamped = DriftingDateTime::currentDateTimeUtc().toString(
-                        "yy-MM-ddTHH:mm:ss.zzzZ: ") + msg;
-        // Always write to stderr so 2> redirect works on Windows
-        fprintf(stderr, "%s\n", qPrintable(timestamped));
-        QtMessageHandler handler{prior_handlers_.top()};
-        if (handler) {
-            handler(type, context, timestamped);
-        }
+        // Write timestamped message directly to stderr.
+        // This replaces Qt's default handler to ensure 2> redirect
+        // works on all platforms (Windows OutputDebugString issue).
+        fprintf(stderr, "%s%s\n",
+                qPrintable(DriftingDateTime::currentDateTimeUtc().toString(
+                    "yy-MM-ddTHH:mm:ss.zzzZ: ")),
+                qPrintable(msg));
     }
     static QStack<QtMessageHandler> prior_handlers_;
 };

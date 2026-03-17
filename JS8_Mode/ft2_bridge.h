@@ -105,7 +105,9 @@ void ft2_gen_wave_c(
 void ft2_triggered_decode_c(
     const std::int16_t *iwave, int nfqso, int nfa, int nfb, int ndepth,
     int *snr_out, float *dt_out, float *freq_out,
-    std::int8_t *msgbits_out, int *ndecoded);
+    std::int8_t *msgbits_out, int *ndecoded,
+    const std::int8_t *known_bits, int nknown,
+    int nfqso_only);
 
 /** Clear multi-period averaging state (call on band/mode change). */
 void ft2_clravg_c(void);
