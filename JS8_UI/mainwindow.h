@@ -288,7 +288,7 @@ class UI_Constructor : public QMainWindow {
                                        bool isData, bool *pDisableTypeahead);
     void resetMessageTransmitQueue();
     QPair<QString, int> popMessageFrame();
-    void tryNotify(const QString &key);
+    void tryNotify(const QString &key, int submode = -1);
     void processDecodeEvent(JS8::Event::Variant const &);
 
     void updateCQButtonDisplay();

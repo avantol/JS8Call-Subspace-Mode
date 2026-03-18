@@ -2354,9 +2354,9 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
 
         // notification of old and new callsigns
         if (m_logBook.hasWorkedBefore(d.call, "")) {
-            tryNotify("call_old");
+            tryNotify("call_old", d.submode);
         } else {
-            tryNotify("call_new");
+            tryNotify("call_new", d.submode);
         }
     }
 
@@ -5758,7 +5758,11 @@ void UI_Constructor::postDecode(bool is_new, QString const &) {
     }
 }
 
-void UI_Constructor::tryNotify(QString const &key) {
+void UI_Constructor::tryNotify(QString const &key, int submode) {
+    if (m_config.notification_requires_subspace(key) &&
+        submode != Varicode::JS8CallFT2) {
+        return;
+    }
     if (auto const path = m_config.notification_path(key); !path.isEmpty()) {
         emit playNotification(path);
     }

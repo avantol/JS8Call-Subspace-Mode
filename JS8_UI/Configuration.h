@@ -86,6 +86,7 @@ class Configuration final : public QObject {
 
     bool notifications_enabled() const;
     QString notification_path(const QString &key) const;
+    bool notification_requires_subspace(const QString &key) const;
     Q_SIGNAL void test_notify(const QString &key);
 
     // These query methods should be used after a call to exec() to

@@ -184,9 +184,11 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     d.snr = decodedtext.snr();
                     d.isBuffered = false;
                     d.submode = decodedtext.submode();
-                    d.tdrift = m_wideGraph->shouldAutoSyncSubmode(d.submode)
-                                   ? DriftingDateTime::drift() / 1000.0
-                                   : decodedtext.dt();
+                    d.tdrift = (d.submode == Varicode::JS8CallFT2)
+                                   ? 0.0
+                                   : m_wideGraph->shouldAutoSyncSubmode(d.submode)
+                                         ? DriftingDateTime::drift() / 1000.0
+                                         : decodedtext.dt();
 
                     // if we have any "first" frame, and a buffer is already
                     // established, clear it...
@@ -242,9 +244,11 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     cd.utcTimestamp = DriftingDateTime::currentDateTimeUtc();
                     cd.bits = decodedtext.bits();
                     cd.submode = decodedtext.submode();
-                    cd.tdrift = m_wideGraph->shouldAutoSyncSubmode(d.submode)
-                                    ? DriftingDateTime::drift() / 1000.0
-                                    : decodedtext.dt();
+                    cd.tdrift = (cd.submode == Varicode::JS8CallFT2)
+                                    ? 0.0
+                                    : m_wideGraph->shouldAutoSyncSubmode(d.submode)
+                                          ? DriftingDateTime::drift() / 1000.0
+                                          : decodedtext.dt();
 
                     // Only respond to HEARTBEATS...remember that CQ messages
                     // are "Alt" pings
@@ -279,7 +283,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             // logCallActivity(cd, true);
 
                             // notification for cq
-                            tryNotify("cq");
+                            tryNotify("cq", cd.submode);
 
                         } else {
                             // convert HEARTBEAT to a directed command and
@@ -301,7 +305,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             m_rxCommandQueue.append(cmd);
 
                             // notification for hb
-                            tryNotify("hb");
+                            tryNotify("hb", cd.submode);
                         }
 
                     } else {
@@ -334,9 +338,11 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     cmd.extra =
                         parts.length() > 2 ? parts.mid(3).join(" ") : "";
                     cmd.submode = decodedtext.submode();
-                    cmd.tdrift = m_wideGraph->shouldAutoSyncSubmode(cmd.submode)
-                                     ? DriftingDateTime::drift() / 1000.0
-                                     : decodedtext.dt();
+                    cmd.tdrift = (cmd.submode == Varicode::JS8CallFT2)
+                                     ? 0.0
+                                     : m_wideGraph->shouldAutoSyncSubmode(cmd.submode)
+                                           ? DriftingDateTime::drift() / 1000.0
+                                           : decodedtext.dt();
 
                     // if the command is a buffered command and its not the last
                     // frame OR we have from or to in a separate message

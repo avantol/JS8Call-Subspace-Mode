@@ -535,6 +535,7 @@ class Configuration::impl final : public QDialog {
 
     bool enable_notifications_;
     QMap<QString, bool> notifications_enabled_;
+    QMap<QString, bool> notifications_subspace_;
     QMap<QString, QString> notifications_paths_;
 
     QStringListModel macros_;
@@ -759,6 +760,9 @@ QString Configuration::notification_path(const QString &key) const {
     }
 
     return m_->notifications_paths_.value(key, "");
+}
+bool Configuration::notification_requires_subspace(const QString &key) const {
+    return m_->notifications_subspace_.value(key, false);
 }
 bool Configuration::restart_audio_input() const {
     return m_->restart_sound_input_device_;
@@ -1865,13 +1869,22 @@ void Configuration::impl::initialize_models() {
     header->setStretchLastSection(false);
     header->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     header->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    header->setSectionResizeMode(2, QHeaderView::Stretch);
-    header->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    header->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    header->setSectionResizeMode(3, QHeaderView::Stretch);
+    header->setSectionResizeMode(4, QHeaderView::ResizeToContents);
     foreach (auto pair, notifyRows) {
         QString key = pair.first;
         QString value = pair.second;
         bool enabled = notifications_enabled_.value(key, false);
+        bool subspace = notifications_subspace_.value(key, false);
         QString path = notifications_paths_.value(key, "");
+
+        QCheckBox *subspaceCheckbox;
+        auto subspaceWidget = centeredCheckBox(this, &subspaceCheckbox);
+        if (subspaceCheckbox) {
+            subspaceCheckbox->setObjectName("subspaceCheckbox");
+            subspaceCheckbox->setChecked(subspace);
+        }
 
         QCheckBox *enabledCheckbox;
         auto enabledWidget = centeredCheckBox(this, &enabledCheckbox);
@@ -1945,7 +1958,8 @@ void Configuration::impl::initialize_models() {
         int col = 0;
         table->insertRow(i);
 
-        //
+        table->setCellWidget(i, col++, subspaceWidget);
+
         auto eventLabelItem = new QTableWidgetItem(value);
         eventLabelItem->setData(Qt::UserRole, QVariant(key));
         table->setItem(i, col++, eventLabelItem);
@@ -2298,6 +2312,7 @@ void Configuration::impl::read_settings() {
     enable_notifications_ =
         settings_->value("EnableNotifications", false).toBool();
     notifications_enabled_.clear();
+    notifications_subspace_.clear();
     notifications_paths_.clear();
     settings_->beginGroup("Notifications");
     {
@@ -2306,6 +2321,8 @@ void Configuration::impl::read_settings() {
             {
                 notifications_enabled_[group] =
                     settings_->value("enabled", QVariant(false)).toBool();
+                notifications_subspace_[group] =
+                    settings_->value("subspace", QVariant(false)).toBool();
                 notifications_paths_[group] =
                     settings_->value("path", QVariant("")).toString();
             }
@@ -2522,6 +2539,9 @@ void Configuration::impl::write_settings() {
                 settings_->setValue(
                     "enabled",
                     QVariant(notifications_enabled_.value(key, false)));
+                settings_->setValue(
+                    "subspace",
+                    QVariant(notifications_subspace_.value(key, false)));
                 settings_->setValue(
                     "path", QVariant(notifications_paths_.value(key, "")));
             }
@@ -3234,21 +3254,28 @@ void Configuration::impl::accept() {
     enable_notifications_ = ui_->notifications_check_box->isChecked();
 
     for (int i = 0; i < ui_->notifications_table_widget->rowCount(); i++) {
-        // event
-        auto eventItem = ui_->notifications_table_widget->item(i, 0);
+        // event (column 1 — shifted by subspace column)
+        auto eventItem = ui_->notifications_table_widget->item(i, 1);
         auto key = eventItem->data(Qt::UserRole).toString();
         if (key.isEmpty()) {
             continue;
         }
 
-        auto enabledWidget = ui_->notifications_table_widget->cellWidget(i, 1);
+        auto subspaceWidget = ui_->notifications_table_widget->cellWidget(i, 0);
+        QCheckBox *subspaceCheckbox =
+            subspaceWidget->findChild<QCheckBox *>("subspaceCheckbox");
+        if (subspaceCheckbox) {
+            notifications_subspace_[key] = subspaceCheckbox->isChecked();
+        }
+
+        auto enabledWidget = ui_->notifications_table_widget->cellWidget(i, 2);
         QCheckBox *enabledCheckbox =
             enabledWidget->findChild<QCheckBox *>("enabledCheckbox");
         if (enabledCheckbox) {
             notifications_enabled_[key] = enabledCheckbox->isChecked();
         }
 
-        auto pathWidget = ui_->notifications_table_widget->cellWidget(i, 2);
+        auto pathWidget = ui_->notifications_table_widget->cellWidget(i, 3);
         QLabel *pathLabel = qobject_cast<QLabel *>(pathWidget);
         if (pathLabel) {
             notifications_paths_[key] = pathLabel->text();

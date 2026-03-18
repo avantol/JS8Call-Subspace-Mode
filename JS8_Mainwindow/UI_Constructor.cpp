@@ -222,7 +222,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(this, &UI_Constructor::initializeNotificationAudioOutputStream,
             m_notification, &NotificationAudio::setDevice);
     connect(&m_config, &Configuration::test_notify, this,
-            &UI_Constructor::tryNotify);
+            [this](QString const &key) { tryNotify(key); });
     connect(this, &UI_Constructor::playNotification, m_notification,
             &NotificationAudio::play);
     connect(&m_notificationAudioThread, &QThread::finished, m_notification,

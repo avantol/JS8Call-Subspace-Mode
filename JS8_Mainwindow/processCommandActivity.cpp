@@ -277,7 +277,7 @@ void UI_Constructor::processCommandActivity() {
                 }
 
                 // notification for directed message
-                tryNotify("directed");
+                tryNotify("directed", d.submode);
             }
         }
 
@@ -587,7 +587,7 @@ void UI_Constructor::processCommandActivity() {
                 addCommandToMyInbox(cd);
 
                 m_aprsRelayDedupCache.insert(dedupeKey, now);
-                tryNotify("inbox");
+                tryNotify("inbox", d.submode);
                 continue;
             }
 
@@ -783,7 +783,7 @@ void UI_Constructor::processCommandActivity() {
                         addCommandToMyInbox(cd);
 
                         m_aprsRelayDedupCache.insert(dedupeKey, now);
-                        tryNotify("inbox");
+                        tryNotify("inbox", d.submode);
                     }
                 }
                 continue;
@@ -800,7 +800,7 @@ void UI_Constructor::processCommandActivity() {
             addCommandToMyInbox(d);
 
             // notification
-            tryNotify("inbox");
+            tryNotify("inbox", d.submode);
 
             // we haven't replaced the from with the relay path, so we have to
             // use it for the ack if there is one
@@ -826,7 +826,7 @@ void UI_Constructor::processCommandActivity() {
             qCDebug(mainwindow_js8) << "skipping incoming ack" << d.text;
 
             // notification for ack
-            tryNotify("ack");
+            tryNotify("ack", d.submode);
 
             // make sure this is explicit
             continue;
