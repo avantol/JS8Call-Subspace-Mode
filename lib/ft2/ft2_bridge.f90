@@ -182,7 +182,7 @@ contains
   ! Level 2 sync-triggered decoder, callable from C
   ! Returns raw message77 bits for each decode (up to 20)
   subroutine ft2_triggered_decode_c(iwave, nfqso, nfa, nfb, ndepth, &
-       snr_out, dt_out, freq_out, msgbits_out, ndecoded, &
+       snr_out, dt_out, freq_out, sync_out, msgbits_out, ndecoded, &
        known_bits, nknown, nfqso_only) &
        bind(C, name='ft2_triggered_decode_c')
     integer(c_int16_t), intent(in) :: iwave(*)
@@ -193,6 +193,7 @@ contains
     integer(c_int), intent(out) :: snr_out(20)
     real(c_float), intent(out) :: dt_out(20)
     real(c_float), intent(out) :: freq_out(20)
+    real(c_float), intent(out) :: sync_out(20)
     integer(c_int8_t), intent(out) :: msgbits_out(77, 20)
     integer(c_int), intent(out) :: ndecoded
     integer(c_int8_t), intent(in) :: known_bits(77, 20)
@@ -209,7 +210,7 @@ contains
 
     call ft2_triggered_decode(iwave, nQSOProgress, nfqso, nfa, nfb, &
          ndepth, ncontest, mycall, hiscall, &
-         snr_out, dt_out, freq_out, msgbits_out, ndecoded, &
+         snr_out, dt_out, freq_out, sync_out, msgbits_out, ndecoded, &
          known_bits, nknown, nfqso_only)
 
   end subroutine ft2_triggered_decode_c

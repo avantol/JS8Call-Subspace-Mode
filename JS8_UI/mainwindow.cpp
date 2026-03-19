@@ -2759,6 +2759,11 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         }
         m_restart = false;
         //----------------------------------------------------------------------
+    } else if (m_nSubMode == Varicode::JS8CallFT2 && m_iptt == 1) {
+        // DIAG BUILD 51: log when tone generation is skipped (revert in Build 52)
+        qWarning() << "[FT2-TX] TONE-GEN SKIPPED: m_iptt=" << m_iptt
+                   << "m_iptt0=" << m_iptt0 << "m_restart=" << m_restart
+                   << "m_transmitting=" << m_transmitting;
     }
 
     if (m_iptt == 1 && m_iptt0 == 0) {
@@ -2790,6 +2795,11 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         // between cycles, especially for short-period modes.
         m_generateAudioWhenPttConfirmedByTX = false;
         transmit();
+    } else if (m_nSubMode == Varicode::JS8CallFT2 && m_iptt == 1) {
+        // DIAG BUILD 51: log when transmit() is skipped (revert in Build 52)
+        qWarning() << "[FT2-TX] TRANSMIT SKIPPED: m_iptt=" << m_iptt
+                   << "m_iptt0=" << m_iptt0
+                   << "m_transmitting=" << m_transmitting;
     }
 
     // TODO: stop
@@ -2835,7 +2845,8 @@ void UI_Constructor::guiUpdate() {
         refuseToSendIn30mWSPRBand();
         prepareSending(now.toMSecsSinceEpoch());
     } else if (m_nSubMode == Varicode::JS8CallFT2) {
-        // Log once per second when TX loop is inactive
+        // DIAG BUILD 51: suppressed — fires every second (revert in Build 52)
+#if 0
         static qint64 lastLogSec = 0;
         if (seconds_since_epoch != lastLogSec) {
             lastLogSec = seconds_since_epoch;
@@ -2844,6 +2855,7 @@ void UI_Constructor::guiUpdate() {
                         << "auto=" << m_auto
                         << "tune=" << m_tune;
         }
+#endif
     }
 
     // Once per second:
@@ -2996,7 +3008,9 @@ void UI_Constructor::transmit() {
 
 void UI_Constructor::stopTx() {
     if (m_nSubMode == Varicode::JS8CallFT2)
-        qWarning() << "[FT2-TX] stopTx() called";
+        qWarning() << "[FT2-TX] stopTx(): m_iptt=" << m_iptt
+                    << "m_iptt0=" << m_iptt0
+                    << "m_transmitting=" << m_transmitting;
     Q_EMIT endTransmitMessage();
 
     auto dt = DecodedText(m_currentMessage.trimmed(), m_currentMessageBits,
@@ -7262,8 +7276,9 @@ void UI_Constructor::l2TryDecode(char const *source) {
 
     auto buf = linear;
 
-    qWarning() << "[FT2-L2]" << source << ": validSamples=" << validSamples
-               << "ringPos=" << pos << "nknown=" << m_l2NKnown;
+    // DIAG BUILD 51: suppressed — fires every few seconds (revert in Build 52)
+    // qWarning() << "[FT2-L2]" << source << ": validSamples=" << validSamples
+    //            << "ringPos=" << pos << "nknown=" << m_l2NKnown;
 
     // Use last decoded frequency for candidate prioritization (not UI cursor)
     int nfqso = m_l2SignalFreq > 0 ? m_l2SignalFreq : dec_data.params.nfqso;
@@ -7312,10 +7327,11 @@ void UI_Constructor::l2TryDecode(char const *source) {
                             &syncBest, &syncFreq, &syncIbest, &syncIdf);
             auto syncMs = QDateTime::currentMSecsSinceEpoch() - tSync;
 
-            qWarning() << "[FT2-L2] sync scan:" << syncMs << "ms"
-                       << "nfreqs=" << nScanFreqs
-                       << "sync=" << syncBest << "freq=" << syncFreq
-                       << "ibest=" << syncIbest << "idf=" << syncIdf;
+            // DIAG BUILD 51: suppressed — fires every ~1s (revert in Build 52)
+            // qWarning() << "[FT2-L2] sync scan:" << syncMs << "ms"
+            //            << "nfreqs=" << nScanFreqs
+            //            << "sync=" << syncBest << "freq=" << syncFreq
+            //            << "ibest=" << syncIbest << "idf=" << syncIdf;
 
             if (syncBest >= 3.00f) {
                 // Strong sync well above noise floor (~2.6) — skip getcandidates2
@@ -7337,10 +7353,11 @@ void UI_Constructor::l2TryDecode(char const *source) {
             newBits, &nNewDecoded,
             useNfqsoOnly, &decodedFreq);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
-                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
-                    << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
-                    << "sync=" << syncBest;
+        // DIAG BUILD 51: suppressed — fires every ~1s (revert in Build 52)
+        // qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
+        //             << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
+        //             << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
+        //             << "sync=" << syncBest;
 
         // Expire known frames older than one full buffer (90K samples)
         int curPos = m_l2RingPos.load(std::memory_order_relaxed);

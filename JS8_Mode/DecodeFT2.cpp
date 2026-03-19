@@ -58,6 +58,7 @@ void DecodeFT2::decodeCallback(float /*sync*/, int snr, float dt, float freq,
                << "frame=" << frame
                << "raw72-76=" << int(msgbits77[72]) << int(msgbits77[73])
                << int(msgbits77[74]) << int(msgbits77[75]) << int(msgbits77[76])
+               << "CRC14-OK"
                << (garbage ? "FILTERED" : "");
 
     if (garbage)
@@ -151,6 +152,7 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
     int snr_out[20] = {};
     float dt_out[20] = {};
     float freq_out[20] = {};
+    float sync_out[20] = {};
     std::int8_t msgbits_out[77 * 20] = {};
     int ndecoded = 0;
 
@@ -166,7 +168,7 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
     // nfqso_only: 0=getcandidates2 full scan (default for now)
     // Future: sync monitor can set nfqso_only=1 with known frequency
     ft2_triggered_decode_c(samples, nfqso, nfa, nfb, 3,
-                           snr_out, dt_out, freq_out,
+                           snr_out, dt_out, freq_out, sync_out,
                            msgbits_out, &ndecoded,
                            known_bits, nknown, nfqso_only);
 
@@ -179,6 +181,7 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         int snr = snr_out[d];
         float dt = dt_out[d];
         float freq = freq_out[d];
+        float sync = sync_out[d];
 
         // Extract JS8 72-bit frame (same logic as decodeCallback)
         quint64 value = 0;
@@ -203,10 +206,12 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         bool garbage = reservedBad || noFlags;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
-                   << "freq=" << freq << "bits=" << frameBits
+                   << "freq=" << freq << "sync=" << sync
+                   << "bits=" << frameBits
                    << "frame=" << frame
                    << "raw72-76=" << int(bits[72]) << int(bits[73])
                    << int(bits[74]) << int(bits[75]) << int(bits[76])
+                   << "CRC14-OK"
                    << (reservedBad ? "RESERVED-BAD" : "")
                    << (noFlags ? "NO-FLAGS" : "")
                    << (garbage ? "FILTERED" : "");

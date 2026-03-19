@@ -137,6 +137,12 @@ int main(int argc, char *argv[]) {
 
         if (parser.isSet(output_option)) {
             new TraceFile(parser.value(output_option));
+        } else {
+            // DIAG BUILD 51: auto-log to temp dir (revert in Build 52)
+            auto tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+            auto logPath = tempDir + "/js8call-subspace-diag.log";
+            new TraceFile(logPath);
+            qWarning() << "[DIAG] Logging to" << logPath;
         }
 
         QStandardPaths::setTestModeEnabled(parser.isSet(test_option));

@@ -99,12 +99,13 @@ void ft2_gen_wave_c(
  * @param snr_out   Output: SNR for each decode (array of 20)
  * @param dt_out    Output: DT for each decode (array of 20)
  * @param freq_out  Output: frequency for each decode (array of 20)
+ * @param sync_out  Output: Costas sync score for each decode (array of 20)
  * @param msgbits_out Output: raw 77 message bits for each decode (77x20)
  * @param ndecoded  Output: number of successful decodes
  */
 void ft2_triggered_decode_c(
     const std::int16_t *iwave, int nfqso, int nfa, int nfb, int ndepth,
-    int *snr_out, float *dt_out, float *freq_out,
+    int *snr_out, float *dt_out, float *freq_out, float *sync_out,
     std::int8_t *msgbits_out, int *ndecoded,
     const std::int8_t *known_bits, int nknown,
     int nfqso_only);

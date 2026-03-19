@@ -1,6 +1,6 @@
 subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
      ndepth, ncontest, mycall, hiscall, &
-     snr_out, dt_out, freq_out, msgbits_out, ndecoded, &
+     snr_out, dt_out, freq_out, sync_out, msgbits_out, ndecoded, &
      known_bits, nknown, nfqso_only)
 
 ! Level 2: Sync-Triggered FT2 Decoder (JS8Call-Subspace variant)
@@ -33,6 +33,7 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
   integer, intent(out) :: snr_out(MAXDEC)
   real, intent(out) :: dt_out(MAXDEC)
   real, intent(out) :: freq_out(MAXDEC)
+  real, intent(out) :: sync_out(MAXDEC)
   integer*1, intent(out) :: msgbits_out(77, MAXDEC)
 
 ! Known (already-decoded) frames to skip — avoids re-decoding stale sync
@@ -76,6 +77,7 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
   snr_out = 0
   dt_out = 0.0
   freq_out = 0.0
+  sync_out = 0.0
   msgbits_out = 0
 
 ! Initialize frequency tweak factors (once)
@@ -361,6 +363,7 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 ! DT from known sync position
         dt_out(ndecoded) = xibest/1333.33 - 0.5
         freq_out(ndecoded) = f1
+        sync_out(ndecoded) = smax
         exit
       endif
     enddo  ! ipass
