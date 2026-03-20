@@ -3052,9 +3052,14 @@ void UI_Constructor::startTx() {
 }
 
 void UI_Constructor::transmit() {
-    // Note: Modulator::start() handles non-idle state by calling stop() first,
-    // so we don't guard on isIdle() here. The endTransmitMessage → stop() signal
-    // is cross-thread queued and may not have been processed yet.
+    // Guard: don't restart audio if Modulator is already playing.
+    // Double-transmit causes stop/restart which triggers USB codec sleep/wake
+    // on devices like the IC-7300, producing a ~2 second audio gap.
+    if (!m_modulator->isIdle()) {
+        qWarning() << "[FT2-TX] transmit(): SKIPPED — Modulator already active"
+                    << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode;
+        return;
+    }
     qWarning() << "[FT2-TX] transmit(): emitting sendMessage"
                 << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode
                 << "modIdle=" << m_modulator->isIdle();
