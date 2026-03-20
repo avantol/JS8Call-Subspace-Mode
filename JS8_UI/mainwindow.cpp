@@ -2759,8 +2759,8 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         }
         m_restart = false;
         //----------------------------------------------------------------------
-    } else if (m_nSubMode == Varicode::JS8CallFT2 && m_iptt == 1) {
-        // DIAG BUILD 51: log when tone generation is skipped (revert in Build 52)
+    } else if (m_nSubMode == Varicode::JS8CallFT2 && m_iptt == 1 && !m_transmitting) {
+        // DIAG BUILD 51: log only when tone-gen skipped AND not already transmitting (revert in Build 52)
         qWarning() << "[FT2-TX] TONE-GEN SKIPPED: m_iptt=" << m_iptt
                    << "m_iptt0=" << m_iptt0 << "m_restart=" << m_restart
                    << "m_transmitting=" << m_transmitting;
@@ -2795,8 +2795,8 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         // between cycles, especially for short-period modes.
         m_generateAudioWhenPttConfirmedByTX = false;
         transmit();
-    } else if (m_nSubMode == Varicode::JS8CallFT2 && m_iptt == 1) {
-        // DIAG BUILD 51: log when transmit() is skipped (revert in Build 52)
+    } else if (m_nSubMode == Varicode::JS8CallFT2 && m_iptt == 1 && !m_transmitting) {
+        // DIAG BUILD 51: log only when transmit skipped AND not already transmitting (revert in Build 52)
         qWarning() << "[FT2-TX] TRANSMIT SKIPPED: m_iptt=" << m_iptt
                    << "m_iptt0=" << m_iptt0
                    << "m_transmitting=" << m_transmitting;
