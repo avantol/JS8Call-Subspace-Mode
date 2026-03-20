@@ -242,7 +242,7 @@ void UI_Constructor::processCommandActivity() {
 
             // log it to the display!
             displayTextForFreq(ad.text, ad.offset, ad.utcTimestamp, false, true,
-                               false);
+                               false, ad.submode);
 
             /*
             // and send it to the network in case we want to interact with it
@@ -267,12 +267,11 @@ void UI_Constructor::processCommandActivity() {
             */
 
             if (!isAllCall) {
-                // If we've received a message to be displayed,
-                // we should no longer call CQ
-                if (m_cq_loop->isActive()) {
+                // Only cancel CQ loop if message is directed to us
+                if (m_cq_loop->isActive() &&
+                    d.to == m_config.my_callsign().trimmed()) {
                     qCDebug(mainwindow_js8)
-                        << "Canceling CQ loop to prioritize incoming messages, "
-                           "case II";
+                        << "Canceling CQ loop: directed message to us";
                     m_cq_loop->onLoopCancel();
                 }
 

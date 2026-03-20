@@ -1245,6 +1245,18 @@ void UI_Constructor::setSubmode(int submode) {
 #ifdef JS8_ENABLE_FT2
     ui->actionModeFT2->setChecked(submode == Varicode::JS8CallFT2);
 #endif
+
+    // Update status bar mode label
+    mode_label.setText(submode == Varicode::JS8CallFT2
+        ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
+        : JS8::Submode::name(submode));
+
+    // Update mode switch buttons
+    if (m_modeBtnNormal) m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal);
+    if (m_modeBtnFast)   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);
+    if (m_modeBtnTurbo)  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);
+    if (m_modeBtnFT2)    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);
+
     setupJS8();
     Q_EMIT submodeChanged(Varicode::intToSubmode(submode));
 }
@@ -1367,6 +1379,51 @@ bool UI_Constructor::eventFilter(QObject *object, QEvent *event) {
         // ensure our child widgets get d=removed from our event filter
         remove_child_from_event_filter(
             static_cast<QChildEvent *>(event)->child());
+        break;
+
+    case QEvent::MouseButtonDblClick:
+        if (object == ui->textEditRX->viewport()) {
+            // Double-click in RX text area: select caller for reply
+            auto cursor = ui->textEditRX->cursorForPosition(
+                static_cast<QMouseEvent *>(event)->pos());
+            auto blockText = cursor.block().text();
+            // Skip own TX lines
+            if (cursor.block().userState() != State::TX) {
+                // Format: "MODE - HH:MM:SS - (freq) - CALLSIGN: text"
+                // Parse callsign after the third " - "
+                int dashCount = 0;
+                int pos = 0;
+                for (int i = 0; i < blockText.length() - 2; ++i) {
+                    if (blockText.mid(i, 3) == " - ") {
+                        if (++dashCount == 3) { pos = i + 3; break; }
+                    }
+                }
+                if (pos > 0) {
+                    int colonPos = blockText.indexOf(':', pos);
+                    if (colonPos > pos) {
+                        auto callsign = blockText.mid(pos, colonPos - pos).trimmed();
+                        // Extract just the first callsign (before any : or space in directed msgs)
+                        auto parts = callsign.split(' ');
+                        if (!parts.isEmpty()) callsign = parts.first();
+                        // Skip own callsign
+                        if (!callsign.isEmpty() && callsign != m_config.my_callsign()) {
+                            // Look up submode from call activity
+                            if (m_callActivity.contains(callsign)) {
+                                int callSubmode = m_callActivity[callsign].submode;
+                                if (callSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
+                                    m_prevStandardSubmode = m_nSubMode;
+                                    setSubmode(Varicode::JS8CallFT2);
+                                } else if (callSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
+                                    setSubmode(m_prevStandardSubmode);
+                                }
+                            }
+                            addMessageText(callsign, true);
+                            return true;  // consume the event
+                        }
+                    }
+                }
+            }
+        }
         break;
 
     case QEvent::ToolTip:
@@ -3258,7 +3315,7 @@ void UI_Constructor::createGroupCallsignTableRows(QTableWidget *table,
 
 void UI_Constructor::displayTextForFreq(QString text, int freq, QDateTime date,
                                         bool isTx, bool isNewLine,
-                                        bool isLast) {
+                                        bool isLast, int submode) {
     int lowFreq = freq / 10 * 10;
     int highFreq = lowFreq + 10;
 
@@ -3283,7 +3340,7 @@ void UI_Constructor::displayTextForFreq(QString text, int freq, QDateTime date,
         block = -1;
     }
 
-    block = writeMessageTextToUI(date, text, freq, isTx, block);
+    block = writeMessageTextToUI(date, text, freq, isTx, submode, block);
 
     // never cache tx or last lines
     if (/*isTx || */ isLast) {
@@ -3317,7 +3374,7 @@ void UI_Constructor::writeNoticeTextToUI(QDateTime date, QString text) {
 }
 
 int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
-                                         bool isTx, int block) {
+                                         bool isTx, int submode, int block) {
     auto c = ui->textEditRX->textCursor();
 
     // find an existing block (that does not contain an EOT marker)
@@ -3364,7 +3421,22 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
         text = text.replace("\n", "<br/>");
         text = text.replace("  ", "&nbsp;&nbsp;");
         c.insertBlock();
-        c.insertHtml(QString("%1 - (%2) - %3")
+        // Mode indicator: ⚡ for FT2/Subspace, first letter for standard modes
+        QString modeInd;
+        if (submode == Varicode::JS8CallFT2)
+            modeInd = QString::fromUtf8("\xe2\x9a\xa1");
+        else if (submode == Varicode::JS8CallNormal)
+            modeInd = "N";
+        else if (submode == Varicode::JS8CallFast)
+            modeInd = "F";
+        else if (submode == Varicode::JS8CallTurbo)
+            modeInd = "T";
+        else if (submode == Varicode::JS8CallSlow)
+            modeInd = "S";
+        else
+            modeInd = "?";
+        c.insertHtml(QString("%1 - %2 - (%3) - %4")
+                         .arg(modeInd)
                          .arg(date.time().toString())
                          .arg(freq)
                          .arg(text));
@@ -3700,6 +3772,24 @@ void UI_Constructor::tableSelectionChanged(QItemSelection const &,
     if (selectedCall != m_prevSelectedCallsign) {
         callsignSelectedChanged(m_prevSelectedCallsign, selectedCall);
     }
+
+    // Switch mode based on selected row's submode
+    if (!ui->tableWidgetRXAll->selectedItems().isEmpty()) {
+        int selectedOffset = ui->tableWidgetRXAll->selectedItems().first()->data(Qt::UserRole).toInt();
+        auto activity = m_bandActivity.value(selectedOffset);
+        if (!activity.isEmpty()) {
+            int rowSubmode = activity.last().submode;
+            if (rowSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
+                m_prevStandardSubmode = m_nSubMode;
+                setSubmode(Varicode::JS8CallFT2);
+            } else if (rowSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
+                setSubmode(m_prevStandardSubmode);
+            }
+        }
+    }
+
+    // Auto-focus outgoing message box
+    ui->extFreeTextMsgEdit->setFocus();
 }
 
 QList<QPair<QString, int>>
@@ -3814,11 +3904,11 @@ bool UI_Constructor::prepareNextMessageFrame() {
     if (m_txFrameQueue.isEmpty()) {
         displayTextForFreq(
             QString("%1 %2 ").arg(dt.message()).arg(m_config.eot()), freq(),
-            DriftingDateTime::currentDateTimeUtc(), true, false, true);
+            DriftingDateTime::currentDateTimeUtc(), true, false, true, m_nSubMode);
     } else {
         displayTextForFreq(dt.message(), freq(),
                            DriftingDateTime::currentDateTimeUtc(), true,
-                           m_txFrameCountSent == 1, false);
+                           m_txFrameCountSent == 1, false, m_nSubMode);
     }
 
     m_nextFreeTextMsg = frame;
@@ -4006,6 +4096,7 @@ void UI_Constructor::toggleTx(bool start) {
     qCDebug(mainwindow_js8)
         << "toggleTx(" << start << ") setting the TX button.";
     ui->startTxButton->setChecked(start);
+    ui->extFreeTextMsgEdit->setFocus();
 }
 
 void UI_Constructor::on_logQSOButton_clicked() // Log QSO button
@@ -5202,6 +5293,7 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
     QDateTime firstActivity = now;
     QString activityText;
     bool isLast = false;
+    int activitySubmode = -1;
     foreach (auto d, m_bandActivity[offset]) {
         if (activityAging && d.utcTimestamp.secsTo(now) / 60 >= activityAging) {
             continue;
@@ -5210,6 +5302,7 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
             firstActivity = d.utcTimestamp;
         }
         activityText.append(d.text);
+        activitySubmode = d.submode;
 
         isLast = (d.bits & Varicode::JS8CallLast) == Varicode::JS8CallLast;
         if (isLast) {
@@ -5220,7 +5313,7 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
     }
     if (!activityText.isEmpty()) {
         displayTextForFreq(activityText, offset, firstActivity, false, true,
-                           isLast);
+                           isLast, activitySubmode);
     }
 }
 
@@ -6282,6 +6375,10 @@ void UI_Constructor::processActivity(bool force) {
 void UI_Constructor::setDrift(int n) { DriftingDateTime::setDrift(n); }
 
 void UI_Constructor::processIdleActivity() {
+    // Don't insert MFI markers for our own outgoing frames during TX
+    if (m_transmitting)
+        return;
+
     auto const now = DriftingDateTime::currentDateTimeUtc();
 
     // if we detect an idle offset, insert an ellipsis into the activity queue

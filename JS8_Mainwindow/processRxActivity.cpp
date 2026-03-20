@@ -131,13 +131,13 @@ void UI_Constructor::processRxActivity() {
 
         // log it to the display!
         displayTextForFreq(d.text, d.offset, d.utcTimestamp, false, isFirst,
-                           isLast);
+                           isLast, d.submode);
 
-        // If we've received a message to be displayed, we should no longer call
-        // CQ.
-        if (m_cq_loop->isActive()) {
+        // Only cancel CQ loop if message is directed to us specifically
+        if (m_cq_loop->isActive() && d.isDirected &&
+            d.text.contains(m_config.my_callsign())) {
             qCDebug(mainwindow_js8)
-                << "Canceling calling CQ loop to priorize incoming messages.";
+                << "Canceling CQ loop: message directed to us.";
             m_cq_loop->onLoopCancel();
         }
 

@@ -259,10 +259,10 @@ class UI_Constructor : public QMainWindow {
                                       const QString &selectedCall,
                                       bool &showIconColumn);
     void displayTextForFreq(QString text, int freq, QDateTime date, bool isTx,
-                            bool isNewLine, bool isLast);
+                            bool isNewLine, bool isLast, int submode = -1);
     void writeNoticeTextToUI(QDateTime date, QString text);
     int writeMessageTextToUI(QDateTime date, QString text, int freq, bool isTx,
-                             int block = -1);
+                             int submode = -1, int block = -1);
     bool isMessageQueuedForTransmit();
     bool isInDecodeDelayThreshold(int seconds);
     void prependMessageText(QString text);
@@ -566,6 +566,10 @@ class UI_Constructor : public QMainWindow {
     [[maybe_unused]] bool m_multiple; // Used only in Windows builds
     MultiSettings *m_multi_settings;
     QPushButton *m_configurations_button;
+    QPushButton *m_modeBtnNormal{nullptr};
+    QPushButton *m_modeBtnFast{nullptr};
+    QPushButton *m_modeBtnTurbo{nullptr};
+    QPushButton *m_modeBtnFT2{nullptr};
     QSettings *m_settings;
     bool m_settings_read;
     QScopedPointer<Ui::UI_Constructor> ui;
@@ -627,6 +631,7 @@ class UI_Constructor : public QMainWindow {
     qint32 m_inGain;
     qint32 m_idleMinutes;
     qint32 m_nSubMode;
+    qint32 m_prevStandardSubmode;  // saved standard mode for click-to-switch
     FrequencyList_v3::const_iterator m_frequency_list_fcal_iter;
     qint32 m_i3bit;
 

@@ -46,7 +46,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
       m_freqTxNominal{0}, m_XIT{0}, m_sec0{-1},
       m_RxLog{1}, // Write Date and Time to RxLog
       m_nutc0{999999}, m_TRperiod{60}, m_inGain{0}, m_idleMinutes{0},
-      m_nSubMode{Default::SUBMODE},
+      m_nSubMode{Default::SUBMODE}, m_prevStandardSubmode{Default::SUBMODE},
       m_frequency_list_fcal_iter{m_config.frequencies()->begin()}, m_i3bit{0},
       m_btxok{false}, m_auto{false}, m_restart{false}, m_currentMessageType{-1},
       m_lastMessageType{-1}, m_tuneup{false}, m_isTimeToSend{false}, m_ihsym{0},
@@ -1419,6 +1419,44 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     prepareSpotting();
 
     displayActivity(true);
+
+    // Mode switch buttons on the action button panel (left of Send)
+    {
+        auto *layout = qobject_cast<QGridLayout *>(ui->startTxButton->parentWidget()->layout());
+        if (layout) {
+            // Find the Send button's column
+            int sendRow = -1, sendCol = -1, rSpan, cSpan;
+            layout->getItemPosition(layout->indexOf(ui->startTxButton), &sendRow, &sendCol, &rSpan, &cSpan);
+
+            auto makeBtn = [this, layout, sendRow](const QString &label, const QString &tip, int submode, int col) {
+                auto *btn = new QPushButton(label, ui->startTxButton->parentWidget());
+                btn->setCheckable(true);
+                btn->setFixedWidth(30);
+                btn->setMinimumHeight(30);
+                btn->setToolTip(tip);
+                btn->setStyleSheet("QPushButton:checked { background-color: #6699ff; font-weight: bold; }");
+                layout->addWidget(btn, sendRow, col);
+                connect(btn, &QPushButton::clicked, this, [this, submode]() {
+                    setSubmode(submode);
+                });
+                return btn;
+            };
+
+            // Insert at columns before Send (shift spacer if needed)
+            int base = sendCol - 4;
+            if (base < 0) base = sendCol;
+            m_modeBtnNormal = makeBtn("N", "Normal mode", Varicode::JS8CallNormal, base);
+            m_modeBtnFast   = makeBtn("F", "Fast mode",   Varicode::JS8CallFast,   base + 1);
+            m_modeBtnTurbo  = makeBtn("T", "Turbo mode",  Varicode::JS8CallTurbo,  base + 2);
+            m_modeBtnFT2    = makeBtn(QString::fromUtf8("\xe2\x9a\xa1"), "Subspace mode", Varicode::JS8CallFT2, base + 3);
+
+            // Set initial checked state
+            m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);
+            m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);
+            m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);
+            m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);
+        }
+    }
 
     m_txTextDirtyDebounce.setSingleShot(true);
     connect(&m_txTextDirtyDebounce, &QTimer::timeout, this,

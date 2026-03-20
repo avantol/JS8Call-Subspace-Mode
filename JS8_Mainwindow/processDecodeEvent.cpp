@@ -162,9 +162,16 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                         QList<int> offsets =
                             generateOffsets(offset - range, offset + range);
 
+                        bool incomingIsFT2 = decodedtext.submode() == Varicode::JS8CallFT2;
                         foreach (int prevOffset, offsets) {
                             if (!m_bandActivity.contains(prevOffset)) {
                                 continue;
+                            }
+                            // Don't merge FT2/Subspace with standard modes
+                            if (!m_bandActivity[prevOffset].isEmpty()) {
+                                bool existingIsFT2 = m_bandActivity[prevOffset].last().submode == Varicode::JS8CallFT2;
+                                if (existingIsFT2 != incomingIsFT2)
+                                    continue;
                             }
                             m_bandActivity[offset] = m_bandActivity[prevOffset];
                             m_bandActivity.remove(prevOffset);
