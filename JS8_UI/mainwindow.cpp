@@ -3045,6 +3045,15 @@ void UI_Constructor::guiUpdate() {
 
     // Set the time to hit the start of the next UI_POLL_INTERVAL_MS slot.
     // This automatically hits close to the start of each second
+    // Update mode button enable state (disable during TX)
+    {
+        bool canChangeMode = !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+        if (m_modeBtnNormal) m_modeBtnNormal->setEnabled(canChangeMode);
+        if (m_modeBtnFast)   m_modeBtnFast->setEnabled(canChangeMode);
+        if (m_modeBtnTurbo)  m_modeBtnTurbo->setEnabled(canChangeMode);
+        if (m_modeBtnFT2)    m_modeBtnFT2->setEnabled(canChangeMode);
+    }
+
     // and hence close to the start of each transmit period.
     qint64 now_at_end_ms = DriftingDateTime::currentMSecsSinceEpoch();
     qint64 time_into_poll_slot = now_at_end_ms % UI_POLL_INTERVAL_MS;
