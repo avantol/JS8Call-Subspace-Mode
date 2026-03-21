@@ -1422,33 +1422,45 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 
     // Mode switch buttons on the action button panel (left of Send)
     {
-        auto *layout = qobject_cast<QGridLayout *>(ui->startTxButton->parentWidget()->layout());
+        auto *parentWidget = ui->startTxButton->parentWidget();
+        auto *layout = qobject_cast<QGridLayout *>(parentWidget->layout());
         if (layout) {
-            // Find the Send button's column
-            int sendRow = -1, sendCol = -1, rSpan, cSpan;
-            layout->getItemPosition(layout->indexOf(ui->startTxButton), &sendRow, &sendCol, &rSpan, &cSpan);
-
-            auto makeBtn = [this, layout, sendRow](const QString &label, const QString &tip, int submode, int col) {
-                auto *btn = new QPushButton(label, ui->startTxButton->parentWidget());
+            auto makeBtn = [this, parentWidget](const QString &label, const QString &tip, int submode) {
+                auto *btn = new QPushButton(label, parentWidget);
                 btn->setCheckable(true);
                 btn->setFixedWidth(30);
                 btn->setMinimumHeight(30);
                 btn->setToolTip(tip);
                 btn->setStyleSheet("QPushButton:checked { background-color: #6699ff; font-weight: bold; }");
-                layout->addWidget(btn, sendRow, col);
                 connect(btn, &QPushButton::clicked, this, [this, submode]() {
                     setSubmode(submode);
                 });
                 return btn;
             };
 
-            // Insert at columns before Send (shift spacer if needed)
-            int base = sendCol - 4;
-            if (base < 0) base = sendCol;
-            m_modeBtnNormal = makeBtn("N", "Normal mode", Varicode::JS8CallNormal, base);
-            m_modeBtnFast   = makeBtn("F", "Fast mode",   Varicode::JS8CallFast,   base + 1);
-            m_modeBtnTurbo  = makeBtn("T", "Turbo mode",  Varicode::JS8CallTurbo,  base + 2);
-            m_modeBtnFT2    = makeBtn(QString::fromUtf8("\xe2\x9a\xa1"), "Subspace mode", Varicode::JS8CallFT2, base + 3);
+            m_modeBtnNormal = makeBtn("N", "Normal mode", Varicode::JS8CallNormal);
+            m_modeBtnFast   = makeBtn("F", "Fast mode",   Varicode::JS8CallFast);
+            m_modeBtnTurbo  = makeBtn("T", "Turbo mode",  Varicode::JS8CallTurbo);
+            m_modeBtnFT2    = makeBtn(QString::fromUtf8("\xe2\x9a\xa1"), "Subspace mode", Varicode::JS8CallFT2);
+
+            // Build a container widget with horizontal layout for the mode buttons
+            auto *modeContainer = new QWidget(parentWidget);
+            auto *modeLayout = new QHBoxLayout(modeContainer);
+            modeLayout->setContentsMargins(0, 0, 0, 0);
+            modeLayout->setSpacing(2);
+            modeLayout->addWidget(m_modeBtnNormal);
+            modeLayout->addWidget(m_modeBtnFast);
+            modeLayout->addWidget(m_modeBtnTurbo);
+            modeLayout->addWidget(m_modeBtnFT2);
+
+            // Find Send button position, insert mode buttons just before it
+            int sendRow = -1, sendCol = -1, rSpan, cSpan;
+            layout->getItemPosition(layout->indexOf(ui->startTxButton), &sendRow, &sendCol, &rSpan, &cSpan);
+            layout->removeWidget(ui->startTxButton);
+            layout->removeWidget(ui->stopTxButton);
+            layout->addWidget(modeContainer, sendRow, sendCol);
+            layout->addWidget(ui->startTxButton, sendRow, sendCol + 1);
+            layout->addWidget(ui->stopTxButton, sendRow, sendCol + 2);
 
             // Set initial checked state
             m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);

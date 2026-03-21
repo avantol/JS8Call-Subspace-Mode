@@ -961,6 +961,8 @@ class UI_Constructor : public QMainWindow {
 
     /** Whether to resume HBs at the next opportunity. */
     bool m_hbPaused;
+    /** Whether the current mode supports heartbeats. */
+    bool m_hbModeAvailable{true};
 
     QDateTime m_dateTimeQSOOn;
     QDateTime m_dateTimeLastTX;

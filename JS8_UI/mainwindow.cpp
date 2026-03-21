@@ -4402,7 +4402,8 @@ void UI_Constructor::prepareMonitorControls() {
 
 void UI_Constructor::prepareHeartbeatMode(bool enabled) {
     // Not all submodes supports HBs.
-    ui->hbMacroButton->setVisible(enabled);
+    m_hbModeAvailable = enabled;
+    ui->hbMacroButton->setEnabled(enabled);
     if (!enabled) {
         m_hb_loop->onLoopCancel();
         ui->hbMacroButton->setChecked(false);
@@ -5985,7 +5986,7 @@ void UI_Constructor::updateButtonDisplay() {
 
     bool previous_hbButtonisLongterm = m_hbButtonIsLongterm;
     m_hbButtonIsLongterm = false;
-    ui->hbMacroButton->setDisabled(isTransmitting);
+    ui->hbMacroButton->setDisabled(isTransmitting || !m_hbModeAvailable);
     m_hbButtonIsLongterm = previous_hbButtonisLongterm;
 
     bool previous_cqButtonisLongterm = m_cqButtonIsLongterm;
