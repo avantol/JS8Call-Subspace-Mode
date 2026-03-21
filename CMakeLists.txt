@@ -361,6 +361,7 @@ if(ENABLE_FT2)
     lib/ft2/ft2_downsample.f90
     lib/ft2/getcandidates2.f90
     lib/ft2/get_ft2_bitmetrics.f90
+    lib/ft2/ft2_channel_est.f90
     lib/ft2/sync2d.f90
     lib/ft2/subtractft2.f90
     lib/ft2/gfsk_pulse.f90
