@@ -1236,6 +1236,7 @@ Radio::Frequency UI_Constructor::dialFrequency() {
 }
 
 void UI_Constructor::setSubmode(int submode) {
+    m_submodeChanging = true;
     m_nSubMode = submode;
     ui->actionModeJS8Normal->setChecked(submode == Varicode::JS8CallNormal);
     ui->actionModeJS8Fast->setChecked(submode == Varicode::JS8CallFast);
@@ -1259,6 +1260,8 @@ void UI_Constructor::setSubmode(int submode) {
 
     setupJS8();
     Q_EMIT submodeChanged(Varicode::intToSubmode(submode));
+    // Clear guard after queued signals have been processed
+    QTimer::singleShot(0, this, [this]() { m_submodeChanging = false; });
 }
 
 void UI_Constructor::updateCurrentBand() {
@@ -1383,31 +1386,48 @@ bool UI_Constructor::eventFilter(QObject *object, QEvent *event) {
 
     case QEvent::MouseButtonDblClick:
         if (object == ui->textEditRX->viewport()) {
-            // Double-click in RX text area: select caller for reply
+            // Double-click in RX text area: select the sender (before ':')
             auto cursor = ui->textEditRX->cursorForPosition(
                 static_cast<QMouseEvent *>(event)->pos());
             auto blockText = cursor.block().text();
+            qWarning() << "[UI] Double-click on RX text: blockText=" << blockText
+                       << "userState=" << cursor.block().userState();
             // Skip own TX lines
             if (cursor.block().userState() != State::TX) {
-                // Format: "MODE - HH:MM:SS - (freq) - CALLSIGN: text"
-                // Parse callsign after the third " - "
-                int dashCount = 0;
-                int pos = 0;
-                for (int i = 0; i < blockText.length() - 2; ++i) {
-                    if (blockText.mid(i, 3) == " - ") {
-                        if (++dashCount == 3) { pos = i + 3; break; }
+                // Scan backwards for the last valid "CALLSIGN:" pattern
+                // Multi-message lines have multiple CALL: segments — user sees the last
+                QString callsign;
+                int searchFrom = blockText.length();
+                while (searchFrom > 0) {
+                    int colonPos = blockText.lastIndexOf(':', searchFrom - 1);
+                    if (colonPos <= 0) break;
+                    // Walk backwards from colon to find the word before it
+                    int wordEnd = colonPos;
+                    int wordStart = colonPos - 1;
+                    while (wordStart >= 0 && blockText[wordStart] != ' ' &&
+                           blockText[wordStart] != QChar(0x2662) /* ♢ */)
+                        --wordStart;
+                    ++wordStart;
+                    auto candidate = blockText.mid(wordStart, wordEnd - wordStart).trimmed();
+                    // Callsign validation: 3-10 chars, has letter+digit, no punctuation
+                    bool hasLetter = false, hasDigit = false, clean = true;
+                    for (auto ch : candidate) {
+                        if (ch.isLetter()) hasLetter = true;
+                        else if (ch.isDigit()) hasDigit = true;
+                        else if (ch != '/' && ch != '-') clean = false;
                     }
+                    if (hasLetter && hasDigit && clean &&
+                        candidate.length() >= 3 && candidate.length() <= 10 &&
+                        candidate != m_config.my_callsign()) {
+                        callsign = candidate;
+                        break;
+                    }
+                    searchFrom = colonPos;
                 }
-                if (pos > 0) {
-                    int colonPos = blockText.indexOf(':', pos);
-                    if (colonPos > pos) {
-                        auto callsign = blockText.mid(pos, colonPos - pos).trimmed();
-                        // Extract just the first callsign (before any : or space in directed msgs)
-                        auto parts = callsign.split(' ');
-                        if (!parts.isEmpty()) callsign = parts.first();
-                        // Skip own callsign
-                        if (!callsign.isEmpty() && callsign != m_config.my_callsign()) {
-                            // Look up submode from call activity
+                qWarning() << "[UI] Double-click parsed callsign=" << callsign
+                           << "from:" << blockText.right(60);
+                if (!callsign.isEmpty()) {
+                            // Mode switch based on caller's mode
                             if (m_callActivity.contains(callsign)) {
                                 int callSubmode = m_callActivity[callsign].submode;
                                 if (callSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
@@ -1417,10 +1437,23 @@ bool UI_Constructor::eventFilter(QObject *object, QEvent *event) {
                                     setSubmode(m_prevStandardSubmode);
                                 }
                             }
-                            addMessageText(callsign, true);
-                            return true;  // consume the event
-                        }
-                    }
+                            // Deselect band activity, select callsign in callsign table
+                            ui->tableWidgetRXAll->selectionModel()->clearSelection();
+                            for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
+                                auto item = ui->tableWidgetCalls->item(r, 0);
+                                if (item && item->data(Qt::UserRole).toString() == callsign) {
+                                    ui->tableWidgetCalls->selectRow(r);
+                                    break;
+                                }
+                            }
+                            // Update "directed to" state even if callsign isn't in the table
+                            callsignSelectedChanged(m_prevSelectedCallsign, callsign);
+                            ui->extFreeTextMsgEdit->setFocus();
+                    return true;  // consume the event
+                } else {
+                    // No valid callsign found — deselect current call
+                    callsignSelectedChanged(m_prevSelectedCallsign, QString());
+                    ui->tableWidgetCalls->selectionModel()->clearSelection();
                 }
             }
         }
@@ -3778,20 +3811,10 @@ void UI_Constructor::tableSelectionChanged(QItemSelection const &,
         callsignSelectedChanged(m_prevSelectedCallsign, selectedCall);
     }
 
-    // Switch mode based on selected row's submode
-    if (!ui->tableWidgetRXAll->selectedItems().isEmpty()) {
-        int selectedOffset = ui->tableWidgetRXAll->selectedItems().first()->data(Qt::UserRole).toInt();
-        auto activity = m_bandActivity.value(selectedOffset);
-        if (!activity.isEmpty()) {
-            int rowSubmode = activity.last().submode;
-            if (rowSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
-                m_prevStandardSubmode = m_nSubMode;
-                setSubmode(Varicode::JS8CallFT2);
-            } else if (rowSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
-                setSubmode(m_prevStandardSubmode);
-            }
-        }
-    }
+    // Mode switching is handled explicitly via:
+    // - Mode buttons (N/F/T/⚡)
+    // - Menu (Mode → Normal/Fast/Turbo/Subspace)
+    // - Double-click in RX text area (auto-switches based on caller's mode)
 
     // Auto-focus outgoing message box
     ui->extFreeTextMsgEdit->setFocus();
@@ -4454,6 +4477,15 @@ void UI_Constructor::setupJS8() {
     Q_ASSERT(JS8_NTMAX == 60);
     m_wideGraph->setPeriod(JS8::Submode::periodMS(m_nSubMode));
     m_detector->setTRPeriod(JS8_NTMAX); // TODO - not thread safe
+
+    // Update mode switch buttons and status bar label
+    mode_label.setText(m_nSubMode == Varicode::JS8CallFT2
+        ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
+        : JS8::Submode::name(m_nSubMode));
+    if (m_modeBtnNormal) m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);
+    if (m_modeBtnFast)   m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);
+    if (m_modeBtnTurbo)  m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);
+    if (m_modeBtnFT2)    m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);
 
     updateTextDisplay();
     refreshTextDisplay();
@@ -5290,8 +5322,6 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
     // switch to the offset of this row
     setFreqOffsetForRestore(offset, false);
 
-    // TODO: prompt mode switch?
-
     // print the history in the main window...
     int activityAging = m_config.activity_aging();
     QDateTime now = DriftingDateTime::currentDateTimeUtc();
@@ -5316,6 +5346,16 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
                                .arg(m_config.eot());
         }
     }
+
+    // Switch mode to match the selected row's submode
+    if (activitySubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
+        m_prevStandardSubmode = m_nSubMode;
+        setSubmode(Varicode::JS8CallFT2);
+    } else if (activitySubmode != -1 && activitySubmode != Varicode::JS8CallFT2 &&
+               m_nSubMode == Varicode::JS8CallFT2) {
+        setSubmode(m_prevStandardSubmode);
+    }
+
     if (!activityText.isEmpty()) {
         displayTextForFreq(activityText, offset, firstActivity, false, true,
                            isLast, activitySubmode);

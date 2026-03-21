@@ -632,6 +632,7 @@ class UI_Constructor : public QMainWindow {
     qint32 m_idleMinutes;
     qint32 m_nSubMode;
     qint32 m_prevStandardSubmode;  // saved standard mode for click-to-switch
+    bool m_submodeChanging{false}; // guard against recursive mode switch
     FrequencyList_v3::const_iterator m_frequency_list_fcal_iter;
     qint32 m_i3bit;
 
