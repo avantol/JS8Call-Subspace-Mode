@@ -4482,10 +4482,11 @@ void UI_Constructor::setupJS8() {
     mode_label.setText(m_nSubMode == Varicode::JS8CallFT2
         ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
         : JS8::Submode::name(m_nSubMode));
-    if (m_modeBtnNormal) m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);
-    if (m_modeBtnFast)   m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);
-    if (m_modeBtnTurbo)  m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);
-    if (m_modeBtnFT2)    m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);
+    bool canChangeMode = !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+    if (m_modeBtnNormal) { m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); m_modeBtnNormal->setEnabled(canChangeMode); }
+    if (m_modeBtnFast)   { m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     m_modeBtnFast->setEnabled(canChangeMode); }
+    if (m_modeBtnTurbo)  { m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->setEnabled(canChangeMode); }
+    if (m_modeBtnFT2)    { m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       m_modeBtnFT2->setEnabled(canChangeMode); }
 
     updateTextDisplay();
     refreshTextDisplay();
