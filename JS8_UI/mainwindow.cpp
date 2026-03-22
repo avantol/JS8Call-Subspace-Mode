@@ -1254,6 +1254,7 @@ void UI_Constructor::setSubmode(int submode) {
     if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); }
     if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false); }
     if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false); }
+    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(submode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false); }
     if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false); }
 
     setupJS8();
@@ -1280,6 +1281,7 @@ void UI_Constructor::switchSubmode(int submode) {
     if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); }
     if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false); }
     if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false); }
+    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(submode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false); }
     if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false); }
 
     m_wideGraph->setSubMode(m_nSubMode);
@@ -1361,6 +1363,7 @@ void UI_Constructor::updateCurrentBand() {
     }
     m_lastBand = band_name;
 
+    clearSelection();
     band_changed();
     restoreActivity(m_lastBand);
 }
@@ -1412,78 +1415,7 @@ bool UI_Constructor::eventFilter(QObject *object, QEvent *event) {
         break;
 
     case QEvent::MouseButtonDblClick:
-        if (object == ui->textEditRX->viewport()) {
-            // Double-click in RX text area: select the sender (before ':')
-            auto cursor = ui->textEditRX->cursorForPosition(
-                static_cast<QMouseEvent *>(event)->pos());
-            auto blockText = cursor.block().text();
-            qWarning() << "[UI] Double-click on RX text: blockText=" << blockText
-                       << "userState=" << cursor.block().userState();
-            // Skip own TX lines
-            if (cursor.block().userState() != State::TX) {
-                // Scan backwards for the last valid "CALLSIGN:" pattern
-                // Multi-message lines have multiple CALL: segments — user sees the last
-                QString callsign;
-                int searchFrom = blockText.length();
-                while (searchFrom > 0) {
-                    int colonPos = blockText.lastIndexOf(':', searchFrom - 1);
-                    if (colonPos <= 0) break;
-                    // Walk backwards from colon to find the word before it
-                    int wordEnd = colonPos;
-                    int wordStart = colonPos - 1;
-                    while (wordStart >= 0 && blockText[wordStart] != ' ' &&
-                           blockText[wordStart] != QChar(0x2662) /* ♢ */)
-                        --wordStart;
-                    ++wordStart;
-                    auto candidate = blockText.mid(wordStart, wordEnd - wordStart).trimmed();
-                    // Callsign validation: 3-10 chars, has letter+digit, no punctuation
-                    bool hasLetter = false, hasDigit = false, clean = true;
-                    for (auto ch : candidate) {
-                        if (ch.isLetter()) hasLetter = true;
-                        else if (ch.isDigit()) hasDigit = true;
-                        else if (ch != '/' && ch != '-') clean = false;
-                    }
-                    if (hasLetter && hasDigit && clean &&
-                        candidate.length() >= 3 && candidate.length() <= 10 &&
-                        candidate != m_config.my_callsign()) {
-                        callsign = candidate;
-                        break;
-                    }
-                    searchFrom = colonPos;
-                }
-                qWarning() << "[UI] Double-click parsed callsign=" << callsign
-                           << "from:" << blockText.right(60);
-                if (!callsign.isEmpty()) {
-                            // Mode switch based on caller's mode
-                            if (m_callActivity.contains(callsign)) {
-                                int callSubmode = m_callActivity[callsign].submode;
-                                if (callSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
-                                    m_prevStandardSubmode = m_nSubMode;
-                                    setSubmode(Varicode::JS8CallFT2);
-                                } else if (callSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
-                                    setSubmode(m_prevStandardSubmode);
-                                }
-                            }
-                            // Deselect band activity, select callsign in callsign table
-                            ui->tableWidgetRXAll->selectionModel()->clearSelection();
-                            for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
-                                auto item = ui->tableWidgetCalls->item(r, 0);
-                                if (item && item->data(Qt::UserRole).toString() == callsign) {
-                                    ui->tableWidgetCalls->selectRow(r);
-                                    break;
-                                }
-                            }
-                            // Update "directed to" state even if callsign isn't in the table
-                            callsignSelectedChanged(m_prevSelectedCallsign, callsign);
-                            ui->extFreeTextMsgEdit->setFocus();
-                    return true;  // consume the event
-                } else {
-                    // No valid callsign found — deselect current call
-                    callsignSelectedChanged(m_prevSelectedCallsign, QString());
-                    ui->tableWidgetCalls->selectionModel()->clearSelection();
-                }
-            }
-        }
+        // Handled by EventFilter in UI_Constructor.cpp
         break;
 
     case QEvent::ToolTip:
@@ -2942,6 +2874,14 @@ void UI_Constructor::updateClockUI(const QDateTime &now) {
 //------------------------------------------------------------- //guiUpdate()
 void UI_Constructor::guiUpdate() {
 
+    // Disable mode buttons during TX
+    bool canChangeMode = !m_transmitting && !m_tune;
+    if (m_modeBtnNormal) m_modeBtnNormal->setEnabled(canChangeMode);
+    if (m_modeBtnFast)   m_modeBtnFast->setEnabled(canChangeMode);
+    if (m_modeBtnTurbo)  m_modeBtnTurbo->setEnabled(canChangeMode);
+    if (m_modeBtnSlow)   m_modeBtnSlow->setEnabled(canChangeMode);
+    if (m_modeBtnFT2)    m_modeBtnFT2->setEnabled(canChangeMode);
+
     unsigned period = JS8::Submode::period(m_nSubMode);
 
     m_TRperiod = period; // Investigate: Does anyone need this?
@@ -3839,17 +3779,9 @@ void UI_Constructor::currentTextChanged() {
 
 void UI_Constructor::tableSelectionChanged(QItemSelection const &,
                                            QItemSelection const &) {
+    // Selection logic is handled by explicit click handlers.
+    // This signal handler only updates text display state.
     currentTextChanged();
-
-    auto const selectedCall = callsignSelected();
-
-    // Only act on actual callsign changes — ignore empty selections from
-    // table rebuilds (setupJS8, displayBandActivity, etc.)
-    if (!selectedCall.isEmpty() && selectedCall != m_prevSelectedCallsign) {
-        callsignSelectedChanged(m_prevSelectedCallsign, selectedCall);
-    }
-
-    // Auto-focus outgoing message box
     ui->extFreeTextMsgEdit->setFocus();
 }
 
@@ -5341,33 +5273,82 @@ void UI_Constructor::on_macrosMacroButton_pressed() {
 void UI_Constructor::on_deselectButton_pressed() { clearCallsignSelected(); }
 
 void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
+    ui->tableWidgetCalls->blockSignals(true);
     ui->tableWidgetCalls->selectionModel()->select(
         ui->tableWidgetCalls->selectionModel()->selection(),
         QItemSelectionModel::Deselect);
+    ui->tableWidgetCalls->blockSignals(false);
 
     displayCallActivity();
 
-    // Switch mode based on the row's activity submode, clear if no callsign found
     auto item = ui->tableWidgetRXAll->item(row, 0);
-    if (item) {
-        int offset = item->data(Qt::UserRole).toInt();
-        auto activity = m_bandActivity.value(offset);
-        if (!activity.isEmpty()) {
-            int rowSubmode = activity.last().submode;
-            if (rowSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
-                m_prevStandardSubmode = m_nSubMode;
-                switchSubmode(Varicode::JS8CallFT2);
-            } else if (rowSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
-                switchSubmode(m_prevStandardSubmode);
+    if (!item) return;
+
+    int offset = item->data(Qt::UserRole).toInt();
+    auto activity = m_bandActivity.value(offset);
+    int rowSubmode = activity.isEmpty() ? -1 : activity.last().submode;
+
+    // Find callsign: parse last CALL: from row text, fall back to m_callActivity
+    QString call;
+    // Band activity — get text from the message column (last column)
+    auto msgItem = ui->tableWidgetRXAll->item(row, ui->tableWidgetRXAll->columnCount() - 1);
+    QString rowText = msgItem ? msgItem->text() : QString();
+
+    // Parse last CALLSIGN: pattern from row text (spec: use displayed text first)
+    if (!rowText.isEmpty()) {
+        int lastColon = -1;
+        for (int i = rowText.length() - 1; i >= 0; --i) {
+            if (rowText[i] == ':') { lastColon = i; break; }
+        }
+        if (lastColon > 0) {
+            int ws = lastColon - 1;
+            while (ws >= 0 && (rowText[ws].isLetterOrNumber() || rowText[ws] == '/'))
+                --ws;
+            ++ws;
+            QString cand = rowText.mid(ws, lastColon - ws).trimmed();
+            if (cand.length() >= 3 && cand.length() <= 15) {
+                bool hl = false, hd = false;
+                for (auto ch : cand) {
+                    if (ch.isLetter()) hl = true;
+                    if (ch.isDigit()) hd = true;
+                }
+                if (hl && hd && !cand.startsWith(m_config.my_callsign()))
+                    call = cand;
             }
         }
-
-        // If no callsign at this offset, clear current selection
-        auto selectedCall = callsignSelected();
-        if (selectedCall.isEmpty() && !m_prevSelectedCallsign.isEmpty()) {
-            clearCallsignSelected();
+        // If no CALL: found, try first word as callsign (e.g. "XE2MAM HEARTBEAT SNR -20")
+        if (call.isEmpty()) {
+            QString first = rowText.trimmed().split(' ').first();
+            if (first.length() >= 3 && first.length() <= 10) {
+                bool hl = false, hd = false;
+                for (auto ch : first) {
+                    if (ch.isLetter()) hl = true;
+                    if (ch.isDigit()) hd = true;
+                }
+                if (hl && hd && !first.startsWith(m_config.my_callsign()))
+                    call = first;
+            }
         }
     }
+
+    // Fallback: m_callActivity by offset (standard JS8Call behavior)
+    if (call.isEmpty()) {
+        int threshold = rowSubmode >= 0 ? JS8::Submode::rxThreshold(rowSubmode) : 10;
+        for (auto const &key : m_callActivity.keys()) {
+            auto const &d = m_callActivity[key];
+            if (abs(d.offset - offset) <= threshold) {
+                call = d.call;
+                break;
+            }
+        }
+    }
+
+    if (!call.isEmpty())
+        selectCallsign(call, rowSubmode);
+    else
+        clearSelection();
+
+    ui->extFreeTextMsgEdit->setFocus();
 }
 
 void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
@@ -5405,15 +5386,6 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
         }
     }
 
-    // Switch mode to match the selected row's submode
-    if (activitySubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
-        m_prevStandardSubmode = m_nSubMode;
-        switchSubmode(Varicode::JS8CallFT2);
-    } else if (activitySubmode != -1 && activitySubmode != Varicode::JS8CallFT2 &&
-               m_nSubMode == Varicode::JS8CallFT2) {
-        switchSubmode(m_prevStandardSubmode);
-    }
-
     if (!activityText.isEmpty()) {
         displayTextForFreq(activityText, offset, firstActivity, false, true,
                            isLast, activitySubmode);
@@ -5443,12 +5415,27 @@ QString UI_Constructor::generateCallDetail(QString selectedCall) {
     return detail.join("\n");
 }
 
-void UI_Constructor::on_tableWidgetCalls_cellClicked(int /*row*/, int /*col*/) {
+void UI_Constructor::on_tableWidgetCalls_cellClicked(int row, int /*col*/) {
+    ui->tableWidgetRXAll->blockSignals(true);
     ui->tableWidgetRXAll->selectionModel()->select(
         ui->tableWidgetRXAll->selectionModel()->selection(),
         QItemSelectionModel::Deselect);
+    ui->tableWidgetRXAll->blockSignals(false);
 
     displayBandActivity();
+
+    // Read callsign and submode from the clicked row
+    auto item = ui->tableWidgetCalls->item(row, 0);
+    if (item) {
+        auto call = item->data(Qt::UserRole).toString();
+        int submode = -1;
+        if (m_callActivity.contains(call))
+            submode = m_callActivity[call].submode;
+        if (!call.isEmpty())
+            selectCallsign(call, submode);
+    }
+
+    ui->extFreeTextMsgEdit->setFocus();
 }
 
 void UI_Constructor::on_tableWidgetCalls_cellDoubleClicked(int row, int col) {
@@ -6051,6 +6038,9 @@ void UI_Constructor::updateButtonDisplay() {
     ui->queryButton->setText(
         emptyCallsign ? "Directed"
                       : QString("Directed to %1").arg(selectedCallsign));
+    // Adjust minimum width to fit current text
+    auto fmDir = ui->queryButton->fontMetrics();
+    ui->queryButton->setMinimumWidth(fmDir.horizontalAdvance(ui->queryButton->text()) + 12);
 
     // update mode button text
     updateModeButtonText();
@@ -6068,7 +6058,6 @@ void UI_Constructor::updateHBButtonDisplay() {
             ui->hbMacroButton->setText(
                 QString("%1 (%2)").arg(hbBase).arg(secs));
         } else {
-            // Dead code?
             ui->hbMacroButton->setText(QString("%1 (now)").arg(hbBase));
         }
     } else {
@@ -6078,6 +6067,9 @@ void UI_Constructor::updateHBButtonDisplay() {
             ui->hbMacroButton->setText("HB");
         }
     }
+    // Adjust minimum width to fit current text
+    auto fm = ui->hbMacroButton->fontMetrics();
+    ui->hbMacroButton->setMinimumWidth(fm.horizontalAdvance(ui->hbMacroButton->text()) + 12);
 }
 
 void UI_Constructor::updateCQButtonDisplay() {
@@ -6251,68 +6243,7 @@ void UI_Constructor::updateTxButtonDisplay() {
 }
 
 QString UI_Constructor::callsignSelected(bool) {
-    if (!ui->tableWidgetCalls->selectedItems().isEmpty()) {
-        auto selectedCalls = ui->tableWidgetCalls->selectedItems();
-        if (!selectedCalls.isEmpty()) {
-            auto call = selectedCalls.first()->data(Qt::UserRole).toString();
-            if (!call.isEmpty()) {
-                return call;
-            }
-        }
-    }
-
-    if (!ui->tableWidgetRXAll->selectedItems().isEmpty()) {
-        int selectedOffset = -1;
-        auto selectedItems = ui->tableWidgetRXAll->selectedItems();
-        selectedOffset = selectedItems.first()->data(Qt::UserRole).toInt();
-
-        int threshold = 0;
-        auto activity = m_bandActivity.value(selectedOffset);
-        if (!activity.isEmpty()) {
-            threshold = JS8::Submode::rxThreshold(activity.last().submode);
-        }
-
-        auto keys = m_callActivity.keys();
-
-        std::stable_sort(keys.begin(), keys.end(),
-                         [this](QString const &lhs, QString const &rhs) {
-                             auto const lhsTS =
-                                 m_callActivity[lhs].utcTimestamp;
-                             auto const rhsTS =
-                                 m_callActivity[rhs].utcTimestamp;
-
-                             return lhsTS == rhsTS ? lhs < rhs : rhsTS < lhsTS;
-                         });
-
-        // Return the first callsign at a frequency within the
-        // threshold limit of the selected offset, if any.
-
-        auto const offsetLo = selectedOffset - threshold;
-        auto const offsetHi = selectedOffset + threshold;
-
-        for (auto const &key : keys) {
-            if (auto const &d = m_callActivity[key];
-                offsetLo <= d.offset && d.offset <= offsetHi) {
-                return d.call;
-            }
-        }
-    }
-
-#if ALLOW_USE_INPUT_TEXT_CALLSIGN
-    if (useInputText) {
-        auto text = ui->extFreeTextMsgEdit->toPlainText().left(
-            11); // Maximum callsign is 6 + / + 4 = 11 characters
-        auto calls = Varicode::parseCallsigns(text);
-        if (!calls.isEmpty() && text.startsWith(calls.first()) &&
-            calls.first() != m_config.my_callsign()) {
-            return calls.first();
-        }
-    }
-#endif
-
-    // Fall back to callsign set via double-click in conversation window
-    // (may not be in any table)
-    return m_prevSelectedCallsign;
+    return m_selectedCallsign;
 }
 
 void UI_Constructor::callsignSelectedChanged(QString /*old*/,
@@ -6388,11 +6319,61 @@ void UI_Constructor::callsignSelectedChanged(QString /*old*/,
     statusChanged();
 }
 
-void UI_Constructor::clearCallsignSelected() {
-    // remove the date cache
-    m_callSelectedTime.remove(m_prevSelectedCallsign);
+// --- Selection spec: central entry points ---
 
-    // clear table selections first, block signals to prevent re-selection
+void UI_Constructor::selectCallsign(QString call, int submode) {
+    if (call.isEmpty())
+        return;
+
+    // Always switch mode even if same callsign (could be different row/mode)
+    if (submode >= 0)
+        autoSwitchMode(submode);
+
+    if (call == m_selectedCallsign)
+        return;
+
+    m_selectedCallsign = call;
+
+    if (!m_callSelectedTime.contains(call))
+        m_callSelectedTime[call] = DriftingDateTime::currentDateTimeUtc();
+
+    // Immediately select in callsign table if present
+    ui->tableWidgetCalls->blockSignals(true);
+    for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
+        auto item = ui->tableWidgetCalls->item(r, 0);
+        if (item && item->data(Qt::UserRole).toString() == call) {
+            ui->tableWidgetCalls->selectRow(r);
+            break;
+        }
+    }
+    ui->tableWidgetCalls->blockSignals(false);
+
+    // Clear stale callsign from outgoing box (placed by previous dbl-click on right panel)
+    auto outText = ui->extFreeTextMsgEdit->toPlainText().trimmed().toUpper();
+    if (!outText.isEmpty() && outText != call.toUpper()) {
+        // Check if the outgoing box contains only a callsign from the callsign list
+        for (auto const &key : m_callActivity.keys()) {
+            if (key.toUpper() == outText) {
+                ui->extFreeTextMsgEdit->clear();
+                break;
+            }
+        }
+    }
+
+    auto placeholderText =
+        QString("Type your outgoing directed message to %1 here.")
+            .arg(call).toUpper();
+    ui->extFreeTextMsgEdit->setPlaceholderText(placeholderText);
+
+    updateButtonDisplay();
+    updateTextDisplay();
+    statusChanged();
+}
+
+void UI_Constructor::clearSelection() {
+    m_callSelectedTime.remove(m_selectedCallsign);
+    m_selectedCallsign.clear();
+
     ui->tableWidgetRXAll->blockSignals(true);
     ui->tableWidgetCalls->blockSignals(true);
     ui->tableWidgetRXAll->clearSelection();
@@ -6400,9 +6381,37 @@ void UI_Constructor::clearCallsignSelected() {
     ui->tableWidgetRXAll->blockSignals(false);
     ui->tableWidgetCalls->blockSignals(false);
 
-    // clear the fallback callsign and update UI
-    callsignSelectedChanged(m_prevSelectedCallsign, QString());
+    // Clear stale callsign from outgoing box (no call selected now)
+    auto outText = ui->extFreeTextMsgEdit->toPlainText().trimmed().toUpper();
+    if (!outText.isEmpty()) {
+        for (auto const &key : m_callActivity.keys()) {
+            if (key.toUpper() == outText) {
+                ui->extFreeTextMsgEdit->clear();
+                break;
+            }
+        }
+    }
+
+    ui->extFreeTextMsgEdit->setPlaceholderText(
+        QString("Type your outgoing messages here.").toUpper());
+
+    updateButtonDisplay();
+    updateTextDisplay();
+    statusChanged();
 }
+
+void UI_Constructor::autoSwitchMode(int submode) {
+    if (submode == m_nSubMode)
+        return;
+    if (submode == Varicode::JS8CallFT2) {
+        m_prevStandardSubmode = m_nSubMode;
+        switchSubmode(Varicode::JS8CallFT2);
+    } else if (m_nSubMode == Varicode::JS8CallFT2) {
+        switchSubmode(m_prevStandardSubmode);
+    }
+}
+
+void UI_Constructor::clearCallsignSelected() { clearSelection(); }
 
 bool UI_Constructor::isRecentOffset(int submode, int offset) {
     if (abs(offset - freq()) <= JS8::Submode::rxThreshold(submode)) {

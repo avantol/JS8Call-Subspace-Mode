@@ -429,6 +429,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     });
 
     setWindowTitle(program_title());
+    ui->labVersion->setText("JS8Call v" + version());
+    // Link label spacing — leave at .ui defaults
     buildColumnLabelMap();
 
     // Hook up working frequencies.
@@ -777,13 +779,13 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 if (lastColonPos > searchFrom) {
                     // Extract word before the last colon
                     int wordStart = lastColonPos - 1;
-                    while (wordStart >= searchFrom && lineText[wordStart] != ' ')
+                    while (wordStart >= searchFrom && (lineText[wordStart].isLetterOrNumber() || lineText[wordStart] == '/'))
                         --wordStart;
                     ++wordStart;
                     QString candidate = lineText.mid(wordStart, lastColonPos - wordStart).trimmed();
 
-                    // Validate: 3-10 chars, has letters and digits (callsign pattern)
-                    if (candidate.length() >= 3 && candidate.length() <= 10) {
+                    // Validate: 3-15 chars, has letters and digits (callsign pattern, allows /)
+                    if (candidate.length() >= 3 && candidate.length() <= 15) {
                         bool hasLetter = false, hasDigit = false;
                         for (auto ch : candidate) {
                             if (ch.isLetter()) hasLetter = true;
@@ -791,7 +793,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                         }
                         if (hasLetter && hasDigit) {
                             // If it's our own callsign, look for the target after the colon
-                            if (candidate == m_config.my_callsign()) {
+                            if (candidate.startsWith(m_config.my_callsign())) {
                                 QString afterColon = lineText.mid(lastColonPos + 1).trimmed();
                                 QString target = afterColon.split(' ').first();
                                 if (target.length() >= 3 && target.length() <= 10) {
@@ -811,38 +813,44 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 }
 
                 if (!callsign.isEmpty()) {
-                    // Clear existing selections first to prevent stale callsign
-                    ui->tableWidgetRXAll->selectionModel()->clearSelection();
-                    ui->tableWidgetCalls->selectionModel()->clearSelection();
-
-                    // Select in callsign table if present
-                    for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
-                        auto item = ui->tableWidgetCalls->item(r, 0);
-                        if (item && item->data(Qt::UserRole).toString() == callsign) {
-                            ui->tableWidgetCalls->selectRow(r);
-                            break;
-                        }
-                    }
-
-                    // Switch mode based on the line's mode indicator
+                    // Determine mode from line prefix
                     auto trimmed = lineText.trimmed();
-                    if (trimmed.startsWith(QString::fromUtf8("\xe2\x9a\xa1"))) {
-                        if (m_nSubMode != Varicode::JS8CallFT2) {
-                            m_prevStandardSubmode = m_nSubMode;
-                            switchSubmode(Varicode::JS8CallFT2);
-                        }
-                    } else if (trimmed.startsWith("N ") || trimmed.startsWith("F ") ||
-                               trimmed.startsWith("T ") || trimmed.startsWith("S ")) {
-                        if (m_nSubMode == Varicode::JS8CallFT2) {
-                            switchSubmode(m_prevStandardSubmode);
+                    int lineSubmode = -1;
+                    if (trimmed.startsWith(QString::fromUtf8("\xe2\x9a\xa1")))
+                        lineSubmode = Varicode::JS8CallFT2;
+                    else if (trimmed.startsWith("N "))
+                        lineSubmode = Varicode::JS8CallNormal;
+                    else if (trimmed.startsWith("F "))
+                        lineSubmode = Varicode::JS8CallFast;
+                    else if (trimmed.startsWith("T "))
+                        lineSubmode = Varicode::JS8CallTurbo;
+                    else if (trimmed.startsWith("S "))
+                        lineSubmode = Varicode::JS8CallSlow;
+
+                    selectCallsign(callsign, lineSubmode);
+
+                    // Select matching row in band activity (left window) without disturbing center window
+                    ui->tableWidgetRXAll->blockSignals(true);
+                    ui->tableWidgetRXAll->clearSelection();
+                    int lineFreq = -1;
+                    int parenOpen = lineText.lastIndexOf('(');
+                    int parenClose = lineText.lastIndexOf(')');
+                    if (parenOpen >= 0 && parenClose > parenOpen)
+                        lineFreq = lineText.mid(parenOpen + 1, parenClose - parenOpen - 1).toInt();
+                    if (lineFreq > 0) {
+                        for (int r = 0; r < ui->tableWidgetRXAll->rowCount(); ++r) {
+                            auto item = ui->tableWidgetRXAll->item(r, 0);
+                            if (item && item->data(Qt::UserRole).toInt() == lineFreq) {
+                                ui->tableWidgetRXAll->selectRow(r);
+                                break;
+                            }
                         }
                     }
+                    ui->tableWidgetRXAll->blockSignals(false);
 
-                    callsignSelectedChanged(m_prevSelectedCallsign, callsign);
                     ui->extFreeTextMsgEdit->setFocus();
                 } else {
-                    // No valid callsign found — deselect
-                    clearCallsignSelected();
+                    clearSelection();
                 }
                 return true;  // consume event
             },
@@ -1487,6 +1495,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 auto *btn = new QPushButton(label, parentWidget);
                 btn->setCheckable(true);
                 btn->setFixedWidth(30);
+                btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
                 btn->setMinimumHeight(30);
                 btn->setToolTip(tip);
                 btn->setStyleSheet("QPushButton:checked { background-color: #6699ff; font-weight: bold; }");
@@ -1499,32 +1508,52 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             m_modeBtnNormal = makeBtn("N", "Normal mode", Varicode::JS8CallNormal);
             m_modeBtnFast   = makeBtn("F", "Fast mode",   Varicode::JS8CallFast);
             m_modeBtnTurbo  = makeBtn("T", "Turbo mode",  Varicode::JS8CallTurbo);
+            m_modeBtnSlow   = makeBtn("S", "Slow mode",   Varicode::JS8CallSlow);
             m_modeBtnFT2    = makeBtn(QString::fromUtf8("\xe2\x9a\xa1"), "Subspace mode", Varicode::JS8CallFT2);
-            m_modeBtnFT2->setStyleSheet("QPushButton { font-size: 18px; font-weight: bold; } QPushButton:checked { background-color: #6699ff; font-size: 18px; font-weight: bold; }");
+            m_modeBtnFT2->setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; } QPushButton:checked { background-color: #6699ff; font-size: 16px; font-weight: bold; }");
 
-            // Build a container widget with horizontal layout for the mode buttons
-            auto *modeContainer = new QWidget(parentWidget);
-            auto *modeLayout = new QHBoxLayout(modeContainer);
-            modeLayout->setContentsMargins(0, 0, 0, 0);
-            modeLayout->setSpacing(2);
-            modeLayout->addWidget(m_modeBtnNormal);
-            modeLayout->addWidget(m_modeBtnFast);
-            modeLayout->addWidget(m_modeBtnTurbo);
-            modeLayout->addWidget(m_modeBtnFT2);
+            // Build a single container for mode buttons + Send + Halt
+            auto *rightContainer = new QWidget(parentWidget);
+            auto *rightLayout = new QHBoxLayout(rightContainer);
+            rightLayout->setContentsMargins(0, 0, 0, 0);
+            rightLayout->setSpacing(2);
+            rightLayout->addWidget(m_modeBtnSlow, 0);
+            rightLayout->addWidget(m_modeBtnNormal, 0);
+            rightLayout->addWidget(m_modeBtnFast, 0);
+            rightLayout->addWidget(m_modeBtnTurbo, 0);
+            rightLayout->addWidget(m_modeBtnFT2, 0);
+            rightLayout->addSpacing(4);
 
-            // Find Send button position, insert mode buttons just before it
+            // Move Send and Halt into the same container
             int sendRow = -1, sendCol = -1, rSpan, cSpan;
             layout->getItemPosition(layout->indexOf(ui->startTxButton), &sendRow, &sendCol, &rSpan, &cSpan);
             layout->removeWidget(ui->startTxButton);
             layout->removeWidget(ui->stopTxButton);
-            layout->addWidget(modeContainer, sendRow, sendCol);
-            layout->addWidget(ui->startTxButton, sendRow, sendCol + 1);
-            layout->addWidget(ui->stopTxButton, sendRow, sendCol + 2);
+            ui->startTxButton->setMinimumWidth(40);
+            ui->stopTxButton->setMinimumWidth(40);
+            rightLayout->addWidget(ui->startTxButton, 2);
+            rightLayout->addWidget(ui->stopTxButton, 2);
+            rightContainer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+            // Place the combined container in the grid
+            layout->addWidget(rightContainer, sendRow, sendCol, 1, 3);
+
+            // Allow the first action buttons to shrink proportionally
+            // Set minimum width based on text content + padding
+            for (auto *btn : {ui->hbMacroButton, ui->cqMacroButton,
+                              ui->replyMacroButton, ui->snrMacroButton,
+                              ui->infoMacroButton, ui->macrosMacroButton,
+                              ui->queryButton, ui->deselectButton}) {
+                auto fm = btn->fontMetrics();
+                btn->setMinimumWidth(fm.horizontalAdvance(btn->text()) + 12);
+                btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+            }
 
             // Set initial checked state
             m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);
             m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);
             m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);
+            m_modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);
             m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);
         }
     }

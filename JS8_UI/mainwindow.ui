@@ -386,7 +386,7 @@ color : white;
              <property name="maximumSize">
               <size>
                <width>16777215</width>
-               <height>52</height>
+               <height>80</height>
               </size>
              </property>
              <property name="sizePolicy">
@@ -412,7 +412,23 @@ color : white;
                <number>0</number>
               </property>
               <item>
+               <widget class="QLabel" name="labVersion">
+                <property name="text">
+                 <string>v0.0.0.0</string>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">QLabel { color: white; font-size: 11pt; }</string>
+                </property>
+                <property name="alignment">
+                 <set>Qt::AlignmentFlag::AlignLeft</set>
+                </property>
+               </widget>
+              </item>
+              <item>
                <widget class="QLabel" name="linkCheckUpdates">
+                <property name="styleSheet">
+                 <string notr="true">QLabel { font-size: 11pt; }</string>
+                </property>
                 <property name="text">
                  <string>&lt;a href=&quot;https://github.com/avantol/JS8Call-Subspace-Mode/releases/latest&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Check for updates&lt;/a&gt;</string>
                 </property>
@@ -423,6 +439,9 @@ color : white;
               </item>
               <item>
                <widget class="QLabel" name="linkDiscussion">
+                <property name="styleSheet">
+                 <string notr="true">QLabel { font-size: 11pt; }</string>
+                </property>
                 <property name="text">
                  <string>&lt;a href=&quot;https://groups.io/g/JS8Call-Subspace/topics&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Join the discussion&lt;/a&gt;</string>
                 </property>
@@ -433,6 +452,9 @@ color : white;
               </item>
               <item>
                <widget class="QLabel" name="linkSubspaceQRZ">
+                <property name="styleSheet">
+                 <string notr="true">QLabel { font-size: 11pt; }</string>
+                </property>
                 <property name="text">
                  <string>&lt;a href=&quot;https://www.qrz.com/db/WM8Q&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Subspace by WM8Q&lt;/a&gt;</string>
                 </property>

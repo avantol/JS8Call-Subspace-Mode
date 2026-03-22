@@ -465,7 +465,10 @@ class UI_Constructor : public QMainWindow {
     void TxAgain();
     void checkVersion(bool alertOnUpToDate);
     void checkStartupWarnings();
-    void clearCallsignSelected();
+    void selectCallsign(QString call, int submode = -1);
+    void clearSelection();
+    void autoSwitchMode(int submode);
+    void clearCallsignSelected();  // legacy — calls clearSelection()
     void refreshTextDisplay();
 
     void manualBandHop(const StationList::Station station);
@@ -569,6 +572,7 @@ class UI_Constructor : public QMainWindow {
     QPushButton *m_modeBtnNormal{nullptr};
     QPushButton *m_modeBtnFast{nullptr};
     QPushButton *m_modeBtnTurbo{nullptr};
+    QPushButton *m_modeBtnSlow{nullptr};
     QPushButton *m_modeBtnFT2{nullptr};
     QSettings *m_settings;
     bool m_settings_read;
@@ -751,7 +755,8 @@ class UI_Constructor : public QMainWindow {
         QList<ActivityDetail> msgs;
     };
 
-    QString m_prevSelectedCallsign;
+    QString m_selectedCallsign;
+    QString &m_prevSelectedCallsign = m_selectedCallsign; // legacy alias
     int m_bandActivityWidth;
     int m_callActivityWidth;
     int m_textActivityWidth;

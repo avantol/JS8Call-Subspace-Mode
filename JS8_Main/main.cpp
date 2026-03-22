@@ -137,13 +137,15 @@ int main(int argc, char *argv[]) {
 
         if (parser.isSet(output_option)) {
             new TraceFile(parser.value(output_option));
-        } else {
-            // DIAG BUILD 51: auto-log to temp dir (revert in Build 52)
+        }
+#if 0  // Enable auto-log: set to 1 for diagnostic builds
+        else {
             auto tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
             auto logPath = tempDir + "/js8call-subspace-diag.log";
             new TraceFile(logPath);
             qWarning() << "[DIAG] Logging to" << logPath;
         }
+#endif
 
         qWarning() << "[DIAG] Build:" << program_title();
 
