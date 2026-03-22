@@ -48,9 +48,9 @@ void Modulator::start(double const frequency, int const submode,
                << "submode=" << submode << "state=" << (int)current_state
                << "tuning=" << m_tuning;
     if (current_state != State::Idle) {
-        qWarning() << "[FT2-TX] Modulator not idle, calling stop() first"
+        qWarning() << "[FT2-TX] Modulator not idle, SKIPPING duplicate start"
                     << "cycle#" << m_txCycleCount;
-        stop();
+        return;
     }
 
     m_quickClose = false;
