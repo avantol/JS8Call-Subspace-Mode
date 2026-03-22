@@ -30,6 +30,9 @@ class DecodeFT2 {
      */
     static inline std::atomic<bool> fortranLock{false};
 
+    /** Show sync-low rejected frames in UI (for developer analysis) */
+    static inline bool showRejected{false};
+
     /**
      * Run FT2 decode on audio data from dec_data.
      * Emits Decoded events via emitEvent for each successful decode.

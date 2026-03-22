@@ -145,6 +145,8 @@ int main(int argc, char *argv[]) {
             qWarning() << "[DIAG] Logging to" << logPath;
         }
 
+        qWarning() << "[DIAG] Build:" << program_title();
+
         QStandardPaths::setTestModeEnabled(parser.isSet(test_option));
 
         // support for multiple instances running from a single installation

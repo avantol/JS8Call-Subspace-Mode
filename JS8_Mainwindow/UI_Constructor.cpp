@@ -662,12 +662,6 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     m_l2DecodeTimer.start(2000);  // watchdog only — normal path is l2DecodeDone → l2TryDecode
 #endif
 
-    // Manual drift spin box — directly sets DriftingDateTime offset
-    connect(ui->spinDriftMs, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, [this](int ms) {
-        setDrift(ms);
-    });
-
     setupJS8();
 
     Q_EMIT transmitFrequency(freq() + m_XIT);
@@ -848,7 +842,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     ui->extFreeTextMsgEdit->setFocus();
                 } else {
                     // No valid callsign found — deselect
-                    callsignSelectedChanged(m_prevSelectedCallsign, QString());
+                    clearCallsignSelected();
                 }
                 return true;  // consume event
             },
@@ -1506,6 +1500,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             m_modeBtnFast   = makeBtn("F", "Fast mode",   Varicode::JS8CallFast);
             m_modeBtnTurbo  = makeBtn("T", "Turbo mode",  Varicode::JS8CallTurbo);
             m_modeBtnFT2    = makeBtn(QString::fromUtf8("\xe2\x9a\xa1"), "Subspace mode", Varicode::JS8CallFT2);
+            m_modeBtnFT2->setStyleSheet("QPushButton { font-size: 18px; font-weight: bold; } QPushButton:checked { background-color: #6699ff; font-size: 18px; font-weight: bold; }");
 
             // Build a container widget with horizontal layout for the mode buttons
             auto *modeContainer = new QWidget(parentWidget);

@@ -386,7 +386,7 @@ color : white;
              <property name="maximumSize">
               <size>
                <width>16777215</width>
-               <height>42</height>
+               <height>52</height>
               </size>
              </property>
              <property name="sizePolicy">
@@ -412,54 +412,36 @@ color : white;
                <number>0</number>
               </property>
               <item>
-               <layout class="QHBoxLayout" name="avgDTButtonLayout">
-                <property name="spacing">
-                 <number>4</number>
+               <widget class="QLabel" name="linkCheckUpdates">
+                <property name="text">
+                 <string>&lt;a href=&quot;https://github.com/avantol/JS8Call-Subspace-Mode/releases/latest&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Check for updates&lt;/a&gt;</string>
                 </property>
-               <item>
-                <widget class="QLabel" name="labAdjustDrift">
-                 <property name="styleSheet">
-                  <string notr="true">QLabel { color: white; }</string>
-                 </property>
-                 <property name="text">
-                  <string>Adjust drift:</string>
-                 </property>
-                </widget>
-               </item>
-               <item>
-                <widget class="QSpinBox" name="spinDriftMs">
-                 <property name="minimumSize">
-                  <size>
-                   <width>100</width>
-                   <height>24</height>
-                  </size>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>120</width>
-                   <height>24</height>
-                  </size>
-                 </property>
-                 <property name="minimum">
-                  <number>-5000</number>
-                 </property>
-                 <property name="maximum">
-                  <number>5000</number>
-                 </property>
-                 <property name="value">
-                  <number>0</number>
-                 </property>
-                 <property name="suffix">
-                  <string> ms</string>
-                 </property>
-                 <property name="toolTip">
-                  <string>Manual clock drift (ms). Positive = JS8Call clock later than system clock.</string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
-             </item>
-            </layout>
+                <property name="openExternalLinks">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="linkDiscussion">
+                <property name="text">
+                 <string>&lt;a href=&quot;https://groups.io/g/JS8Call-Subspace/topics&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Join the discussion&lt;/a&gt;</string>
+                </property>
+                <property name="openExternalLinks">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="linkSubspaceQRZ">
+                <property name="text">
+                 <string>&lt;a href=&quot;https://www.qrz.com/db/WM8Q&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Subspace by WM8Q&lt;/a&gt;</string>
+                </property>
+                <property name="openExternalLinks">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
             </widget>
            </item>
            <item>
@@ -1200,6 +1182,9 @@ QPushButton:checked {
          <number>6</number>
         </property>
         <widget class="QTextEdit" name="textEditRX">
+         <property name="toolTip">
+          <string>Double-click to select call sign</string>
+         </property>
          <property name="sizePolicy">
           <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
            <horstretch>4</horstretch>

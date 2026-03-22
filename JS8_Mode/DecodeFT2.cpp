@@ -203,7 +203,8 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup
         bool reservedBad = (bits[75] & 1) || (bits[76] & 1);
         bool noFlags = (frameBits == 0);
-        bool garbage = reservedBad || noFlags;
+        bool syncLow = (sync < 2.5f);
+        bool garbage = reservedBad || noFlags || syncLow;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
                    << "freq=" << freq << "sync=" << sync
@@ -214,10 +215,26 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                    << "CRC14-OK"
                    << (reservedBad ? "RESERVED-BAD" : "")
                    << (noFlags ? "NO-FLAGS" : "")
+                   << (syncLow ? "SYNC-LOW" : "")
                    << (garbage ? "FILTERED" : "");
 
-        if (garbage)
+        if (garbage) {
+            // Show sync-low rejects in UI for WM8Q analysis
+            if (showRejected && syncLow && !reservedBad && !noFlags) {
+                auto rejData = QString("<REJECTED> %1").arg(frame).toStdString();
+                emitEvent(Event::Decoded{
+                    .utc = utc,
+                    .snr = snr,
+                    .xdt = dt,
+                    .frequency = freq,
+                    .data = rejData,
+                    .type = frameBits,
+                    .quality = 1.0f,
+                    .mode = 16
+                });
+            }
             continue;
+        }
 
         emitEvent(Event::Decoded{
             .utc = utc,

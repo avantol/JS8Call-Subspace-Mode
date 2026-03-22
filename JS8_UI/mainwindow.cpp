@@ -493,7 +493,6 @@ void UI_Constructor::readSettings() {
     {
         int savedDrift = m_settings->value("TimeDrift", 0).toInt();
         setDrift(savedDrift);
-        ui->spinDriftMs->setValue(savedDrift);
     }
     ui->actionShow_Waterfall_Controls->setChecked(
         m_wideGraph->controlsVisible());
@@ -1282,6 +1281,11 @@ void UI_Constructor::switchSubmode(int submode) {
     if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false); }
     if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false); }
     if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false); }
+
+    m_wideGraph->setSubMode(m_nSubMode);
+    m_wideGraph->setFilterMinimumBandwidth(
+        JS8::Submode::bandwidth(m_nSubMode) +
+        JS8::Submode::rxThreshold(m_nSubMode) * 2);
 
     prepareHeartbeatMode(canCurrentModeSendHeartbeat() &&
                          ui->actionModeJS8HB->isChecked());
@@ -5336,12 +5340,34 @@ void UI_Constructor::on_macrosMacroButton_pressed() {
 
 void UI_Constructor::on_deselectButton_pressed() { clearCallsignSelected(); }
 
-void UI_Constructor::on_tableWidgetRXAll_cellClicked(int /*row*/, int /*col*/) {
+void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
     ui->tableWidgetCalls->selectionModel()->select(
         ui->tableWidgetCalls->selectionModel()->selection(),
         QItemSelectionModel::Deselect);
 
     displayCallActivity();
+
+    // Switch mode based on the row's activity submode, clear if no callsign found
+    auto item = ui->tableWidgetRXAll->item(row, 0);
+    if (item) {
+        int offset = item->data(Qt::UserRole).toInt();
+        auto activity = m_bandActivity.value(offset);
+        if (!activity.isEmpty()) {
+            int rowSubmode = activity.last().submode;
+            if (rowSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
+                m_prevStandardSubmode = m_nSubMode;
+                switchSubmode(Varicode::JS8CallFT2);
+            } else if (rowSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
+                switchSubmode(m_prevStandardSubmode);
+            }
+        }
+
+        // If no callsign at this offset, clear current selection
+        auto selectedCall = callsignSelected();
+        if (selectedCall.isEmpty() && !m_prevSelectedCallsign.isEmpty()) {
+            clearCallsignSelected();
+        }
+    }
 }
 
 void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
@@ -6366,9 +6392,16 @@ void UI_Constructor::clearCallsignSelected() {
     // remove the date cache
     m_callSelectedTime.remove(m_prevSelectedCallsign);
 
-    // remove the callsign selection
-    ui->tableWidgetCalls->clearSelection();
+    // clear table selections first, block signals to prevent re-selection
+    ui->tableWidgetRXAll->blockSignals(true);
+    ui->tableWidgetCalls->blockSignals(true);
     ui->tableWidgetRXAll->clearSelection();
+    ui->tableWidgetCalls->clearSelection();
+    ui->tableWidgetRXAll->blockSignals(false);
+    ui->tableWidgetCalls->blockSignals(false);
+
+    // clear the fallback callsign and update UI
+    callsignSelectedChanged(m_prevSelectedCallsign, QString());
 }
 
 bool UI_Constructor::isRecentOffset(int submode, int offset) {
@@ -7529,6 +7562,9 @@ void UI_Constructor::l2TryDecode(char const *source) {
                 scanNfqso = static_cast<int>(syncFreq + 0.5f);
             }
         }
+
+        // Show rejected sync-low frames for WM8Q analysis
+        JS8::DecodeFT2::showRejected = m_config.my_callsign().startsWith("WM8Q");
 
         std::int8_t newBits[77 * 20] = {};
         int nNewDecoded = 0;
