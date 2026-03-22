@@ -1,718 +1,1328 @@
-# JS8Call API Documentation v2.6.0
+# JS8Call-Improved API Documentation v2.6.0
 
-This document provides documention of the API to control JS8Call.
+This document provides complete documentation of JS8Call-Improved's external control API,
+derived from reading the source code.
 
-# Methods
-The API is normally located on localhost port 2242, but can be changed at ``Settings -> Reporting Tab -> API``
-If you have access to ``telnet`` you can connect to the API with
+---
 
+## Table of Contents
+
+1. [Transport & Configuration](#transport--configuration)
+2. [Message Format](#message-format)
+3. [Routine Messages (App to Client)](#routine-messages-app-to-client)
+4. [Command Messages (Client to App)](#command-messages-client-to-app)
+5. [WSJT-X UDP Binary Protocol](#wsjt-x-udp-binary-protocol)
+6. [Experimental / TODO](#experimental--todo)
+
+---
+
+## Transport & Configuration
+
+JS8Call-Improved supports **three** network interfaces, configured under
+`Settings -> Reporting Tab -> API`:
+
+### 1. Native JSON over UDP
+
+| Setting            | Default           |
+|--------------------|-------------------|
+| Server address     | `127.0.0.1`       |
+| Server port        | `2242`            |
+| Enable checkbox    | Off               |
+| Accept requests    | Separate checkbox |
+
+- **Direction**: JS8Call *sends* UDP datagrams to the configured address:port.
+  It also *receives* datagrams on the same socket (bound to an ephemeral port).
+- **Framing**: Each UDP datagram is one complete JSON message (no delimiter needed;
+  one datagram = one message).
+- **Ping**: The UDP client sends a `PING` message every 15 seconds automatically.
+- **Close**: On shutdown, the UDP client sends a `CLOSE` message.
+- **Duplicate suppression**: Consecutive identical datagrams are suppressed.
+- Config keys: `UDPServer`, `UDPServerPort`, `UDPEnabled`, `AcceptUDPRequests`
+
+### 2. Native JSON over TCP
+
+| Setting            | Default           |
+|--------------------|-------------------|
+| Server address     | `127.0.0.1`       |
+| Server port        | `2442`            |
+| Enable checkbox    | Off               |
+| Accept requests    | Separate checkbox |
+| Max connections    | Configurable      |
+
+- **Direction**: JS8Call runs a TCP *server*. Clients connect to it.
+- **Framing**: Newline-delimited JSON. Each message is a complete JSON object
+  followed by `\n`. Clients must send newline-terminated JSON lines.
+- **Reading**: The server reads via `readLine()` and parses each line as JSON.
+- **Error**: If JSON parsing fails, the server responds with `API.ERROR`.
+- **Connection full**: If max connections exceeded, returns `API.ERROR` with
+  value `"Connections Full"` and disconnects.
+- Config keys: `TCPServer`, `TCPServerPort`, `TCPEnabled`, `AcceptTCPRequests`
+
+### 3. WSJT-X Binary UDP Protocol
+
+| Setting            | Default           |
+|--------------------|-------------------|
+| Server address     | `127.0.0.1`       |
+| Server port        | `2237`            |
+| Enable checkbox    | Off               |
+
+- **Direction**: JS8Call sends WSJT-X binary protocol datagrams to the configured
+  address:port and receives commands back.
+- **Framing**: WSJT-X binary protocol with magic number `0xadbccbda`, schema
+  negotiation, QDataStream serialization. See [WSJT-X UDP Binary Protocol](#wsjt-x-udp-binary-protocol).
+- Config keys: `WSJTXServer`, `WSJTXServerPort`, `WSJTXProtocolEnabled`
+
+### Dual Protocol Note
+
+When both UDP JSON and WSJT-X are enabled on the **same** address and port,
+native JSON messages that would duplicate WSJT-X information (e.g., `RIG.FREQ`,
+`STATION.STATUS`) are suppressed to avoid conflicts.
+
+---
+
+## Message Format
+
+All native API messages (UDP and TCP) use JSON with this structure:
+
+```json
+{
+  "type": "MESSAGE.TYPE",
+  "value": "string value or empty",
+  "params": {
+    "_ID": 269554125481,
+    "FIELD1": "value1",
+    "FIELD2": 42
+  }
+}
 ```
-telnet 127.0.0.1 2242
+
+- **`type`** (string): The message type identifier.
+- **`value`** (string): Primary value, often empty string.
+- **`params`** (object): Key-value map of parameters. **Required** in both directions.
+- **`_ID`** (integer): Message ID. For app-originated messages, `-1`.
+  For client requests, an auto-generated epoch-based value is used.
+  Responses include the request's `_ID` so clients can correlate them.
+
+### _ID Number
+
+The ID number is the epoch time of 1499299200000 (July 6, 2017) plus current
+epoch time in milliseconds.
+
+### Error Responses
+
+```json
+{"params":{"_ID":"269558031750"},"type":"API.ERROR","value":"unterminated object: json parsing error"}
 ```
-If you do nothing, the API will print information as it has it available, or you can submit one of the ``End Points`` below.
 
+The `value` field contains the error description. Also used for `"Connections Full"`.
 
-# API Format
-All API calls are via JSON. JS8Call spits out a JSON packet of the form (for a heartbeat in this case):
+---
 
+## Routine Messages (App to Client)
+
+These messages are emitted automatically by JS8Call without being requested.
+
+### RX.ACTIVITY
+
+Emitted for every decoded frame of received activity.
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "RX.ACTIVITY",
+  "value": "HC5PH: ",
+  "params": {
+    "_ID": -1,
+    "FREQ": 7080420,
+    "DIAL": 7078000,
+    "OFFSET": 2420,
+    "SNR": -22,
+    "SPEED": 1,
+    "TDRIFT": 0.265,
+    "UTC": 1769740328005,
+    "BITS": 0
+  }
+}
 ```
-{"params":{"PTT":true,"UTC":1768760160665,"_ID":-1},"type":"RIG.PTT","value":"on"}
-{"params":{"TONES":[4,2,5,6,1,3,0,7,1,5,7,6,0,2,2,3,7,4,2,7,6,4,5,1,7,1,7,3,6,6,4,1,0,4,1,7,4,2,5,6,1,3,0,0,2,4,2,1,1,4,1,6,3,4,4,4,6,2,0,7,0,5,6,2,3,1,0,3,7,4,6,4,4,2,5,6,1,3,0],"_ID":-1},"type":"TX.FRAME","value":""}
-{"params":{"TONES":[4,2,5,6,1,3,0,7,1,5,7,6,0,2,2,3,7,4,2,7,6,4,5,1,7,1,7,3,6,6,4,1,0,4,1,7,4,2,5,6,1,3,0,0,2,4,2,1,1,4,1,6,3,4,4,4,6,2,0,7,0,5,6,2,3,1,0,3,7,4,6,4,4,2,5,6,1,3,0],"_ID":-1},"type":"TX.FRAME","value":""}
-{"params":{"PTT":false,"UTC":1768760173403,"_ID":-1},"type":"RIG.PTT","value":"off"}
+
+| Field    | Type    | Description                                        |
+|----------|---------|----------------------------------------------------|
+| FREQ     | integer | Absolute frequency (DIAL + OFFSET) in Hz           |
+| DIAL     | integer | Dial frequency in Hz                               |
+| OFFSET   | integer | Audio offset frequency in Hz                       |
+| SNR      | integer | Signal-to-noise ratio in dB                        |
+| SPEED    | integer | Submode speed (0=Normal, 1=Fast, 2=Turbo, 4=Slow, 8=Ultra) |
+| TDRIFT   | float   | Time drift in seconds                              |
+| UTC      | integer | UTC timestamp in milliseconds since epoch          |
+| BITS     | integer | Frame bit flags (First/Last/Data indicators)       |
+
+**Source**: `JS8_Mainwindow/processRxActivity.cpp`
+
+---
+
+### RX.DIRECTED
+
+Emitted when a directed (command) message is decoded. Includes heartbeats,
+SNR requests, messages, CQs, and all other JS8 directed commands.
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "RX.DIRECTED",
+  "value": "KE2DMC: @HB HEARTBEAT ",
+  "params": {
+    "_ID": -1,
+    "FROM": "KE2DMC",
+    "TO": "@HB",
+    "CMD": " HEARTBEAT",
+    "GRID": "FN32",
+    "EXTRA": "",
+    "TEXT": "@HB HEARTBEAT ",
+    "FREQ": 7078816,
+    "DIAL": 7078000,
+    "OFFSET": 816,
+    "SNR": 1,
+    "SPEED": 0,
+    "TDRIFT": 0.54,
+    "UTC": 1769740226361
+  }
+}
 ```
-The steps above are
-1) PTT on
-2) Send HB MSG as TONES (2 transmission frames)
-3) PTT off
 
-``{"params":xxx}`` is **required** in both directions and forms the overall packet
+| Field  | Type    | Description                                          |
+|--------|---------|------------------------------------------------------|
+| FROM   | string  | Sending station callsign                             |
+| TO     | string  | Destination callsign or group (@HB, @ALLCALL, etc.) |
+| CMD    | string  | Command type (e.g., " HEARTBEAT", " MSG", " SNR", " CQ", " GRID", " HEARING") |
+| GRID   | string  | Grid square of sender (if available)                 |
+| EXTRA  | string  | Extra command data                                   |
+| TEXT   | string  | Full message text (without FROM prefix)              |
+| FREQ   | integer | Absolute frequency (DIAL + OFFSET) in Hz             |
+| DIAL   | integer | Dial frequency in Hz                                 |
+| OFFSET | integer | Audio offset frequency in Hz                         |
+| SNR    | integer | Signal-to-noise ratio in dB                          |
+| SPEED  | integer | Submode speed                                        |
+| TDRIFT | float   | Time drift in seconds                                |
+| UTC    | integer | UTC timestamp in milliseconds since epoch            |
+
+**Source**: `JS8_Mainwindow/processCommandActivity.cpp`
+
+---
+
+### RX.SPOT
+
+Emitted when a station is spotted (sent to reporting networks).
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "RX.SPOT",
+  "value": "",
+  "params": {
+    "_ID": -1,
+    "FREQ": 7078870,
+    "DIAL": 7078000,
+    "OFFSET": 870,
+    "CALL": "KF7MIX",
+    "SNR": -5,
+    "GRID": "EM48"
+  }
+}
+```
+
+| Field  | Type    | Description                              |
+|--------|---------|------------------------------------------|
+| FREQ   | integer | Absolute frequency in Hz                 |
+| DIAL   | integer | Dial frequency in Hz                     |
+| OFFSET | integer | Audio offset in Hz                       |
+| CALL   | string  | Spotted callsign                         |
+| SNR    | integer | Signal-to-noise ratio in dB              |
+| GRID   | string  | Grid square (if known)                   |
+
+**Source**: `JS8_UI/mainwindow.cpp` line ~6879
+
+---
+
+### RIG.PTT
+
+Emitted when PTT state changes (transmit on/off).
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "RIG.PTT",
+  "value": "on",
+  "params": {
+    "_ID": -1,
+    "PTT": true,
+    "UTC": 1768760160665
+  }
+}
+```
+
+| Field | Type    | Description                                |
+|-------|---------|--------------------------------------------|
+| PTT   | boolean | true = transmitting, false = not           |
+| UTC   | integer | UTC timestamp in milliseconds since epoch  |
+| value | string  | "on" or "off"                              |
+
+**Source**: `JS8_UI/mainwindow.cpp` `emitPTT()`
+
+---
+
+### TX.FRAME
+
+Emitted when a frame of tones is being transmitted.
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "TX.FRAME",
+  "value": "",
+  "params": {
+    "_ID": -1,
+    "TONES": [4,2,5,6,1,3,0,7,1,5,7,6,0,2,2,3,...]
+  }
+}
+```
+
+| Field | Type         | Description                            |
+|-------|--------------|----------------------------------------|
+| TONES | integer[]   | Array of 79 tone values (0-7 for 8-FSK) |
 
+**Source**: `JS8_UI/mainwindow.cpp` `emitTones()`
 
-| Commands                                 | Version |
-|------------------------------------------|---------|
-| [PING ](#ping)                               | 2.5 |
-| [RIG.GET_FREQ](#rigget_freq)                 | 2.5 |
-| [RIG.SET_FREQ](#rigset_freq)                 | 2.5 |
-| [RIG.GET_PTT](#rigget_ptt)                   | 2.6 |
-| [RIG.SET_TUNE](#rigset_tune)                 | 2.6 |
-| [RIG.TX_HALT](#rigtx_halt)                   | 2.6 |
-| [STATION.GET_CALLSIGN](#stationget_callsign) | 2.5 |
-| [STATION.GET_GRID](#stationget_grid)         | 2.5 |
-| [STATION.SET_GRID](#stationset_grid)         | 2.5 |
-| [STATION.GET_INFO](#stationget_info)         | 2.5 |
-| [STATION.SET_INFO](#stationset_info)         | 2.5 |
-| [STATION.GET_STATUS](#stationget_status)     | 2.5 |
-| [STATION.SET_STATUS](#stationset_status)     | 2.5 |
-| [STATION.VERSION](#stationversion)           | 2.6 |
-| [STATION.GET_OS](#stationget_os)             | 2.6 |
-| [STATION.SET_STATUS](#stationset_status)     | 2.5 |
-| [STATION.GET_SPOT](#stationget_spot)         | 2.6 |
-| [STATION.SET_SPOT](#stationset_spot)         | 2.6 |
-| [RX.GET_CALL_ACTIVITY](#rxget_call_activity) | 2.5 |
-| [RX.GET_CALL_SELECTED](#rxget_call_selected) | 2.5 |
-| [RX.GET_BAND_ACTIVITY](#rxget_band_activity) | 2.5 |
-| [RX.GET_TEXT](#rxget_text)                   | 2.5 |
-| [TX.GET_TEXT](#txget_text)                   | 2.5 |
-| [TX.SET_TEXT](#txset_text)                   | 2.5 |
-| [TX.SEND_MESSAGE](#txsend_message)           | 2.5 |
-| [TX.GET_QUEUE_DEPTH](#txget_queue_depth)     | 2.6 |
-| [MODE.GET_SPEED](#modeget_speed)             | 2.5 |
-| [MODE.SET_SPEED](#modeset_speed)             | 2.5 |
-| [INBOX.GET_MESSAGES](#inboxget_messages)     | 2.5 |
-| [INBOX.STORE_MESSAGE](#inboxstore_message)   | 2.5 |
-| [WINDOW.RAISE](#windowraise)                 | 2.5 |
+---
 
-## _ID Number
-The ID number is the epoch time of 1499299200000 (July 6, 2017) plus current epoch time.
+### RIG.FREQ
 
-## Error messages
-| Response |
-|----------|
-|{"params":{"_ID":"269558031750"},"type":"API.ERROR","value":"unterminated object: json parsing error"}|
+Emitted on band/frequency changes (automatic, not in response to a request).
 
-``value`` contains the error
+**Direction**: App -> Client
 
+```json
+{
+  "type": "RIG.FREQ",
+  "value": "",
+  "params": {
+    "_ID": -1,
+    "BAND": "40m",
+    "FREQ": 7079950,
+    "DIAL": 7078000,
+    "OFFSET": 1950
+  }
+}
+```
+
+| Field  | Type    | Description                          |
+|--------|---------|--------------------------------------|
+| BAND   | string  | Band name (e.g., "40m", "20m")       |
+| FREQ   | integer | Absolute frequency in Hz             |
+| DIAL   | integer | Dial frequency in Hz                 |
+| OFFSET | integer | Audio offset in Hz                   |
+
+**Note**: The automatic version (band change) includes `BAND`; the response to
+`RIG.GET_FREQ` does not.
+
+**Source**: `JS8_UI/mainwindow.cpp` line ~1327
+
+---
+
+### STATION.STATUS (automatic)
+
+Emitted periodically and on state changes (frequency, mode, selection changes).
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "STATION.STATUS",
+  "value": "",
+  "params": {
+    "FREQ": 7079950,
+    "DIAL": 7078000,
+    "OFFSET": 1950,
+    "SPEED": 0,
+    "SELECTED": "KM4PVB"
+  }
+}
+```
+
+| Field    | Type    | Description                              |
+|----------|---------|------------------------------------------|
+| FREQ     | integer | Absolute frequency in Hz                 |
+| DIAL     | integer | Dial frequency in Hz                     |
+| OFFSET   | integer | Audio offset in Hz                       |
+| SPEED    | integer | Current submode speed                    |
+| SELECTED | string  | Currently selected callsign (may be "")  |
+
+**Note**: No `_ID` field in automatic status messages (unlike request responses).
+
+**Source**: `JS8_UI/mainwindow.cpp` line ~7167
+
+---
+
+### STATION.CLOSING
+
+Emitted when JS8Call is shutting down.
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "STATION.CLOSING",
+  "value": "",
+  "params": {
+    "_ID": -1,
+    "REASON": "User closed application"
+  }
+}
+```
+
+| Field  | Type   | Description            |
+|--------|--------|------------------------|
+| REASON | string | Reason for closing     |
+
+**Source**: `JS8_UI/mainwindow.cpp` `closeEvent()`
+
+---
+
+### LOG.QSO
+
+Emitted when a QSO is logged.
+
+**Direction**: App -> Client
+
+```json
+{
+  "type": "LOG.QSO",
+  "value": "<ADIF record string>",
+  "params": {
+    "_ID": -1,
+    "UTC.ON": 1768860000000,
+    "UTC.OFF": 1768860600000,
+    "CALL": "W1AW",
+    "GRID": "FN31",
+    "FREQ": 7078000,
+    "MODE": "JS8",
+    "SUBMODE": "Normal",
+    "RPT.SENT": "-15",
+    "RPT.RECV": "-12",
+    "NAME": "ARRL",
+    "COMMENTS": "",
+    "STATION.OP": "",
+    "STATION.CALL": "WM8Q",
+    "STATION.GRID": "EM85",
+    "EXTRA": {}
+  }
+}
+```
+
+| Field        | Type    | Description                              |
+|--------------|---------|------------------------------------------|
+| UTC.ON       | integer | QSO start time (ms since epoch)          |
+| UTC.OFF      | integer | QSO end time (ms since epoch)            |
+| CALL         | string  | DX station callsign                      |
+| GRID         | string  | DX station grid                          |
+| FREQ         | integer | Dial frequency in Hz                     |
+| MODE         | string  | Operating mode                           |
+| SUBMODE      | string  | Submode name                             |
+| RPT.SENT     | string  | Report sent                              |
+| RPT.RECV     | string  | Report received                          |
+| NAME         | string  | DX station name                          |
+| COMMENTS     | string  | QSO comments                             |
+| STATION.OP   | string  | Operator callsign                        |
+| STATION.CALL | string  | My callsign                              |
+| STATION.GRID | string  | My grid                                  |
+| EXTRA        | object  | Additional fields from log dialog        |
+| value        | string  | Full ADIF record text                    |
+
+**Source**: `JS8_UI/mainwindow.cpp` `acceptQSO()` line ~4204
+
+---
+
+### PING (UDP auto)
+
+The UDP client sends a PING every 15 seconds automatically.
 
-# STATION Message
-[!note] API >= 2.6
+**Direction**: App -> External UDP Server
 
-The following message is generated by JS8Call when it is closing down.
+```json
+{
+  "type": "PING",
+  "value": "",
+  "params": {
+    "NAME": "JS8Call",
+    "VERSION": "2.6.0-NOT_FOR_RELEASE",
+    "UTC": 1769740000000
+  }
+}
+```
+
+**Source**: `JS8_Main/MessageClient.cpp`
+
+---
+
+### CLOSE (UDP auto)
+
+Sent by the UDP client when JS8Call shuts down.
+
+**Direction**: App -> External UDP Server
+
+```json
+{
+  "type": "CLOSE",
+  "value": ""
+}
+```
+
+**Source**: `JS8_Main/MessageClient.cpp` destructor
 
-| Response |
-|----------|
-|{"params":{"REASON":"User closed application","_ID":-1},"type":"STATION.CLOSING","value":""}|
+---
+
+## Command Messages (Client to App)
 
-# RX Messages
-The following messages are generated by JS8Call and emitted out from the API as they come in.
+These messages are sent by an external client to control JS8Call.
+Requires "Accept UDP/TCP requests" to be enabled.
+
+### PING
+
+Wakes up the API connection. No response is generated.
+
+```json
+{"params":{},"type":"PING","value":""}
+```
+
+---
+
+### RIG.GET_FREQ
 
+Gets the current dial and offset frequencies.
 
-## RX.ACTIVITY
+**Request**:
+```json
+{"params":{},"type":"RIG.GET_FREQ","value":""}
+```
 
-| Response |
-|----------|
-|{"params":{"DIAL":7078000,"FREQ":7080420,"OFFSET":2420,"SNR":-22,"SPEED":1,"TDRIFT":0.26499998569488525,"UTC":1769740328005,"_ID":-1},"type":"RX.ACTIVITY","value":"HC5PH: "}|
-|{"params":{"CMD":" MSG","DIAL":7078000,"EXTRA":"","FREQ":7080420,"FROM":"HC5PH","GRID":" FI06","OFFSET":2420,"SNR":-24,"SPEED":1,"TDRIFT":0.23999999463558197,"TEXT":"F!104 2EE ST[EC] GR[FI06JS] #AUVO","TO":"@SITREP","UTC":1769740328005,"_ID":-1},"type":"RX.DIRECTED","value":"HC5PH: @SITREP MSG F!104 2EE ST[EC] GR[FI06JS] #AUVO ♢ "}|
+**Response** (`RIG.FREQ`):
+```json
+{
+  "type": "RIG.FREQ",
+  "value": "",
+  "params": {
+    "_ID": 269554125481,
+    "FREQ": 7079950,
+    "DIAL": 7078000,
+    "OFFSET": 1950
+  }
+}
+```
 
+If WSJT-X protocol is also enabled, a WSJT-X Status message is sent too.
 
-## RX.DIRECTED
+---
 
-| Response |
-|----------|
-|{"params":{"CMD":" HEARTBEAT","DIAL":7078000,"EXTRA":"","FREQ":7078816,"FROM":"KE2DMC","GRID":"FN32","OFFSET":816,"SNR":1,"SPEED":0,"TDRIFT":0.5399999618530273,"TEXT":"","TO":"@HB","UTC":1769740226361,"_ID":-1},"type":"RX.DIRECTED","value":"KE2DMC: @HB HEARTBEAT ♢ "}|
+### RIG.SET_FREQ
 
+Sets the dial frequency and/or audio offset.
 
-## RX.SPOT
+**Request**:
+```json
+{"params":{"DIAL":7078000,"OFFSET":1950},"type":"RIG.SET_FREQ","value":""}
+```
 
-| Response |
-|----------|
-|{"params":{"CALL":"KF7MIX","DIAL":7078000,"FREQ":7078870,"GRID":"EM48","OFFSET":870,"SNR":-5,"_ID":-1},"type":"RX.SPOT","value":""}|
+| Field  | Type    | Description                  |
+|--------|---------|------------------------------|
+| DIAL   | integer | Dial frequency in Hz         |
+| OFFSET | integer | Audio offset in Hz           |
 
+Either or both fields may be provided.
 
-# PING
-API <= 2.6
+**Response**: A `STATION.STATUS` message is emitted as a side effect of the
+frequency change.
 
-Wakes up the API if need be.
+---
 
-| End Point |
-|-----------|
-|{"params":{},"type":"PING","value":""}|
+### RIG.GET_PTT
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+Gets the current PTT (transmit) status. *API 2.6+*
 
-| Response |
-|----------|
-| None     |
+**Request**:
+```json
+{"params":{},"type":"RIG.GET_PTT","value":""}
+```
 
-# RIG.GET_FREQ
-API <= 2.6
+**Response** (`RIG.PTT_STATUS`):
+```json
+{
+  "type": "RIG.PTT_STATUS",
+  "value": "",
+  "params": {
+    "_ID": 269908447335,
+    "PTT": false,
+    "MESSAGE": ""
+  }
+}
+```
 
-Gets radio dial and offset frequencies
+| Field   | Type    | Description                                    |
+|---------|---------|------------------------------------------------|
+| PTT     | boolean | true if transmitting                           |
+| MESSAGE | string  | Current message being transmitted, or ""       |
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RIG.GET_FREQ","value":""}|
+---
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+### RIG.SET_TUNE
 
-| Response |
-|----------|
-|{"params":{"DIAL":7078000,"FREQ":7079950,"OFFSET":1950,"_ID":269554125481},"type":"RIG.FREQ","value":""}|
-``FREQ`` is the ``DIAL`` frequency plus ``OFFSET``
+Turns the TUNE function on or off. *API 2.6+*
 
+**Request**:
+```json
+{"params":{},"type":"RIG.SET_TUNE","value":"true"}
+```
 
-# RIG.SET_FREQ
-API <= 2.6
+| Field | Type   | Description        |
+|-------|--------|--------------------|
+| value | string | "true" or "false"  |
 
-Sets radio dial and offset frequencies
+**Response** (`RIG.SET_TUNE` + `RIG.PTT`):
+```json
+{"params":{"_ID":270422213693,"value":true},"type":"RIG.SET_TUNE","value":""}
+{"params":{"PTT":true,"UTC":1769721024401,"_ID":-1},"type":"RIG.PTT","value":"on"}
+```
 
-| End Point |
-|-----------|
-|{"params":{"DIAL":dial,"OFFSET":offset},"type":"RIG.SET_FREQ","value":""}|
+Both the SET_TUNE confirmation and a PTT state change message are triggered.
+There is a built-in max time on tuning; no GET call exists.
 
-| Requirements | |
-|--------------|-|
-| dial         | Frequency in Hz |
-| offset       | Offset in Hz    |
-| value        | empty string    |
+---
 
-| Response |
-|----------|
-| {"params":{"DIAL":7078000,"FREQ":7079950,"OFFSET":1950,"SELECTED":"","SPEED":0,"_ID":"269554221645"},"type":"STATION.STATUS","value":""} |
+### RIG.TX_HALT
 
-``FREQ`` is the ``DIAL`` frequency plus ``OFFSET``
-``SPEED`` is one of the ``MODE`` speeds
+Immediately halts the transmitter (E-stop). *API 2.6+*
 
+**Request**:
+```json
+{"params":{},"type":"RIG.TX_HALT","value":""}
+```
 
-# RIG.GET_PTT
-[!note] API >= 2.6
+**Response** (`RIG.TX_HALT`):
+```json
+{"params":{"_ID":270426906894,"value":true},"type":"RIG.TX_HALT","value":""}
+```
 
-Gets rig PTT status
+---
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RIG.GET_PTT","value":""}|
+### STATION.GET_CALLSIGN
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+Gets the configured station callsign.
 
-| Response |
-|----------|
-|{"params":{"MESSAGE":"","PTT":false,"_ID":269908447335},"type":"RIG.PTT_STATUS","value":""}|
-|{"params":{"MESSAGE":"SLbuEVAt7YC0","PTT":true,"_ID":269908640060},"type":"RIG.PTT_STATUS","value":""}|
+**Request**:
+```json
+{"params":{},"type":"STATION.GET_CALLSIGN","value":""}
+```
 
-`MESSAGE` will be empty string or a message if more is being transmitted.
+**Response** (`STATION.CALLSIGN`):
+```json
+{"params":{"_ID":269553944755},"type":"STATION.CALLSIGN","value":"WM8Q"}
+```
 
-`PTT` will be true if transmitting.
+---
 
+### STATION.GET_GRID
 
-# RIG.SET_TUNE
-[!note] API >= 2.6
+Gets the station grid square.
 
-Sets TUNE setting on or off
+**Request**:
+```json
+{"params":{},"type":"STATION.GET_GRID","value":""}
+```
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RIG.SET_TUNE","value":"false"}|
+**Response** (`STATION.GRID`):
+```json
+{"params":{"_ID":269558175403},"type":"STATION.GRID","value":"EM85"}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | true/false |
+---
 
-| Response |
-|----------|
-|{"params":{"_ID":270422213693,"value":true},"type":"RIG.SET_TUNE","value":""}|
-|{"params":{"PTT":true,"UTC":1769721024401,"_ID":-1},"type":"RIG.PTT","value":"on"}|
-| |
-|{"params":{"_ID":270421833952,"value":false},"type":"RIG.SET_TUNE","value":""}|
-|{"params":{"PTT":false,"UTC":1769721034501,"_ID":-1},"type":"RIG.PTT","value":"off"}|
-| |
+### STATION.SET_GRID
 
-NOTE: Both the SET_TUNE *and* PTT response messages are triggered. As there is a built-in max time on the tuning, no GET call exists.
+Sets the dynamic grid square (does not change saved config).
 
+**Request**:
+```json
+{"params":{},"type":"STATION.SET_GRID","value":"EM85"}
+```
 
-# RIG.TX_HALT
-[!note] API >= 2.6
+**Response** (`STATION.GRID`):
+```json
+{"params":{"_ID":269558371794},"type":"STATION.GRID","value":"EM85"}
+```
 
-Halts the transmitter immediately
+---
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RIG.TX_HALT","value":""}|
+### STATION.GET_INFO
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+Gets the station info text.
 
-| Response |
-|----------|
-|{"params":{"_ID":270426906894,"value":true},"type":"RIG.TX_HALT","value":""}|
+**Request**:
+```json
+{"params":{},"type":"STATION.GET_INFO","value":""}
+```
 
+**Response** (`STATION.INFO`):
+```json
+{"params":{"_ID":269559398161},"type":"STATION.INFO","value":"JS8-IMPROVED VER 2.6.0"}
+```
 
-# STATION.GET_CALLSIGN
-API <= 2.6
+---
 
-Gets station callsign
+### STATION.SET_INFO
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.GET_CALLSIGN","value":""}|
+Sets the dynamic station info text.
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+**Request**:
+```json
+{"params":{},"type":"STATION.SET_INFO","value":"My station info"}
+```
 
-| Response |
-|----------|
-|{"params":{"_ID":269553944755},"type":"STATION.CALLSIGN","value":"callsign"}|
-Callsign is returned in `value`
+**Response** (`STATION.INFO`):
+```json
+{"params":{"_ID":269559620289},"type":"STATION.INFO","value":"My station info"}
+```
 
+---
 
-# STATION.GET_GRID
-API <= 2.6
+### STATION.GET_STATUS
 
-Gets station grid square
+Gets the station status message.
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.GET_GRID","value":""}|
+**Request**:
+```json
+{"params":{},"type":"STATION.GET_STATUS","value":""}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+**Response** (`STATION.STATUS`):
+```json
+{"params":{"_ID":269559773383},"type":"STATION.STATUS","value":"IDLE ..."}
+```
 
-| Response |
-|----------|
-|{"params":{"_ID":269558175403},"type":"STATION.GRID","value":"EM85"}|
-Grid square is returned in `value`
+---
 
-# STATION.SET_GRID
-API <= 2.6
+### STATION.SET_STATUS
 
-Sets station grid square
+Sets the dynamic station status message.
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.SET_GRID","value":grid}|
+**Request**:
+```json
+{"params":{},"type":"STATION.SET_STATUS","value":"My status text"}
+```
 
-| Requirements | |
-|--------------|-|
-| grid         | 4 or 6 character grid square enclosed in ""|
+**Response** (`STATION.STATUS`):
+```json
+{"params":{"_ID":269559773383},"type":"STATION.STATUS","value":"My status text"}
+```
 
-| Response |
-|----------|
-|{"params":{"_ID":269558371794},"type":"STATION.GRID","value":"EM85"}|
+---
 
-Grid square is returned in `value`
+### STATION.VERSION
 
-# STATION.GET_INFO
-API <= 2.6
+Gets the JS8Call version string. Use to check API compatibility. *API 2.6+*
 
-Gets station info
+**Request**:
+```json
+{"params":{},"type":"STATION.VERSION","value":""}
+```
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.GET_INFO","value":""}|
+**Response** (`STATION.VERSION`):
+```json
+{"params":{"VERSION":"2.6.0-NOT_FOR_RELEASE","_ID":269908381596},"type":"STATION.VERSION","value":""}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+---
 
-| Response |
-|----------|
-|{"params":{"_ID":269559398161},"type":"STATION.INFO","value":"JS8-IMPROVED VER <MYVERSION>"}|
+### STATION.GET_OS
 
-Station info is returned in `value`
+Gets OS information. *API 2.6+*
 
-# STATION.SET_INFO
-API <= 2.6
+**Request**:
+```json
+{"params":{},"type":"STATION.GET_OS","value":""}
+```
 
-Sets station info
+**Response** (`STATION.GET_OS`):
+```json
+{
+  "type": "STATION.GET_OS",
+  "value": "",
+  "params": {
+    "_ID": 269977840701,
+    "OS_NAME": "Ubuntu 24.04.3 LTS",
+    "OS_KERNEL": "linux",
+    "OS_KERNEL_VERSION": "6.14.0-37-generic"
+  }
+}
+```
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.SET_INFO","value":info}|
+---
 
-| Requirements | |
-|--------------|-|
-| value        | Station info enclosed in "" |
+### STATION.GET_SPOT
 
-| Response |
-|----------|
-|{"params":{"_ID":269559620289},"type":"STATION.INFO","value":"JS8-IMPROVED VER <MYVERSION>"}|
+Gets the current spot button status. *API 2.6+*
 
-Station info is returned in `value`
+**Request**:
+```json
+{"params":{},"type":"STATION.GET_SPOT","value":""}
+```
 
+**Response** (`STATION.SPOT`):
+```json
+{"params":{"_ID":270409823907,"value":true},"type":"STATION.SPOT","value":""}
+```
 
-# STATION.GET_STATUS
-API <= 2.6
+---
 
-Gets station status message
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.GET_STATUS","value":""}|
+### STATION.SET_SPOT
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+Sets the spot button on or off. *API 2.6+*
 
-| Response |
-|----------|
-|{"params":{"_ID":269559773383},"type":"STATION.STATUS","value":"IDLE <MYIDLE> JS8CALL-IMPORVED VERSION <MYVERSION>"}|
+**Request**:
+```json
+{"params":{},"type":"STATION.SET_SPOT","value":"true"}
+```
 
-Station status is returned in `value`
+| Field | Type   | Description       |
+|-------|--------|-------------------|
+| value | string | "true" or "false" |
 
+**Response** (`STATION.SPOT`):
+```json
+{"params":{"_ID":270409737648,"value":true},"type":"STATION.SPOT","value":""}
+```
 
-# STATION.SET_STATUS
-API <= 2.6
+---
 
-Sets station status message
+### RX.GET_CALL_ACTIVITY
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.SET_STATUS","value":""}|
+Returns recently heard callsigns, filtered by the configured callsign aging.
 
-| Requirements | |
-|--------------|-|
-| value        | Station status enclosed in "" |
+**Request**:
+```json
+{"params":{},"type":"RX.GET_CALL_ACTIVITY","value":""}
+```
 
-| Response |
-|----------|
-|{"params":{"_ID":269559773383},"type":"STATION.STATUS","value":"IDLE <MYIDLE> JS8CALL-IMPORVED VERSION <MYVERSION>"}|
+**Response** (`RX.CALL_ACTIVITY`):
+```json
+{
+  "type": "RX.CALL_ACTIVITY",
+  "value": "",
+  "params": {
+    "_ID": 269560000000,
+    "AB4WV": {"GRID":"","SNR":-18,"UTC":1768858992167},
+    "K4EXA": {"GRID":"EM63","SNR":-18,"UTC":1768858242147}
+  }
+}
+```
 
-Station status is returned in `value`
+Each callsign is a key in `params` with a nested object containing `GRID`, `SNR`, and `UTC`.
 
+---
 
-# STATION.VERSION
-[!note] API >= 2.6
+### RX.GET_CALL_SELECTED
 
-Gets JS8Call version. Use to check for API changes or compatiblity.
+Returns the currently selected callsign in the UI.
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.VERSION","value":""}|
+**Request**:
+```json
+{"params":{},"type":"RX.GET_CALL_SELECTED","value":""}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+**Response** (`RX.CALL_SELECTED`):
+```json
+{"params":{"_ID":269560649847},"type":"RX.CALL_SELECTED","value":"KM4PVB"}
+```
 
-| Response |
-|----------|
-|{"params":{"VERSION":"2.6.0-NOT_FOR_RELEASE","_ID":269908381596},"type":"STATION.VERSION","value":""}|
+Value is empty string if no callsign is selected.
 
-# STATION.GET_OS
-[!note] API >= 2.6
+---
 
-Gets OS info including name, kernel version, and type
+### RX.GET_BAND_ACTIVITY
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.GET_OS","value":""}|
+Returns current band activity keyed by frequency offset.
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+**Request**:
+```json
+{"params":{},"type":"RX.GET_BAND_ACTIVITY","value":""}
+```
 
-| Response |
-|----------|
-|{"params":{"OS_KERNEL":"linux","OS_KERNEL_VERSION":"6.14.0-37-generic","OS_NAME":"Ubuntu 24.04.3 LTS","_ID":269977840701},"type":"STATION.GET_OS","value":""}|
+**Response** (`RX.BAND_ACTIVITY`):
+```json
+{
+  "type": "RX.BAND_ACTIVITY",
+  "value": "",
+  "params": {
+    "_ID": 269560000000,
+    "1067": {
+      "DIAL": 7078000,
+      "FREQ": 7079067,
+      "OFFSET": 1067,
+      "TEXT": "W6OEM: VE3SOY HEARTBEAT SNR -20 ",
+      "SNR": -7,
+      "UTC": 1768860611907
+    }
+  }
+}
+```
 
+Each offset value is a key in `params` with a nested detail object.
 
-# STATION.GET_SPOT
-[!note] API >= 2.6
+---
 
-Gets status of SPOT setting
+### RX.GET_TEXT
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.GET_SPOT","value":""}|
+Gets the contents of the directed message (RX) window (last 1024 characters).
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+**Request**:
+```json
+{"params":{},"type":"RX.GET_TEXT","value":""}
+```
 
-| Response |
-|----------|
-|{"params":{"_ID":270409823907,"value":true},"type":"STATION.SPOT","value":""}|
+**Response** (`RX.TEXT`):
+```json
+{"params":{"_ID":269562514193},"type":"RX.TEXT","value":"...decoded text..."}
+```
 
+---
 
-# STATION.SET_SPOT
-[!note] API >= 2.6
+### TX.GET_TEXT
 
-Sets status of SPOT setting
+Gets the current text in the transmit message box (last 1024 characters).
 
-| End Point |
-|-----------|
-|{"params":{},"type":"STATION.SET_SPOT","value":"true"}|
+**Request**:
+```json
+{"params":{},"type":"TX.GET_TEXT","value":""}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | true/false |
+**Response** (`TX.TEXT`):
+```json
+{"params":{"_ID":269562593590},"type":"TX.TEXT","value":""}
+```
 
-| Response |
-|----------|
-|{"params":{"_ID":270409737648,"value":true},"type":"STATION.SPOT","value":""}|
+---
 
+### TX.SET_TEXT
 
-# RX.GET_CALL_ACTIVITY
-API <= 2.6
+Sets the text in the transmit message box.
 
-Returns the recent call activity
+**Request**:
+```json
+{"params":{},"type":"TX.SET_TEXT","value":"KJ4CTD: KJ4YQK HELLO"}
+```
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RX.GET_CALL_ACTIVITY","value":""}|
+**Response** (`TX.TEXT`):
+```json
+{"params":{"_ID":269563119535},"type":"TX.TEXT","value":"KJ4CTD: KJ4YQK HELLO"}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+---
 
-| Response |
-|----------|
-|{"params":{"":{"GRID":"","SNR":0,"UTC":0},"AB4WV":{"GRID":"","SNR":-18,"UTC":1768858992167},"K4EXA":{"GRID":"EM63","SNR":-18,"UTC":1768858242147},"type":"RX.CALL_ACTIVITY","value":""}|
+### TX.SEND_MESSAGE
 
+Enqueues a message for transmission in the next transmit cycle.
 
-# RX.GET_CALL_SELECTED
-API <= 2.6
+**Request**:
+```json
+{"params":{},"type":"TX.SEND_MESSAGE","value":"KJ4CTD: W1AW HELLO"}
+```
 
-Returns the callsign of a station that has been selected in the UI.
+**IMPORTANT**: If the message text box already has text displayed, the new message
+may not be transmitted. The value is placed in the transmit queue via
+`enqueueMessage()` and `processTxQueue()`.
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RX.GET_CALL_SELECTED","value":""}|
+**Response**: The app emits `RIG.PTT` (on), `TX.FRAME` (tones), `RIG.PTT` (off)
+sequences as transmission occurs.
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+---
 
-| Response |
-|----------|
-|{"params":{"_ID":269560590229},"type":"RX.CALL_SELECTED","value":""}|
-|{"params":{"_ID":269560649847},"type":"RX.CALL_SELECTED","value":"KM4PVB"}|
+### TX.GET_QUEUE_DEPTH
 
-1) First form is if no callsign is currently selected in the UI.
+Gets the number of messages remaining in the transmit queue. *API 2.6+*
 
-2) Second form is the selected callsign in the UI.
+**Request**:
+```json
+{"params":{},"type":"TX.GET_QUEUE_DEPTH","value":""}
+```
 
+**Response** (`TX.QUEUE_DEPTH`):
+```json
+{"params":{"DEPTH":2,"_ID":270440267253},"type":"TX.QUEUE_DEPTH","value":""}
+```
 
-# RX.GET_BAND_ACTIVITY
-API <= 2.6
+| Field | Type    | Description                                           |
+|-------|---------|-------------------------------------------------------|
+| DEPTH | integer | Number of queued messages (1 if transmitting + empty queue) |
 
-Gets current band activity
+---
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RX.GET_BAND_ACTIVITY","value":""}|
+### MODE.GET_SPEED
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+Gets the current transmission speed mode.
 
-| Response |
-|----------|
-|{"params":{"1067":{"DIAL":7078000,"FREQ":7079067,"OFFSET":1067,"SNR":-7,"TEXT":"W6OEM: VE3SOY HEARTBEAT SNR -20 ","UTC":1768860611907},"616":{"DIAL":7078000,"FREQ":7078616,"OFFSET":616,"SNR":-18,"TEXT":"KM4BOF: VE3SOY HEARTBEAT SNR -09 ","UTC":1768860611918},"type":"RX.BAND_ACTIVITY","value":""}|
+**Request**:
+```json
+{"params":{},"type":"MODE.GET_SPEED","value":""}
+```
 
+**Response** (`MODE.SPEED`):
+```json
+{"params":{"SPEED":0,"_ID":269564224294},"type":"MODE.SPEED","value":""}
+```
 
-# RX.GET_TEXT
-API <= 2.6
+### Mode Speed Values
 
-Gets the contents of the directed message window
+| Mode   | Number |
+|--------|--------|
+| Normal | 0      |
+| Fast   | 1      |
+| Turbo  | 2      |
+| Slow   | 4      |
+| Ultra  | 8      |
 
-| End Point |
-|-----------|
-|{"params":{},"type":"RX.GET_TEXT","value":""}|
+Ultra speed is **experimental** and unreliable.
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+---
 
-| Response |
-|----------|
-|{"params":{"_ID":269562514193},"type":"RX.TEXT","value":"\n22:06:10 - (1950) - KJ4CTD: W4CAT SNR?  ♢ \n\n22:06:52 - (1950) - KJ4CTD: KB4DSF SNR?  ♢ \n\n22:14:29 - (800) - KJ4CTD: N0AAS HEARTBEAT SNR -18  ♢ \n\n22:25:31 - (1950) - KJ4CTD: @SITREP MSG F!104 100 ST[SC] GR[EM85] #ASRM KWC ♢ "}|
+### MODE.SET_SPEED
 
+Sets the transmission speed mode.
 
-# TX.GET_TEXT
-API <= 2.6
+**Request**:
+```json
+{"params":{"SPEED":0},"type":"MODE.SET_SPEED","value":""}
+```
 
-Gets the text to be transmitted
+| Field | Type    | Description        |
+|-------|---------|--------------------|
+| SPEED | integer | Mode speed number  |
 
-| End Point |
-|-----------|
-|{"params":{},"type":"TX.GET_TEXT","value":""}|
+**Response** (`MODE.SET_SPEED`):
+```json
+{"params":{"SPEED":0,"_ID":270412242558},"type":"MODE.SET_SPEED","value":""}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+May also trigger a `STATION.STATUS` message as a side effect.
 
-| Response |
-|----------|
-|{"params":{"_ID":269562593590},"type":"TX.TEXT","value":""}|
-|{"params":{"_ID":269562644567},"type":"TX.TEXT","value":"KJ4CTD: KJ4YQK  SOME RANDOM TEXT"}|
+---
 
-1) If text box is empty
-2) If text box has something in it
+### INBOX.GET_MESSAGES
 
-# TX.SET_TEXT
-API <= 2.6
+Fetches all inbox messages. Can filter by callsign. **Warning**: response can be very large.
 
-Sets the text to be transmitted
+**Request**:
+```json
+{"params":{},"type":"INBOX.GET_MESSAGES","value":""}
+```
 
-| End Point |
-|-----------|
-|{"params":{},"type":"TX.SET_TEXT","value":""}|
+Or filtered:
+```json
+{"params":{"CALLSIGN":"W1AW"},"type":"INBOX.GET_MESSAGES","value":""}
+```
 
-| Requirements | |
-|--------------|-|
-| value        | text to be transmitted |
+**Response** (`INBOX.MESSAGES`):
+```json
+{
+  "type": "INBOX.MESSAGES",
+  "value": "",
+  "params": {
+    "_ID": 269699597005,
+    "MESSAGES": [
+      {
+        "type": "READ",
+        "value": "",
+        "params": {
+          "CMD": " MSG ",
+          "DIAL": 7078000,
+          "FREQ": 7080318,
+          "FROM": "KJ5MIW",
+          "GRID": " EM15",
+          "OFFSET": 2318,
+          "PATH": "KJ5MIW",
+          "SNR": -15,
+          "SUBMODE": 0,
+          "TDRIFT": 0.14,
+          "TEXT": "F!104 100 ST[OK] GR[EM15] #ATTV",
+          "TO": "@SITREP",
+          "UTC": "2026-01-21 01:44:26",
+          "_ID": "269660742003"
+        }
+      }
+    ]
+  }
+}
+```
 
-| Response |
-|----------|
-|{"params":{"_ID":269563119535},"type":"TX.TEXT","value":"TEST"}|
+Message types in the list can be `"STORE"`, `"READ"`, or `"UNREAD"`.
 
+---
 
-# TX.SEND_MESSAGE
-API <= 2.6
+### INBOX.STORE_MESSAGE
 
-Sends the value in the next transmit cycle
+Stores a message in your local inbox.
 
-[NOTE] If the message window already has text displayed, this will **NOT** transmit your new message!
+**Request**:
+```json
+{"params":{"CALLSIGN":"W1AW","TEXT":"Hello from the API"},"type":"INBOX.STORE_MESSAGE","value":""}
+```
 
-| End Point |
-|-----------|
-|{"params":{},"type":"TX.SEND_MESSAGE","value":""}|
+| Field    | Type   | Description              |
+|----------|--------|--------------------------|
+| CALLSIGN | string | "TO" callsign            |
+| TEXT     | string | Message text to store    |
 
-| Requirements | |
-|--------------|-|
-| value        | text to be transmitted |
+**Response** (`INBOX.MESSAGE`):
+```json
+{"params":{"ID":228,"_ID":269569847892},"type":"INBOX.MESSAGE","value":""}
+```
 
-| Response |
-|----------|
-|{"params":{"PTT":true,"UTC":1768862879801,"_ID":-1},"type":"RIG.PTT","value":"on"}|
-|{"params":{"TONES":[4,2,5,6,1,3,0,1,0,2,6,6,3,1,6,6,4,0,1,7,0,7,2,6,2,6,0,4,3,4,5,2,3,5,2,0,4,2,5,6,1,3,0,3,4,2,5,4,5,7,0,1,6,3,6,7,0,2,3,5,6,4,5,7,4,0,0,1,7,3,6,4,4,2,5,6,1,3,0],"_ID":-1},"type":"TX.FRAME","value":""}|
-|{"params":{"PTT":false,"UTC":1768862893402,"_ID":-1},"type":"RIG.PTT","value":"off"}|
-|{"params":{"PTT":true,"UTC":1768862894801,"_ID":-1},"type":"RIG.PTT","value":"on"}|
-|{"params":{"TONES":[4,2,5,6,1,3,0,2,3,7,1,3,7,7,5,2,2,4,1,1,2,2,1,1,5,3,5,4,0,7,0,5,2,1,6,5,4,2,5,6,1,3,0,7,1,6,4,4,3,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,2,6,7,1,2,4,2,5,6,1,3,0],"_ID":-1},"type":"TX.FRAME","value":""}|
-|{"params":{"PTT":false,"UTC":1768862908402,"_ID":-1},"type":"RIG.PTT","value":"off"}|
+| Field | Type    | Description                |
+|-------|---------|----------------------------|
+| ID    | integer | Database row ID of stored message |
 
-1) Trigger PTT on
-2) Send the message tones
-3) Trigger PTT off
-4) Trigger PTT on
-5) Send the message tones
-6) Trigger PTT off
+---
 
+### WINDOW.RAISE
 
-# TX.GET_QUEUE_DEPTH
-[!note] API >= 2.6
+Brings the JS8Call window to the foreground (OS permitting).
 
-Gets the number of messages left in the transmit queue.
+**Request**:
+```json
+{"params":{},"type":"WINDOW.RAISE","value":""}
+```
 
-| End Point |
-|-----------|
-|{"params":{},"type":"TX.GET_QUEUE_DEPTH","value":""}|
+**Response**: None.
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+---
 
-| Response |
-|----------|
-|{"params":{"DEPTH":2,"_ID":270440267253},"type":"TX.QUEUE_DEPTH","value":""}|
+## WSJT-X UDP Binary Protocol
 
+JS8Call-Improved can optionally send and receive WSJT-X binary protocol messages
+over UDP. This allows integration with logging programs (e.g., JTAlert, GridTracker,
+Log4OM) that support the WSJT-X protocol.
 
-# MODE.GET_SPEED
-API <= 2.6
+### Configuration
 
-Gets the currently set transmit mode speed
+- Enable in `Settings -> Reporting -> WSJT-X Protocol`
+- Default port: **2237**
+- Default server: `127.0.0.1`
+- Supports multicast addresses with configurable TTL
+- Schema negotiation: starts at schema 2, negotiates up to 3
 
-| End Point |
-|-----------|
-|{"params":{},"type":"MODE.GET_SPEED","value":""}|
+### Outgoing Messages (JS8Call -> Client)
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+| Type         | ID | Description                                        |
+|--------------|----|----------------------------------------------------|
+| Heartbeat    | 0  | Periodic presence announcement (every 15s)         |
+| Status       | 1  | Station status (freq, mode, TX state, callsigns)   |
+| Decode       | 2  | Decoded message (SNR, time, freq, text)            |
+| Clear        | 3  | Clear decodes notification                         |
+| QSOLogged    | 5  | Logged QSO details                                 |
+| Close        | 6  | Application shutting down                          |
+| LoggedADIF   | 12 | ADIF record for logged QSO (with WSJT-X header)   |
 
-| Response |
-|----------|
-|{"params":{"SPEED":0,"_ID":269564224294},"type":"MODE.SPEED","value":""}|
-|{"params":{"SPEED":1,"_ID":269564372867},"type":"MODE.SPEED","value":""}|
-|{"params":{"SPEED":2,"_ID":269564383363},"type":"MODE.SPEED","value":""}|
-|{"params":{"SPEED":4,"_ID":269564510080},"type":"MODE.SPEED","value":""}|
-|{"params":{"SPEED":8,"_ID":269564511182},"type":"MODE.SPEED","value":""}|
+### Incoming Messages (Client -> JS8Call)
 
-# MODE.SET_SPEED
-API <= 2.6
+| Type      | ID | Description                              | Mapping                   |
+|-----------|-----|------------------------------------------|---------------------------|
+| Reply     | 4  | Reply to a decode                        | TODO (not yet mapped)     |
+| Clear     | 3  | Clear decodes request                    | Emits `clear_decodes`     |
+| Close     | 6  | Close application                        | Emits `close`             |
+| Replay    | 7  | Replay old decodes                       | Emits `replay`            |
+| HaltTx    | 8  | Halt transmission                        | TODO (not fully mapped)   |
+| FreeText  | 9  | Set free text and optionally send        | Maps to `TX.SET_TEXT` + `TX.SEND_MESSAGE` |
+| Location  | 11 | Set grid location                        | Maps to `STATION.SET_GRID` |
 
-Sets the currently set transmit mode speed
+### Binary Format
 
-| End Point |
-|-----------|
-|{"params":{"SPEED":speed},"type":"MODE.SET_SPEED","value":""}|
+- **Magic number**: `0xadbccbda` (4 bytes, big-endian)
+- **Schema number**: `quint32` (4 bytes)
+- **Message type**: `quint32` (4 bytes)
+- **Application ID**: `utf8` string (length-prefixed QByteArray)
+- **Payload**: Type-specific fields serialized via QDataStream (Qt 5.4 format for schema 3)
 
-| Requirements | |
-|--------------|-|
-| speed        | mode speed [number](#mode-speeds) |
-| value        | empty string |
+Strings are serialized as QByteArray: `quint32` length followed by UTF-8 bytes.
+Null strings use length `0xffffffff`.
 
-| Response |
-|----------|
-|{"params":{"DIAL":7078000,"FREQ":7079950,"OFFSET":1950,"SELECTED":"","SPEED":0,"_ID":"269564663038"},"type":"STATION.STATUS","value":""}|
-|{"params":{"SPEED":0,"_ID":270412242558},"type":"MODE.SET_SPEED","value":""}|
+**Source files**: `JS8_UDP/WSJTXMessageClient.cpp`, `JS8_UDP/WSJTXMessageMapper.cpp`,
+`JS8_UDP/NetworkMessage.h`
 
-* Sometimes it comes back with the first form.
+---
 
+## Experimental / TODO
 
-## MODE Speeds
-| Mode  | Number |
-|-------|--------|
-| Normal|   0    |
-| Fast  |   1    |
-| Turbo |   2    |
-| Slow  |   4    |
-| Ultra |   8    |
-Please note, Ultra speed is an *experimental* and unreliable speed.
+These are message types found in the source code that are commented out,
+partially implemented, or marked as TODO.
 
-# INBOX.GET_MESSAGES
-API <= 2.6
+### MAIN.RX / MAIN.TX / MAIN.AUTO / MAIN.HB
 
-Fetches all Inbox messages, warning, this could be very large
+Found in `networkMessage.cpp` as TODO comments. Inspired by FLDigi.
+Not implemented.
 
-| End Point |
-|-----------|
-|{"params":{},"type":"INBOX.GET_MESSAGES","value":""}|
+```cpp
+// TODO: MAIN.RX - Turn on RX
+// TODO: MAIN.TX - Transmit
+// TODO: MAIN.AUTO - Auto
+// TODO: MAIN.HB - HB
+```
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+### RX.DIRECTED.ME
 
-| Response |
-|----------|
-|{"params":{"MESSAGES":[{"params":{"CMD":" MSG ","DIAL":7078000,"FREQ":7080318,"FROM":"KJ5MIW","GRID":" EM15","OFFSET":2318,"PATH":"KJ5MIW","SNR":-15,"SUBMODE":0,"TDRIFT":0.13999998569488525,"TEXT":"F!104 100 ST[OK] GR[EM15] #ATTV","TO":"@SITREP","UTC":"2026-01-21 01:44:26","_ID":"269660742003"},"type":"READ","value":""}],"_ID":269699597005},"type":"INBOX.MESSAGES","value":""}|
+Found in `processCommandActivity.cpp` (commented out). Would emit directed
+messages specifically addressed to the local station as a separate message type.
 
-``MESSAGES`` is a comma seperated list of message records, each record is contained within brackets.
+```json
+{
+  "type": "RX.DIRECTED.ME",
+  "value": "...",
+  "params": {
+    "_ID": -1,
+    "FROM": "...",
+    "TO": "...",
+    "CMD": "...",
+    ...same fields as RX.DIRECTED...
+  }
+}
+```
 
+### WSJT-X Reply mapping
 
-# INBOX.STORE_MESSAGE
-API <= 2.6
+The `handleReply()` in `WSJTXMessageMapper.cpp` has a TODO to map WSJT-X Reply
+messages to JS8Call actions (e.g., double-click decode simulation).
 
-Stores a message in YOUR Inbox
+### WSJT-X HaltTx mapping
 
-| End Point |
-|-----------|
-|{"params":{"CALLSIGN":callsign,"TEXT":text},"type":"INBOX.STORE_MESSAGE","value":""}}|
+The `handleHaltTx()` in `WSJTXMessageMapper.cpp` has a TODO to map WSJT-X
+HaltTx messages to immediately stop TX in JS8Call.
 
-| Requirements | |
-|--------------|-|
-| callsign | "TO" callsign in ""|
-| text     | Text to store in ""|
-| value    | empty string |
+---
 
-| Response |
-|----------|
-| {"params":{"ID":228,"_ID":269569847892},"type":"INBOX.MESSAGE","value":""} |
+## Complete Message Type Reference
 
+### Messages emitted by JS8Call (App -> Client)
 
-# WINDOW.RAISE
-API <= 2.6
+| Type              | Trigger                                  | Auto/Response |
+|-------------------|------------------------------------------|---------------|
+| `RIG.PTT`         | PTT state changes                        | Auto          |
+| `RIG.FREQ`        | Band/frequency change; or RIG.GET_FREQ   | Both          |
+| `RIG.PTT_STATUS`  | Response to RIG.GET_PTT                  | Response      |
+| `RIG.SET_TUNE`    | Response to RIG.SET_TUNE                 | Response      |
+| `RIG.TX_HALT`     | Response to RIG.TX_HALT                  | Response      |
+| `RX.ACTIVITY`     | Every decoded frame                      | Auto          |
+| `RX.DIRECTED`     | Directed/command message decoded         | Auto          |
+| `RX.SPOT`         | Station spotted                          | Auto          |
+| `RX.CALL_ACTIVITY`| Response to RX.GET_CALL_ACTIVITY         | Response      |
+| `RX.CALL_SELECTED`| Response to RX.GET_CALL_SELECTED         | Response      |
+| `RX.BAND_ACTIVITY`| Response to RX.GET_BAND_ACTIVITY         | Response      |
+| `RX.TEXT`         | Response to RX.GET_TEXT                   | Response      |
+| `TX.TEXT`         | Response to TX.GET_TEXT or TX.SET_TEXT    | Response      |
+| `TX.FRAME`        | Each transmitted frame (tones)           | Auto          |
+| `TX.QUEUE_DEPTH`  | Response to TX.GET_QUEUE_DEPTH           | Response      |
+| `STATION.CALLSIGN`| Response to STATION.GET_CALLSIGN         | Response      |
+| `STATION.GRID`    | Response to STATION.GET/SET_GRID         | Response      |
+| `STATION.INFO`    | Response to STATION.GET/SET_INFO         | Response      |
+| `STATION.STATUS`  | Periodic/state change; or GET_STATUS     | Both          |
+| `STATION.CLOSING` | Application shutting down                | Auto          |
+| `STATION.VERSION` | Response to STATION.VERSION              | Response      |
+| `STATION.GET_OS`  | Response to STATION.GET_OS               | Response      |
+| `STATION.SPOT`    | Response to STATION.GET/SET_SPOT         | Response      |
+| `MODE.SPEED`      | Response to MODE.GET_SPEED               | Response      |
+| `MODE.SET_SPEED`  | Response to MODE.SET_SPEED               | Response      |
+| `INBOX.MESSAGES`  | Response to INBOX.GET_MESSAGES           | Response      |
+| `INBOX.MESSAGE`   | Response to INBOX.STORE_MESSAGE          | Response      |
+| `LOG.QSO`         | QSO logged                               | Auto          |
+| `API.ERROR`       | JSON parse error or connection full      | Auto          |
+| `PING`            | UDP client auto-ping every 15s           | Auto (UDP)    |
+| `CLOSE`           | UDP client shutdown                      | Auto (UDP)    |
 
-If allowed by OS. brings the program to the front
+### Messages accepted by JS8Call (Client -> App)
 
-| End Point |
-|-----------|
-|{"params":{},"type":"WINDOW.RAISE","value":""}|
+| Type                   | Action                                 | Since |
+|------------------------|----------------------------------------|-------|
+| `PING`                 | Wake up / no-op                        | 2.5   |
+| `RIG.GET_FREQ`         | Get frequency info                     | 2.5   |
+| `RIG.SET_FREQ`         | Set dial frequency and/or offset       | 2.5   |
+| `RIG.GET_PTT`          | Get PTT status                         | 2.6   |
+| `RIG.SET_TUNE`         | Toggle tune on/off                     | 2.6   |
+| `RIG.TX_HALT`          | Emergency stop transmitter             | 2.6   |
+| `STATION.GET_CALLSIGN` | Get station callsign                   | 2.5   |
+| `STATION.GET_GRID`     | Get grid square                        | 2.5   |
+| `STATION.SET_GRID`     | Set dynamic grid square                | 2.5   |
+| `STATION.GET_INFO`     | Get station info                       | 2.5   |
+| `STATION.SET_INFO`     | Set dynamic station info               | 2.5   |
+| `STATION.GET_STATUS`   | Get station status                     | 2.5   |
+| `STATION.SET_STATUS`   | Set dynamic station status             | 2.5   |
+| `STATION.VERSION`      | Get JS8Call version                    | 2.6   |
+| `STATION.GET_OS`       | Get OS information                     | 2.6   |
+| `STATION.GET_SPOT`     | Get spot button state                  | 2.6   |
+| `STATION.SET_SPOT`     | Set spot button state                  | 2.6   |
+| `RX.GET_CALL_ACTIVITY` | Get heard callsigns                    | 2.5   |
+| `RX.GET_CALL_SELECTED` | Get selected callsign                  | 2.5   |
+| `RX.GET_BAND_ACTIVITY` | Get band activity                      | 2.5   |
+| `RX.GET_TEXT`          | Get RX text window contents            | 2.5   |
+| `TX.GET_TEXT`          | Get TX text box contents               | 2.5   |
+| `TX.SET_TEXT`          | Set TX text box contents               | 2.5   |
+| `TX.SEND_MESSAGE`     | Queue message for transmission         | 2.5   |
+| `TX.GET_QUEUE_DEPTH`  | Get TX queue depth                     | 2.6   |
+| `MODE.GET_SPEED`      | Get current speed mode                 | 2.5   |
+| `MODE.SET_SPEED`      | Set speed mode                         | 2.5   |
+| `INBOX.GET_MESSAGES`  | Get inbox messages                     | 2.5   |
+| `INBOX.STORE_MESSAGE` | Store message in inbox                 | 2.5   |
+| `WINDOW.RAISE`        | Bring window to front                  | 2.5   |
 
-| Requirements | |
-|--------------|-|
-| value        | empty string |
+---
 
-| Response |
-|----------|
-| None     |
+## Quick Start Example
 
+### Connect via TCP (telnet)
 
+```bash
+telnet 127.0.0.1 2442
+```
+
+### Get station callsign
+
+```json
+{"params":{},"type":"STATION.GET_CALLSIGN","value":""}
+```
+
+### Send a message
+
+```json
+{"params":{},"type":"TX.SEND_MESSAGE","value":"WM8Q: W1AW HELLO"}
+```
+
+### Monitor for decodes
+
+Simply connect and listen. `RX.ACTIVITY` and `RX.DIRECTED` messages will stream
+as stations are decoded.
+
+---
+
+## Source File Index
+
+| File | Purpose |
+|------|---------|
+| `JS8_Main/Message.h` | Message class (JSON serialization) |
+| `JS8_Main/MessageServer.h/.cpp` | TCP server (accepts client connections) |
+| `JS8_Main/MessageClient.h/.cpp` | UDP client (sends to external server) |
+| `JS8_Mainwindow/networkMessage.cpp` | Command router (all request handling) |
+| `JS8_Mainwindow/processRxActivity.cpp` | RX.ACTIVITY emission |
+| `JS8_Mainwindow/processCommandActivity.cpp` | RX.DIRECTED emission |
+| `JS8_UI/mainwindow.cpp` | PTT, tones, spots, QSO log, status, sendNetworkMessage() |
+| `JS8_UI/Configuration.cpp` | Port/address/enable settings |
+| `JS8_UDP/WSJTXMessageClient.h/.cpp` | WSJT-X binary UDP protocol client |
+| `JS8_UDP/WSJTXMessageMapper.h/.cpp` | Maps WSJT-X messages to JS8Call actions |
+| `JS8_UDP/NetworkMessage.h` | WSJT-X binary protocol definition |

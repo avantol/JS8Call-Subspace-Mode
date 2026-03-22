@@ -1017,7 +1017,8 @@ class UI_Constructor : public QMainWindow {
     void spotAprsGrid(int dial, int offset, int snr, QString callsign,
                       QString grid);
     Radio::Frequency dialFrequency();
-    void setSubmode(int submode);
+    void setSubmode(int submode);     // full reconfiguration (radio, FFT, tables)
+    void switchSubmode(int submode);  // lightweight UI-only mode switch
     void updateCurrentBand();
     void displayDialFrequency();
     void transmitDisplay(bool);

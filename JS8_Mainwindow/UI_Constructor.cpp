@@ -755,38 +755,102 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     ui->textEditRX->viewport()->installEventFilter(
         new EventFilter::MouseButtonDblClick(
             [this](QMouseEvent *) {
-                QTimer::singleShot(150, this, [this]() {
-                    // When we double click the rx window, we send the selected
-                    // text to the log dialog when the text could be an snr
-                    // value prefixed with a - or +, we extend the selection to
-                    // include it.
+                // Double-click in conversation history: parse callsign for reply
+                auto cursor = ui->textEditRX->textCursor();
+                auto block = cursor.block();
+                auto lineText = block.text();
 
-                    auto textCursor = ui->textEditRX->textCursor();
-                    auto text = textCursor.selectedText();
+                // Find the last valid CALLSIGN: pattern in the line
+                // Handles both "N - HH:MM:SS - (freq) - CALL: msg" and
+                // "HH:MM:SS - (freq) - CALL: msg" formats
+                QString callsign;
+                int searchFrom = 0;
 
-                    if (text.isEmpty())
-                        return;
+                // Skip past the ") - " that precedes the message content
+                int contentStart = lineText.lastIndexOf(QStringLiteral(") - "));
+                if (contentStart >= 0)
+                    searchFrom = contentStart + 4;
 
-                    auto const start = textCursor.selectionStart();
-                    auto const end = textCursor.selectionEnd();
+                // Scan for last CALLSIGN: pattern (handles multi-message lines)
+                int lastColonPos = -1;
+                for (int i = lineText.length() - 1; i >= searchFrom; --i) {
+                    if (lineText[i] == ':') {
+                        lastColonPos = i;
+                        break;
+                    }
+                }
 
-                    textCursor.clearSelection();
-                    textCursor.setPosition(start);
-                    textCursor.movePosition(QTextCursor::PreviousCharacter,
-                                            QTextCursor::MoveAnchor);
-                    textCursor.movePosition(QTextCursor::NextCharacter,
-                                            QTextCursor::KeepAnchor,
-                                            1 + end - start);
+                if (lastColonPos > searchFrom) {
+                    // Extract word before the last colon
+                    int wordStart = lastColonPos - 1;
+                    while (wordStart >= searchFrom && lineText[wordStart] != ' ')
+                        --wordStart;
+                    ++wordStart;
+                    QString candidate = lineText.mid(wordStart, lastColonPos - wordStart).trimmed();
 
-                    if (auto const prev = textCursor.selectedText();
-                        prev.startsWith("-") || prev.startsWith("+")) {
-                        ui->textEditRX->setTextCursor(textCursor);
-                        text = prev;
+                    // Validate: 3-10 chars, has letters and digits (callsign pattern)
+                    if (candidate.length() >= 3 && candidate.length() <= 10) {
+                        bool hasLetter = false, hasDigit = false;
+                        for (auto ch : candidate) {
+                            if (ch.isLetter()) hasLetter = true;
+                            if (ch.isDigit()) hasDigit = true;
+                        }
+                        if (hasLetter && hasDigit) {
+                            // If it's our own callsign, look for the target after the colon
+                            if (candidate == m_config.my_callsign()) {
+                                QString afterColon = lineText.mid(lastColonPos + 1).trimmed();
+                                QString target = afterColon.split(' ').first();
+                                if (target.length() >= 3 && target.length() <= 10) {
+                                    bool tl = false, td = false;
+                                    for (auto ch : target) {
+                                        if (ch.isLetter()) tl = true;
+                                        if (ch.isDigit()) td = true;
+                                    }
+                                    if (tl && td)
+                                        callsign = target;
+                                }
+                            } else {
+                                callsign = candidate;
+                            }
+                        }
+                    }
+                }
+
+                if (!callsign.isEmpty()) {
+                    // Clear existing selections first to prevent stale callsign
+                    ui->tableWidgetRXAll->selectionModel()->clearSelection();
+                    ui->tableWidgetCalls->selectionModel()->clearSelection();
+
+                    // Select in callsign table if present
+                    for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
+                        auto item = ui->tableWidgetCalls->item(r, 0);
+                        if (item && item->data(Qt::UserRole).toString() == callsign) {
+                            ui->tableWidgetCalls->selectRow(r);
+                            break;
+                        }
                     }
 
-                    m_logDlg->acceptText(text);
-                });
-                return false;
+                    // Switch mode based on the line's mode indicator
+                    auto trimmed = lineText.trimmed();
+                    if (trimmed.startsWith(QString::fromUtf8("\xe2\x9a\xa1"))) {
+                        if (m_nSubMode != Varicode::JS8CallFT2) {
+                            m_prevStandardSubmode = m_nSubMode;
+                            switchSubmode(Varicode::JS8CallFT2);
+                        }
+                    } else if (trimmed.startsWith("N ") || trimmed.startsWith("F ") ||
+                               trimmed.startsWith("T ") || trimmed.startsWith("S ")) {
+                        if (m_nSubMode == Varicode::JS8CallFT2) {
+                            switchSubmode(m_prevStandardSubmode);
+                        }
+                    }
+
+                    callsignSelectedChanged(m_prevSelectedCallsign, callsign);
+                    ui->extFreeTextMsgEdit->setFocus();
+                } else {
+                    // No valid callsign found — deselect
+                    callsignSelectedChanged(m_prevSelectedCallsign, QString());
+                }
+                return true;  // consume event
             },
             this));
 

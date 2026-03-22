@@ -1236,7 +1236,6 @@ Radio::Frequency UI_Constructor::dialFrequency() {
 }
 
 void UI_Constructor::setSubmode(int submode) {
-    m_submodeChanging = true;
     m_nSubMode = submode;
     ui->actionModeJS8Normal->setChecked(submode == Varicode::JS8CallNormal);
     ui->actionModeJS8Fast->setChecked(submode == Varicode::JS8CallFast);
@@ -1252,16 +1251,40 @@ void UI_Constructor::setSubmode(int submode) {
         ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
         : JS8::Submode::name(submode));
 
-    // Update mode switch buttons
-    if (m_modeBtnNormal) m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal);
-    if (m_modeBtnFast)   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);
-    if (m_modeBtnTurbo)  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);
-    if (m_modeBtnFT2)    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);
+    // Update mode switch buttons — block signals to prevent re-triggering
+    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); }
+    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false); }
+    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false); }
+    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false); }
 
     setupJS8();
     Q_EMIT submodeChanged(Varicode::intToSubmode(submode));
-    // Clear guard after queued signals have been processed
-    QTimer::singleShot(0, this, [this]() { m_submodeChanging = false; });
+}
+
+void UI_Constructor::switchSubmode(int submode) {
+    // Lightweight mode switch — UI indicators only, no radio reconfiguration.
+    // Use for call-selection mode switching where setupJS8() is unnecessary.
+    m_nSubMode = submode;
+    ui->actionModeJS8Normal->setChecked(submode == Varicode::JS8CallNormal);
+    ui->actionModeJS8Fast->setChecked(submode == Varicode::JS8CallFast);
+    ui->actionModeJS8Turbo->setChecked(submode == Varicode::JS8CallTurbo);
+    ui->actionModeJS8Slow->setChecked(submode == Varicode::JS8CallSlow);
+    ui->actionModeJS8Ultra->setChecked(submode == Varicode::JS8CallUltra);
+#ifdef JS8_ENABLE_FT2
+    ui->actionModeFT2->setChecked(submode == Varicode::JS8CallFT2);
+#endif
+
+    mode_label.setText(submode == Varicode::JS8CallFT2
+        ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
+        : JS8::Submode::name(submode));
+
+    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); }
+    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false); }
+    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false); }
+    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false); }
+
+    prepareHeartbeatMode(canCurrentModeSendHeartbeat() &&
+                         ui->actionModeJS8HB->isChecked());
 }
 
 void UI_Constructor::updateCurrentBand() {
@@ -3816,14 +3839,11 @@ void UI_Constructor::tableSelectionChanged(QItemSelection const &,
 
     auto const selectedCall = callsignSelected();
 
-    if (selectedCall != m_prevSelectedCallsign) {
+    // Only act on actual callsign changes — ignore empty selections from
+    // table rebuilds (setupJS8, displayBandActivity, etc.)
+    if (!selectedCall.isEmpty() && selectedCall != m_prevSelectedCallsign) {
         callsignSelectedChanged(m_prevSelectedCallsign, selectedCall);
     }
-
-    // Mode switching is handled explicitly via:
-    // - Mode buttons (N/F/T/⚡)
-    // - Menu (Mode → Normal/Fast/Turbo/Subspace)
-    // - Double-click in RX text area (auto-switches based on caller's mode)
 
     // Auto-focus outgoing message box
     ui->extFreeTextMsgEdit->setFocus();
@@ -4489,14 +4509,15 @@ void UI_Constructor::setupJS8() {
     m_detector->setTRPeriod(JS8_NTMAX); // TODO - not thread safe
 
     // Update mode switch buttons and status bar label
+    // Block signals to prevent setChecked() from re-triggering setSubmode()
     mode_label.setText(m_nSubMode == Varicode::JS8CallFT2
         ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
         : JS8::Submode::name(m_nSubMode));
     bool canChangeMode = !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
-    if (m_modeBtnNormal) { m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); m_modeBtnNormal->setEnabled(canChangeMode); }
-    if (m_modeBtnFast)   { m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     m_modeBtnFast->setEnabled(canChangeMode); }
-    if (m_modeBtnTurbo)  { m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->setEnabled(canChangeMode); }
-    if (m_modeBtnFT2)    { m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       m_modeBtnFT2->setEnabled(canChangeMode); }
+    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); m_modeBtnNormal->setEnabled(canChangeMode); }
+    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false);   m_modeBtnFast->setEnabled(canChangeMode); }
+    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false);  m_modeBtnTurbo->setEnabled(canChangeMode); }
+    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false);    m_modeBtnFT2->setEnabled(canChangeMode); }
 
     updateTextDisplay();
     refreshTextDisplay();
@@ -5361,10 +5382,10 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
     // Switch mode to match the selected row's submode
     if (activitySubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
         m_prevStandardSubmode = m_nSubMode;
-        setSubmode(Varicode::JS8CallFT2);
+        switchSubmode(Varicode::JS8CallFT2);
     } else if (activitySubmode != -1 && activitySubmode != Varicode::JS8CallFT2 &&
                m_nSubMode == Varicode::JS8CallFT2) {
-        setSubmode(m_prevStandardSubmode);
+        switchSubmode(m_prevStandardSubmode);
     }
 
     if (!activityText.isEmpty()) {
@@ -6059,7 +6080,9 @@ void UI_Constructor::updateTextDisplay() {
     bool isTransmitting = isMessageQueuedForTransmit();
     bool emptyText = ui->extFreeTextMsgEdit->toPlainText().isEmpty();
 
-    ui->startTxButton->setDisabled(!canTransmit || isTransmitting || emptyText);
+    // Send button state is managed by updateTxButtonDisplay() — skip here
+    // to prevent flash during mode changes
+    // ui->startTxButton->setDisabled(!canTransmit || isTransmitting || emptyText);
 
     if (m_txTextDirty) {
         // debounce frame and word count
@@ -6261,7 +6284,9 @@ QString UI_Constructor::callsignSelected(bool) {
     }
 #endif
 
-    return QString();
+    // Fall back to callsign set via double-click in conversation window
+    // (may not be in any table)
+    return m_prevSelectedCallsign;
 }
 
 void UI_Constructor::callsignSelectedChanged(QString /*old*/,
@@ -6318,6 +6343,18 @@ void UI_Constructor::callsignSelectedChanged(QString /*old*/,
 #endif
 
     m_prevSelectedCallsign = selectedCall;
+
+    // Auto-switch mode to match selected callsign's submode
+    // Uses switchSubmode() — lightweight UI update only, no radio reconfiguration
+    if (!selectedCall.isEmpty() && m_callActivity.contains(selectedCall)) {
+        int callSubmode = m_callActivity[selectedCall].submode;
+        if (callSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
+            m_prevStandardSubmode = m_nSubMode;
+            switchSubmode(Varicode::JS8CallFT2);
+        } else if (callSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
+            switchSubmode(m_prevStandardSubmode);
+        }
+    }
 
     // immediately update the display
     updateButtonDisplay();
