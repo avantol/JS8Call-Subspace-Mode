@@ -97,6 +97,22 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
     m_device = device;
     m_format = format;
     m_msBuffered = msBuffered;
+
+#ifdef Q_OS_WIN
+    // Pre-create the QAudioSink so WASAPI initialization happens at
+    // startup, not on the first TX frame. Without this, the first audio
+    // chunk is dropped due to WASAPI driver initialization latency.
+    if (!m_device.isNull()) {
+        if (m_stream) {
+            m_stream->disconnect(this);
+        }
+        m_stream.reset(new QAudioSink(m_device, m_format));
+        checkStream();
+        m_error = false;
+        connect(m_stream.data(), &QAudioSink::stateChanged, this,
+                &SoundOutput::handleStateChanged);
+    }
+#endif
 }
 
 /**
