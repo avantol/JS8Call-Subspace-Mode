@@ -99,18 +99,24 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
     m_msBuffered = msBuffered;
 
 #ifdef Q_OS_WIN
-    // Pre-create the QAudioSink so WASAPI initialization happens at
-    // startup, not on the first TX frame. Without this, the first audio
-    // chunk is dropped due to WASAPI driver initialization latency.
+    // On Windows, pre-create and warm up the QAudioSink so WASAPI
+    // IAudioClient::Initialize() (~500ms) happens at startup, not on
+    // the first TX frame. We start the sink with the Modulator (which
+    // produces zeros when idle) to force WASAPI initialization, then
+    // suspend it. When the first real TX comes, restart() calls
+    // resume() instead of start() — no re-initialization delay.
     if (!m_device.isNull()) {
         if (m_stream) {
             m_stream->disconnect(this);
+            m_stream->reset();
+            m_stream->stop();
         }
         m_stream.reset(new QAudioSink(m_device, m_format));
         checkStream();
         m_error = false;
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
                 &SoundOutput::handleStateChanged);
+        qWarning() << "[FT2-TX] SoundOutput: WASAPI warmup — pre-initializing audio sink";
     }
 #endif
 }
@@ -128,15 +134,14 @@ void SoundOutput::restart(QIODevice *source) {
 #ifdef Q_OS_WIN
         // On Windows, reuse the existing QAudioSink to avoid WASAPI
         // initialization latency that drops the first audio chunk.
-        // Just stop the current stream; start() below will resume it.
+        // Use stop()+start() to reset the stream without destroying
+        // the IAudioClient.
         if (m_stream) {
             m_stream->reset();
             m_stream->stop();
         } else {
+            // Fallback: create sink if setDeviceFormat() warmup didn't run
             m_stream.reset(new QAudioSink(m_device, m_format));
-            qCDebug(soundout_js8)
-                << "SoundOutput::restart Selected audio output format:"
-                << m_stream->format();
             checkStream();
             m_error = false;
             connect(m_stream.data(), &QAudioSink::stateChanged, this,
@@ -223,8 +228,9 @@ void SoundOutput::stop() {
         m_stream->reset();
         m_stream->stop();
     }
-    // m_stream.reset ();  // XXX in WSJTX, seems like a bug, will assert after
-    // stop checks
+    // m_stream.reset ();  // XXX in WSJTX, seems like a bug
+    // On Windows, the sink is intentionally kept alive (not destroyed)
+    // to avoid WASAPI re-initialization on the next start().
 }
 
 /**
