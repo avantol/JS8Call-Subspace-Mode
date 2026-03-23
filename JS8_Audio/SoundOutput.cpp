@@ -108,13 +108,28 @@ void SoundOutput::restart(QIODevice *source) {
                << "isOpen=" << (source ? source->isOpen() : false)
                << "hasStream=" << (m_stream != nullptr);
 
-    // Always create a fresh QAudioSink. Reusing via stop()+start() causes
-    // Active→Idle oscillation on Qt 6.4 / PipeWire after several cycles.
     if (!m_device.isNull()) {
-        // Fully stop and disconnect the old sink before destroying it.
-        // Without this, the PipeWire callback thread may still reference
-        // the old sink's buffers when QScopedPointer deletes it, causing
-        // heap corruption ("double free or corruption").
+#ifdef Q_OS_WIN
+        // On Windows, reuse the existing QAudioSink to avoid WASAPI
+        // initialization latency that drops the first audio chunk.
+        // Just stop the current stream; start() below will resume it.
+        if (m_stream) {
+            m_stream->reset();
+            m_stream->stop();
+        } else {
+            m_stream.reset(new QAudioSink(m_device, m_format));
+            qCDebug(soundout_js8)
+                << "SoundOutput::restart Selected audio output format:"
+                << m_stream->format();
+            checkStream();
+            m_error = false;
+            connect(m_stream.data(), &QAudioSink::stateChanged, this,
+                    &SoundOutput::handleStateChanged);
+        }
+#else
+        // On Linux, always create a fresh QAudioSink. Reusing via
+        // stop()+start() causes Active→Idle oscillation on Qt 6.4 /
+        // PipeWire after several cycles.
         if (m_stream) {
             m_stream->disconnect(this);
             m_stream->reset();
@@ -126,9 +141,9 @@ void SoundOutput::restart(QIODevice *source) {
             << m_stream->format();
         checkStream();
         m_error = false;
-
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
                 &SoundOutput::handleStateChanged);
+#endif
     }
 
     if (!m_stream) {
