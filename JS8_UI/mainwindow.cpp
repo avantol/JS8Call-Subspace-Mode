@@ -2874,14 +2874,6 @@ void UI_Constructor::updateClockUI(const QDateTime &now) {
 //------------------------------------------------------------- //guiUpdate()
 void UI_Constructor::guiUpdate() {
 
-    // Disable mode buttons during TX
-    bool canChangeMode = !m_transmitting && !m_tune;
-    if (m_modeBtnNormal) m_modeBtnNormal->setEnabled(canChangeMode);
-    if (m_modeBtnFast)   m_modeBtnFast->setEnabled(canChangeMode);
-    if (m_modeBtnTurbo)  m_modeBtnTurbo->setEnabled(canChangeMode);
-    if (m_modeBtnSlow)   m_modeBtnSlow->setEnabled(canChangeMode);
-    if (m_modeBtnFT2)    m_modeBtnFT2->setEnabled(canChangeMode);
-
     unsigned period = JS8::Submode::period(m_nSubMode);
 
     m_TRperiod = period; // Investigate: Does anyone need this?
@@ -3014,11 +3006,12 @@ void UI_Constructor::guiUpdate() {
     // This automatically hits close to the start of each second
     // Update mode button enable state (disable during TX)
     {
-        bool canChangeMode = !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
-        if (m_modeBtnNormal) m_modeBtnNormal->setEnabled(canChangeMode);
-        if (m_modeBtnFast)   m_modeBtnFast->setEnabled(canChangeMode);
-        if (m_modeBtnTurbo)  m_modeBtnTurbo->setEnabled(canChangeMode);
-        if (m_modeBtnFT2)    m_modeBtnFT2->setEnabled(canChangeMode);
+        bool canChangeMode = !m_transmitting && !m_tune && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+        if (m_modeBtnNormal && m_modeBtnNormal->isEnabled() != canChangeMode) m_modeBtnNormal->setEnabled(canChangeMode);
+        if (m_modeBtnFast && m_modeBtnFast->isEnabled() != canChangeMode) m_modeBtnFast->setEnabled(canChangeMode);
+        if (m_modeBtnTurbo && m_modeBtnTurbo->isEnabled() != canChangeMode) m_modeBtnTurbo->setEnabled(canChangeMode);
+        if (m_modeBtnSlow && m_modeBtnSlow->isEnabled() != canChangeMode) m_modeBtnSlow->setEnabled(canChangeMode);
+        if (m_modeBtnFT2 && m_modeBtnFT2->isEnabled() != canChangeMode) m_modeBtnFT2->setEnabled(canChangeMode);
     }
 
     // and hence close to the start of each transmit period.
@@ -3403,7 +3396,12 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
         c.movePosition(QTextCursor::EndOfBlock, QTextCursor::MoveAnchor);
 
         if (!blockText.contains(m_config.eot())) {
-            found = true;
+            // Check if the existing block's mode matches the incoming submode
+            // Don't append FT2 text to a Normal block or vice versa
+            bool blockIsFT2 = blockText.startsWith(QString::fromUtf8("\xe2\x9a\xa1"));
+            bool incomingIsFT2 = (submode == Varicode::JS8CallFT2);
+            if (blockIsFT2 == incomingIsFT2)
+                found = true;
         }
     }
 
@@ -4449,10 +4447,11 @@ void UI_Constructor::setupJS8() {
     mode_label.setText(m_nSubMode == Varicode::JS8CallFT2
         ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
         : JS8::Submode::name(m_nSubMode));
-    bool canChangeMode = !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+    bool canChangeMode = !m_transmitting && !m_tune && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
     if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); m_modeBtnNormal->setEnabled(canChangeMode); }
     if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false);   m_modeBtnFast->setEnabled(canChangeMode); }
     if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false);  m_modeBtnTurbo->setEnabled(canChangeMode); }
+    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false);   m_modeBtnSlow->setEnabled(canChangeMode); }
     if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false);    m_modeBtnFT2->setEnabled(canChangeMode); }
 
     updateTextDisplay();
@@ -5285,8 +5284,13 @@ void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
     if (!item) return;
 
     int offset = item->data(Qt::UserRole).toInt();
-    auto activity = m_bandActivity.value(offset);
-    int rowSubmode = activity.isEmpty() ? -1 : activity.last().submode;
+    // Read submode from the row's speed column (set by displayBandActivity)
+    auto speedItem = ui->tableWidgetRXAll->item(row, 4);
+    int rowSubmode = speedItem ? speedItem->data(Qt::UserRole).toInt() : -1;
+
+    qWarning() << "[UI] click band activity: row=" << row << "offset=" << offset
+               << "rowSubmode=" << rowSubmode
+               << "speedText=" << (speedItem ? speedItem->text() : "null");
 
     // Find callsign: parse last CALL: from row text, fall back to m_callActivity
     QString call;
@@ -5362,13 +5366,29 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
     setFreqOffsetForRestore(offset, false);
 
     // print the history in the main window...
+    // Read submode from the row's speed column to filter by mode
+    auto speedItem = ui->tableWidgetRXAll->item(row, 4);
+    int rowSubmode = speedItem ? speedItem->data(Qt::UserRole).toInt() : -1;
+    bool rowIsFT2 = (rowSubmode == Varicode::JS8CallFT2);
+
+    qWarning() << "[UI] dblclick band activity: offset=" << offset
+               << "rowSubmode=" << rowSubmode << "rowIsFT2=" << rowIsFT2
+               << "entries=" << m_bandActivity[offset].size();
+
     int activityAging = m_config.activity_aging();
     QDateTime now = DriftingDateTime::currentDateTimeUtc();
     QDateTime firstActivity = now;
     QString activityText;
     bool isLast = false;
-    int activitySubmode = -1;
+    int activitySubmode = rowSubmode;
+    int included = 0, excluded = 0;
     foreach (auto d, m_bandActivity[offset]) {
+        // Only include entries matching the clicked row's mode
+        if ((d.submode == Varicode::JS8CallFT2) != rowIsFT2) {
+            excluded++;
+            continue;
+        }
+        included++;
         if (activityAging && d.utcTimestamp.secsTo(now) / 60 >= activityAging) {
             continue;
         }
@@ -5385,6 +5405,10 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
                                .arg(m_config.eot());
         }
     }
+
+    qWarning() << "[UI] dblclick result: included=" << included
+               << "excluded=" << excluded << "activitySubmode=" << activitySubmode
+               << "textLen=" << activityText.length();
 
     if (!activityText.isEmpty()) {
         displayTextForFreq(activityText, offset, firstActivity, false, true,
@@ -6010,6 +6034,12 @@ void UI_Constructor::updateModeButtonText() {
     ui->modeButton->setText(modeText);
 }
 
+// Helper: only set disabled if state actually changes (avoids flicker)
+static void setDisabledIfChanged(QWidget *w, bool disabled) {
+    if (w->isEnabled() == disabled)  // enabled == !disabled, so if equal, state differs
+        w->setDisabled(disabled);
+}
+
 void UI_Constructor::updateButtonDisplay() {
     bool isTransmitting = isMessageQueuedForTransmit();
 
@@ -6020,27 +6050,29 @@ void UI_Constructor::updateButtonDisplay() {
 
     bool previous_hbButtonisLongterm = m_hbButtonIsLongterm;
     m_hbButtonIsLongterm = false;
-    ui->hbMacroButton->setDisabled(isTransmitting || !m_hbModeAvailable);
+    setDisabledIfChanged(ui->hbMacroButton, isTransmitting || !m_hbModeAvailable);
     m_hbButtonIsLongterm = previous_hbButtonisLongterm;
 
     bool previous_cqButtonisLongterm = m_cqButtonIsLongterm;
     m_cqButtonIsLongterm = false;
-    ui->cqMacroButton->setDisabled(isTransmitting);
+    setDisabledIfChanged(ui->cqMacroButton, isTransmitting);
     m_cqButtonIsLongterm = previous_cqButtonisLongterm;
 
-    ui->replyMacroButton->setDisabled(isTransmitting || emptyCallsign);
-    ui->snrMacroButton->setDisabled(isTransmitting || emptyCallsign);
-    ui->infoMacroButton->setDisabled(isTransmitting || emptyInfo);
-    ui->statusMacroButton->setDisabled(isTransmitting || emptyStatus);
-    ui->macrosMacroButton->setDisabled(isTransmitting);
-    ui->queryButton->setDisabled(isTransmitting || emptyCallsign);
-    ui->deselectButton->setDisabled(isTransmitting || emptyCallsign);
-    ui->queryButton->setText(
-        emptyCallsign ? "Directed"
-                      : QString("Directed to %1").arg(selectedCallsign));
-    // Adjust minimum width to fit current text
-    auto fmDir = ui->queryButton->fontMetrics();
-    ui->queryButton->setMinimumWidth(fmDir.horizontalAdvance(ui->queryButton->text()) + 12);
+    setDisabledIfChanged(ui->replyMacroButton, isTransmitting || emptyCallsign);
+    setDisabledIfChanged(ui->snrMacroButton, isTransmitting || emptyCallsign);
+    setDisabledIfChanged(ui->infoMacroButton, isTransmitting || emptyInfo);
+    setDisabledIfChanged(ui->statusMacroButton, isTransmitting || emptyStatus);
+    setDisabledIfChanged(ui->macrosMacroButton, isTransmitting);
+    setDisabledIfChanged(ui->queryButton, isTransmitting || emptyCallsign);
+    setDisabledIfChanged(ui->deselectButton, isTransmitting || emptyCallsign);
+
+    auto directedText = emptyCallsign ? "Directed"
+                      : QString("Directed to %1").arg(selectedCallsign);
+    if (ui->queryButton->text() != directedText) {
+        ui->queryButton->setText(directedText);
+        auto fmDir = ui->queryButton->fontMetrics();
+        ui->queryButton->setMinimumWidth(fmDir.horizontalAdvance(directedText) + 12);
+    }
 
     // update mode button text
     updateModeButtonText();

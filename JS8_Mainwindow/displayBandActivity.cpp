@@ -259,7 +259,7 @@ void UI_Constructor::displayBandActivity() {
                     : name.left(1).replace("H", "N");
                 auto submodeItem = new QTableWidgetItem(displayChar);
                 submodeItem->setToolTip(name);
-                submodeItem->setData(Qt::UserRole, QVariant(name));
+                submodeItem->setData(Qt::UserRole, QVariant(submode));
                 submodeItem->setTextAlignment(Qt::AlignCenter);
                 ui->tableWidgetRXAll->setItem(row, col++, submodeItem);
 

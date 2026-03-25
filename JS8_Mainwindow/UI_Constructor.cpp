@@ -812,6 +812,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     }
                 }
 
+                qWarning() << "[UI] dblclick center: lineText=" << lineText.left(60)
+                           << "callsign=" << callsign
+                           << "searchFrom=" << searchFrom
+                           << "lastColonPos=" << lastColonPos;
+
                 if (!callsign.isEmpty()) {
                     // Determine mode from line prefix
                     auto trimmed = lineText.trimmed();
@@ -827,6 +832,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     else if (trimmed.startsWith("S "))
                         lineSubmode = Varicode::JS8CallSlow;
 
+                    qWarning() << "[UI] dblclick center: selecting" << callsign
+                               << "lineSubmode=" << lineSubmode;
                     selectCallsign(callsign, lineSubmode);
 
                     // Select matching row in band activity (left window) without disturbing center window
@@ -1529,7 +1536,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             layout->getItemPosition(layout->indexOf(ui->startTxButton), &sendRow, &sendCol, &rSpan, &cSpan);
             layout->removeWidget(ui->startTxButton);
             layout->removeWidget(ui->stopTxButton);
-            ui->startTxButton->setMinimumWidth(40);
+            // Set minimum width to longest typical text to prevent layout jumps
+            auto fmSend = ui->startTxButton->fontMetrics();
+            ui->startTxButton->setMinimumWidth(fmSend.horizontalAdvance("Sending (1m 30s)") + 12);
             ui->stopTxButton->setMinimumWidth(40);
             rightLayout->addWidget(ui->startTxButton, 2);
             rightLayout->addWidget(ui->stopTxButton, 2);
