@@ -633,7 +633,7 @@ class Configuration::impl final : public QDialog {
     double txDelay_;
     bool write_logs_;
     bool reset_activity_;
-    bool check_for_updates_;
+    bool diagnostic_logging_;
     bool tx_qsy_allowed_;
     bool spot_to_reporting_networks_;
     bool spot_to_aprs_;
@@ -819,7 +819,7 @@ QFont Configuration::compose_text_font() const {
 double Configuration::txDelay() const { return m_->txDelay_; }
 bool Configuration::write_logs() const { return m_->write_logs_; }
 bool Configuration::reset_activity() const { return m_->reset_activity_; }
-bool Configuration::check_for_updates() const { return m_->check_for_updates_; }
+bool Configuration::diagnostic_logging() const { return m_->diagnostic_logging_; }
 bool Configuration::tx_qsy_allowed() const { return m_->tx_qsy_allowed_; }
 bool Configuration::spot_to_reporting_networks() const {
     // rig must be open and working to spot externally
@@ -1748,7 +1748,7 @@ void Configuration::impl::initialize_models() {
     ui_->save_path_display_label->setText(save_directory_.absolutePath());
     ui_->write_logs_check_box->setChecked(write_logs_);
     ui_->reset_activity_check_box->setChecked(reset_activity_);
-    ui_->checkForUpdates_checkBox->setChecked(check_for_updates_);
+    ui_->diagnosticLogging_checkBox->setChecked(diagnostic_logging_);
     ui_->tx_qsy_check_box->setChecked(tx_qsy_allowed_);
     ui_->psk_reporter_check_box->setChecked(spot_to_reporting_networks_);
     ui_->enable_aprs_spotting_check_box->setChecked(spot_to_aprs_);
@@ -2150,7 +2150,7 @@ void Configuration::impl::read_settings() {
     spot_to_aprs_relay_ = settings_->value("APRSISRelay", false).toBool();
     write_logs_ = settings_->value("WriteLogs", true).toBool();
     reset_activity_ = settings_->value("ResetActivity", false).toBool();
-    check_for_updates_ = settings_->value("CheckForUpdates", true).toBool();
+    diagnostic_logging_ = settings_->value("DiagnosticLogging", false).toBool();
     tx_qsy_allowed_ = settings_->value("TxQSYAllowed", false).toBool();
     use_dynamic_info_ = settings_->value("AutoGrid", false).toBool();
 
@@ -2455,7 +2455,7 @@ void Configuration::impl::write_settings() {
     settings_->setValue("SpotToAPRS", spot_to_aprs_);
     settings_->setValue("WriteLogs", write_logs_);
     settings_->setValue("ResetActivity", reset_activity_);
-    settings_->setValue("CheckForUpdates", check_for_updates_);
+    settings_->setValue("DiagnosticLogging", diagnostic_logging_);
     settings_->setValue("TxQSYAllowed", tx_qsy_allowed_);
     settings_->setValue("Macros", macros_.stringList());
     settings_->setValue(versionedFrequenciesSettingsKey,
@@ -3095,7 +3095,7 @@ void Configuration::impl::accept() {
     txDelay_ = ui_->sbTxDelay->value();
     write_logs_ = ui_->write_logs_check_box->isChecked();
     reset_activity_ = ui_->reset_activity_check_box->isChecked();
-    check_for_updates_ = ui_->checkForUpdates_checkBox->isChecked();
+    diagnostic_logging_ = ui_->diagnosticLogging_checkBox->isChecked();
     tx_qsy_allowed_ = ui_->tx_qsy_check_box->isChecked();
     transmit_directed_ = ui_->transmit_directed_check_box->isChecked();
     autoreply_on_at_startup_ = ui_->autoreply_on_check_box->isChecked();

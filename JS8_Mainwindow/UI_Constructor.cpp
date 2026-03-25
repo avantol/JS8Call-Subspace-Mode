@@ -516,7 +516,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     m_configurations_button = m_rigErrorMessageBox.addButton(
         tr("Configurations..."), QMessageBox::ActionRole);
     connect(ui->extFreeTextMsgEdit, &QTextEdit::textChanged,
-            [this]() { currentTextChanged(); });
+            [this]() { currentTextChanged(); matchCallsignFromInput(); });
 
     m_guiTimer.setTimerType(Qt::PreciseTimer);
     m_guiTimer.setSingleShot(true);
@@ -795,7 +795,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                             // If it's our own callsign, look for the target after the colon
                             if (candidate.startsWith(m_config.my_callsign())) {
                                 QString afterColon = lineText.mid(lastColonPos + 1).trimmed();
-                                QString target = afterColon.split(' ').first();
+                                QString target = afterColon.split(QRegularExpression("\\s+")).first();
                                 if (target.length() >= 3 && target.length() <= 10) {
                                     bool tl = false, td = false;
                                     for (auto ch : target) {

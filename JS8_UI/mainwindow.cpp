@@ -167,9 +167,7 @@ void UI_Constructor::ensureMessageDock()
 bool checkVersion(); // JS8_Mainwindow/checkVersion.cpp
 
 void UI_Constructor::checkStartupWarnings() {
-    if (m_config.check_for_updates()) {
-        checkVersion(false);
-    }
+    checkVersion(false);  // Always check for updates at startup
     ensureCallsignSet(false);
 }
 
@@ -2152,11 +2150,10 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
         case Varicode::JS8CallFT2:
             dec_data.params.kposFT2 = params.start;
             dec_data.params.kszFT2 = params.sz;
-            // TEMPORARY: Standard FT2 decoder disabled while L2 is enabled.
-            // L2 provides full async coverage; standard decoder causes ~1s
-            // waterfall blackout at each period boundary.
-            if (!m_l2Enabled)
-                dec_data.params.nsubmodes |= 16; // bit 4
+            // Synchronous FT2 decoder runs alongside L2 for redundancy.
+            // Waterfall gap was caused by rig control, not decoder.
+            // Fortran lock contention handled by CAS in JS8.cpp line 2680.
+            dec_data.params.nsubmodes |= 16; // bit 4
             break;
 #endif
         }
@@ -6540,6 +6537,30 @@ void UI_Constructor::processActivity(bool force) {
 
 
 void UI_Constructor::setDrift(int n) { DriftingDateTime::setDrift(n); }
+
+void UI_Constructor::matchCallsignFromInput() {
+    QString text = ui->extFreeTextMsgEdit->toPlainText().trimmed();
+
+    // Only match a single word (no spaces)
+    if (text.contains(' ')) return;
+
+    // Ignore @ directives (@ALLCALL, @HB, etc.)
+    if (text.startsWith('@')) return;
+
+    if (text.length() < 2) return;
+
+    // Search callsign table for matching row
+    for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
+        auto item = ui->tableWidgetCalls->item(r, 1);  // column 1 = callsign
+        if (item) {
+            QString call = item->data(Qt::UserRole).toString();
+            if (call.startsWith(text, Qt::CaseInsensitive)) {
+                ui->tableWidgetCalls->scrollToItem(item);
+                return;
+            }
+        }
+    }
+}
 
 void UI_Constructor::processIdleActivity() {
     // Don't insert MFI markers for our own outgoing frames during TX

@@ -137,15 +137,23 @@ int main(int argc, char *argv[]) {
 
         if (parser.isSet(output_option)) {
             new TraceFile(parser.value(output_option));
+        } else {
+            // Check DiagnosticLogging setting directly from QSettings
+            // (Configuration object not yet created at this point)
+            auto configDir = QStandardPaths::writableLocation(
+                QStandardPaths::ConfigLocation);
+            QSettings settings(configDir + "/JS8Call.ini", QSettings::IniFormat);
+            settings.beginGroup("Configuration");
+            bool diagEnabled = settings.value("DiagnosticLogging", false).toBool();
+            settings.endGroup();
+            if (diagEnabled) {
+                auto timestamp = QDateTime::currentDateTimeUtc()
+                    .toString("yyyyMMdd_HHmmss");
+                auto logPath = configDir + "/js8call-diag-" + timestamp + "Z.log";
+                new TraceFile(logPath);
+                qWarning() << "[DIAG] Diagnostic logging enabled:" << logPath;
+            }
         }
-#if 0  // Enable auto-log: set to 1 for diagnostic builds
-        else {
-            auto tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-            auto logPath = tempDir + "/js8call-subspace-diag.log";
-            new TraceFile(logPath);
-            qWarning() << "[DIAG] Logging to" << logPath;
-        }
-#endif
 
         qWarning() << "[DIAG] Build:" << program_title();
 

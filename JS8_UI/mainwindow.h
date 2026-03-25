@@ -427,6 +427,7 @@ class UI_Constructor : public QMainWindow {
     bool isFreqOffsetFree(int f, int bw);
     int findFreeFreqOffset(int fmin, int fmax, int bw);
     void setDrift(int n);
+    void matchCallsignFromInput();
     void on_tuneButton_clicked(bool);
     void acceptQSO(QDateTime const &, QString const &call, QString const &grid,
                    Frequency dial_freq, QString const &mode,

@@ -64,8 +64,9 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                            << "mode=" << e.mode << "data=" << QString::fromStdString(e.data);
 
                 DecodedText decodedtext(e);
-                FrameCacheKey dedupeKey(decodedtext.submode(),
-                                        decodedtext.frame());
+                // Mode-agnostic dedup: same frame content = same message
+                // regardless of which decoder/mode produced it
+                FrameCacheKey dedupeKey(0, decodedtext.frame());
 
                 qWarning() << "[DECODE-EVENT] DecodedText: submode=" << decodedtext.submode()
                            << "frame=" << decodedtext.frame()

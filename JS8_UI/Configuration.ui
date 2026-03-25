@@ -433,9 +433,9 @@
                    </widget>
                   </item>
                   <item>
-                   <widget class="QCheckBox" name="checkForUpdates_checkBox">
+                   <widget class="QCheckBox" name="diagnosticLogging_checkBox">
                     <property name="text">
-                     <string>Check for software updates at startup</string>
+                     <string>Enable diagnostic logging (restart required)</string>
                     </property>
                    </widget>
                   </item>
@@ -4091,7 +4091,7 @@ soundcard changes</string>
   <tabstop>transmit_directed_check_box</tabstop>
   <tabstop>spellcheck_check_box</tabstop>
   <tabstop>reset_activity_check_box</tabstop>
-  <tabstop>checkForUpdates_checkBox</tabstop>
+  <tabstop>diagnosticLogging_checkBox</tabstop>
   <tabstop>callsign_aging_spin_box</tabstop>
   <tabstop>activity_aging_spin_box</tabstop>
   <tabstop>eot_line_edit</tabstop>

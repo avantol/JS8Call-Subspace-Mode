@@ -126,7 +126,7 @@ class Configuration final : public QObject {
     double txDelay() const;
     bool write_logs() const;
     bool reset_activity() const;
-    bool check_for_updates() const;
+    bool diagnostic_logging() const;
     bool tx_qsy_allowed() const;
     bool spot_to_reporting_networks() const;
     void set_spot_to_reporting_networks(bool);
