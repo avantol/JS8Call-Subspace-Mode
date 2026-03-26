@@ -156,7 +156,7 @@ constexpr Data Subspace = {"SUBSPACE",
                            FT2_TX_PERIOD_MS,
                            Costas::Type::MODIFIED,
                            -20,
-                           10,
+                           32,
                            FT2_NUM_SYMBOLS,
                            4};  // 4-GFSK (4 tones, not JS8's 8)
 #endif

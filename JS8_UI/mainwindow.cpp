@@ -6430,6 +6430,8 @@ void UI_Constructor::clearSelection() {
 }
 
 void UI_Constructor::autoSwitchMode(int submode) {
+    if (m_transmitting || m_txFrameCount > 0 || !m_txFrameQueue.isEmpty())
+        return;  // don't switch mode during TX
     if (submode == m_nSubMode)
         return;
     if (submode == Varicode::JS8CallFT2) {

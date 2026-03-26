@@ -203,7 +203,7 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup
         bool reservedBad = (bits[75] & 1) || (bits[76] & 1);
         bool noFlags = (frameBits == 0);
-        bool syncLow = (sync < 2.5f);
+        bool syncLow = (sync < 2.2f && snr < -4);
         bool garbage = reservedBad || noFlags || syncLow;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt

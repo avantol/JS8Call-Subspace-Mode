@@ -98,13 +98,10 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
     m_format = format;
     m_msBuffered = msBuffered;
 
-#ifdef Q_OS_WIN
-    // On Windows, pre-create and warm up the QAudioSink so WASAPI
-    // IAudioClient::Initialize() (~500ms) happens at startup, not on
-    // the first TX frame. We start the sink with the Modulator (which
-    // produces zeros when idle) to force WASAPI initialization, then
-    // suspend it. When the first real TX comes, restart() calls
-    // resume() instead of start() — no re-initialization delay.
+    // Pre-create the QAudioSink so audio subsystem initialization happens
+    // at startup, not on the first TX frame. Without this, the first audio
+    // chunk can be dropped due to WASAPI (Windows) or PipeWire (Linux)
+    // initialization latency when the device is cold.
     if (!m_device.isNull()) {
         if (m_stream) {
             m_stream->disconnect(this);
@@ -116,9 +113,8 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
         m_error = false;
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
                 &SoundOutput::handleStateChanged);
-        qWarning() << "[FT2-TX] SoundOutput: WASAPI warmup — pre-initializing audio sink";
+        qWarning() << "[FT2-TX] SoundOutput: pre-initializing audio sink";
     }
-#endif
 }
 
 /**
