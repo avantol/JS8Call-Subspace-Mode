@@ -47,10 +47,8 @@ void UI_Constructor::processCommandActivity() {
             continue;
         }
 
-        // is this to me?
-        bool toMe =
-            d.to == m_config.my_callsign().trimmed() ||
-            d.to == Radio::base_callsign(m_config.my_callsign()).trimmed();
+        // is this to me? Exact match only — WM8Q/P is a different station than WM8Q
+        bool toMe = d.to == m_config.my_callsign().trimmed();
 
         // log call activity...
         CallDetail cd = {};

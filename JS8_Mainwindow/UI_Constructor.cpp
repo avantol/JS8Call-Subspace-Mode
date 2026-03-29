@@ -836,7 +836,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                                << "lineSubmode=" << lineSubmode;
                     selectCallsign(callsign, lineSubmode);
 
-                    // Select matching row in band activity (left window) without disturbing center window
+                    // Select matching row in band activity and set frequency from the line text
                     ui->tableWidgetRXAll->blockSignals(true);
                     ui->tableWidgetRXAll->clearSelection();
                     int lineFreq = -1;
@@ -845,6 +845,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     if (parenOpen >= 0 && parenClose > parenOpen)
                         lineFreq = lineText.mid(parenOpen + 1, parenClose - parenOpen - 1).toInt();
                     if (lineFreq > 0) {
+                        // Set frequency from the line, not from m_callActivity
+                        setFreqOffsetForRestore(lineFreq, false);
                         for (int r = 0; r < ui->tableWidgetRXAll->rowCount(); ++r) {
                             auto item = ui->tableWidgetRXAll->item(r, 0);
                             if (item && item->data(Qt::UserRole).toInt() == lineFreq) {
@@ -862,6 +864,16 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 return true;  // consume event
             },
             this));
+
+    // Ctrl-C copies from convo window even if focus has moved to outgoing box
+    auto copyShortcut = new QShortcut(QKeySequence::Copy, this);
+    connect(copyShortcut, &QShortcut::activated, this, [this]() {
+        if (ui->textEditRX->textCursor().hasSelection()) {
+            ui->textEditRX->copy();
+        } else if (ui->extFreeTextMsgEdit->textCursor().hasSelection()) {
+            ui->extFreeTextMsgEdit->copy();
+        }
+    });
 
     auto clearActionSep = new QAction(nullptr);
     clearActionSep->setSeparator(true);

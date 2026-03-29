@@ -2150,10 +2150,12 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
         case Varicode::JS8CallFT2:
             dec_data.params.kposFT2 = params.start;
             dec_data.params.kszFT2 = params.sz;
-            // Synchronous FT2 decoder runs alongside L2 for redundancy.
-            // Waterfall gap was caused by rig control, not decoder.
-            // Fortran lock contention handled by CAS in JS8.cpp line 2680.
-            dec_data.params.nsubmodes |= 16; // bit 4
+            // Synchronous FT2 decoder disabled while L2 is enabled.
+            // L2 holds the Fortran lock almost continuously, so the sync
+            // decoder's CAS always fails — produces 0 decodes (verified).
+            // Re-enable if L2 is ever made to yield the lock at boundaries.
+            if (!m_l2Enabled)
+                dec_data.params.nsubmodes |= 16; // bit 4
             break;
 #endif
         }
@@ -2305,8 +2307,7 @@ bool UI_Constructor::hasExistingMessageBufferToMe(int *const pOffset) {
     for (auto const [offset, buffer] : m_messageBuffer.asKeyValueRange()) {
         // if this is a valid buffer and it's to me...
         if (buffer.cmd.utcTimestamp.isValid() &&
-            (buffer.cmd.to == m_config.my_callsign() ||
-             buffer.cmd.to == Radio::base_callsign(m_config.my_callsign()))) {
+            buffer.cmd.to == m_config.my_callsign()) {
             if (pOffset)
                 *pOffset = offset;
             return true;
@@ -3422,6 +3423,10 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
         }
     }
 
+    // Don't append RX text to a TX block
+    if (found && !isTx && c.block().userState() == State::TX)
+        found = false;
+
     if (found) {
         c.clearSelection();
         c.insertText(text);
@@ -3725,7 +3730,11 @@ void UI_Constructor::restoreMessage() {
     if (m_lastTxMessage.isEmpty()) {
         return;
     }
-    addMessageText(Varicode::rstrip(m_lastTxMessage), true);
+    // Normalize non-breaking spaces to regular spaces to prevent
+    // accumulating extra spaces on each restore cycle
+    auto text = Varicode::rstrip(m_lastTxMessage);
+    text.replace(QChar(0xA0), QChar(' '));
+    addMessageText(text, true);
 }
 
 /**
@@ -6278,7 +6287,7 @@ QString UI_Constructor::callsignSelected(bool) {
 void UI_Constructor::callsignSelectedChanged(QString /*old*/,
                                              QString selectedCall) {
     auto placeholderText =
-        QString("Type your outgoing messages here.").toUpper();
+        QString("Type your outgoing messages here. Type partial call sign to search list.").toUpper();
     if (selectedCall.isEmpty()) {
         // try to restore hb
         if (m_hbPaused) {
@@ -6297,27 +6306,7 @@ void UI_Constructor::callsignSelectedChanged(QString /*old*/,
                 DriftingDateTime::currentDateTimeUtc();
         }
 
-        if (m_config.heartbeat_qso_pause()) {
-            // TODO: jsherer - HB issue
-            // don't hb if we select a callsign... (but we should keep track so
-            // if we deselect, we restore our hb)
-            if (ui->hbMacroButton->isChecked()) {
-                qCDebug(mainwindow_js8)
-                    << "Unchecking hbMacroButton after selection"
-                    << selectedCall << "but planning to resurrect later";
-                ui->hbMacroButton->setChecked(false);
-                m_hbPaused = true;
-            }
-
-            // don't cq if we select a callsign... (and it will not be restored
-            // otherwise)
-            if (ui->cqMacroButton->isChecked()) {
-                qCDebug(mainwindow_js8)
-                    << "Unchecking cqMacroButton after selection"
-                    << selectedCall;
-                ui->cqMacroButton->setChecked(false);
-            }
-        }
+        // HB/CQ pause now handled in selectCallsign() — covers all click paths
     }
     ui->extFreeTextMsgEdit->setPlaceholderText(placeholderText);
 
@@ -6357,6 +6346,18 @@ void UI_Constructor::selectCallsign(QString call, int submode) {
     // Always switch mode even if same callsign (could be different row/mode)
     if (submode >= 0)
         autoSwitchMode(submode);
+
+    // Pause HB when selecting a callsign (entering QSO)
+    if (m_config.heartbeat_qso_pause()) {
+        if (ui->hbMacroButton->isChecked()) {
+            ui->hbMacroButton->setChecked(false);
+            m_hb_loop->onLoopCancel();
+            m_hbPaused = true;
+        }
+        if (ui->cqMacroButton->isChecked()) {
+            ui->cqMacroButton->setChecked(false);
+        }
+    }
 
     if (call == m_selectedCallsign)
         return;
@@ -6422,7 +6423,7 @@ void UI_Constructor::clearSelection() {
     }
 
     ui->extFreeTextMsgEdit->setPlaceholderText(
-        QString("Type your outgoing messages here.").toUpper());
+        QString("Type your outgoing messages here. Type partial call sign to search list.").toUpper());
 
     updateButtonDisplay();
     updateTextDisplay();
@@ -6549,14 +6550,34 @@ void UI_Constructor::matchCallsignFromInput() {
     // Ignore @ directives (@ALLCALL, @HB, etc.)
     if (text.startsWith('@')) return;
 
+    // Clear previous type-ahead highlight
+    for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
+        for (int c = 0; c < ui->tableWidgetCalls->columnCount(); ++c) {
+            auto item = ui->tableWidgetCalls->item(r, c);
+            if (item && item->data(Qt::UserRole + 1).toBool()) {
+                item->setBackground(QBrush());
+                item->setData(Qt::UserRole + 1, false);
+            }
+        }
+    }
+
     if (text.length() < 2) return;
 
-    // Search callsign table for matching row
+    // Search callsign table for matching row — highlight and scroll
     for (int r = 0; r < ui->tableWidgetCalls->rowCount(); ++r) {
         auto item = ui->tableWidgetCalls->item(r, 1);  // column 1 = callsign
         if (item) {
             QString call = item->data(Qt::UserRole).toString();
             if (call.startsWith(text, Qt::CaseInsensitive)) {
+                // Subtle gray highlight on the matching row
+                QColor highlight(0, 0, 0, 20);  // very subtle
+                for (int c = 0; c < ui->tableWidgetCalls->columnCount(); ++c) {
+                    auto cell = ui->tableWidgetCalls->item(r, c);
+                    if (cell) {
+                        cell->setBackground(highlight);
+                        cell->setData(Qt::UserRole + 1, true);  // mark for clearing
+                    }
+                }
                 ui->tableWidgetCalls->scrollToItem(item);
                 return;
             }
@@ -6728,9 +6749,7 @@ void UI_Constructor::refreshInboxCounts() {
         foreach (auto pair, v) {
             auto params = pair.second.params();
             auto to = params.value("TO").toString();
-            if (to.isEmpty() ||
-                (to != m_config.my_callsign() &&
-                 to != Radio::base_callsign(m_config.my_callsign()))) {
+            if (to.isEmpty() || to != m_config.my_callsign()) {
                 continue;
             }
             auto from = params.value("FROM").toString();
@@ -7643,11 +7662,14 @@ void UI_Constructor::l2TryDecode(char const *source) {
             newBits, &nNewDecoded,
             useNfqsoOnly, &decodedFreq);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        // DIAG BUILD 51: suppressed — fires every ~1s (revert in Build 52)
-        // qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
-        //             << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
-        //             << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
-        //             << "sync=" << syncBest;
+        // Warn if decode cycle approaches ring buffer limit (7500ms)
+        if (elapsed > 3000) {
+            qWarning() << "[FT2-L2] WARNING: decode cycle took" << elapsed
+                       << "ms, approaching buffer limit (7500ms)"
+                       << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
+                       << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
+                       << "sync=" << syncBest;
+        }
 
         // Expire known frames older than one full buffer (90K samples)
         int curPos = m_l2RingPos.load(std::memory_order_relaxed);
