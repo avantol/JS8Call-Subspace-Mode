@@ -857,23 +857,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     }
                     ui->tableWidgetRXAll->blockSignals(false);
 
-                    ui->extFreeTextMsgEdit->setFocus();
                 } else {
                     clearSelection();
                 }
                 return true;  // consume event
             },
             this));
-
-    // Ctrl-C copies from convo window even if focus has moved to outgoing box
-    auto copyShortcut = new QShortcut(QKeySequence::Copy, this);
-    connect(copyShortcut, &QShortcut::activated, this, [this]() {
-        if (ui->textEditRX->textCursor().hasSelection()) {
-            ui->textEditRX->copy();
-        } else if (ui->extFreeTextMsgEdit->textCursor().hasSelection()) {
-            ui->extFreeTextMsgEdit->copy();
-        }
-    });
 
     auto clearActionSep = new QAction(nullptr);
     clearActionSep->setSeparator(true);

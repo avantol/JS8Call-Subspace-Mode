@@ -3785,8 +3785,8 @@ void UI_Constructor::tableSelectionChanged(QItemSelection const &,
                                            QItemSelection const &) {
     // Selection logic is handled by explicit click handlers.
     // This signal handler only updates text display state.
+    // Don't steal focus here — this fires on periodic table rebuilds.
     currentTextChanged();
-    ui->extFreeTextMsgEdit->setFocus();
 }
 
 QList<QPair<QString, int>>
@@ -5357,8 +5357,6 @@ void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
         selectCallsign(call, rowSubmode);
     else
         clearSelection();
-
-    ui->extFreeTextMsgEdit->setFocus();
 }
 
 void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
@@ -5464,8 +5462,6 @@ void UI_Constructor::on_tableWidgetCalls_cellClicked(int row, int /*col*/) {
         if (!call.isEmpty())
             selectCallsign(call, submode);
     }
-
-    ui->extFreeTextMsgEdit->setFocus();
 }
 
 void UI_Constructor::on_tableWidgetCalls_cellDoubleClicked(int row, int col) {
