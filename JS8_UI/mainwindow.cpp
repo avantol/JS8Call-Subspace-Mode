@@ -6132,9 +6132,8 @@ void UI_Constructor::updateTextDisplay() {
     bool isTransmitting = isMessageQueuedForTransmit();
     bool emptyText = ui->extFreeTextMsgEdit->toPlainText().isEmpty();
 
-    // Send button state is managed by updateTxButtonDisplay() — skip here
-    // to prevent flash during mode changes
-    // ui->startTxButton->setDisabled(!canTransmit || isTransmitting || emptyText);
+    // Disable Send when nothing to send (only update if state changed to avoid flash)
+    setDisabledIfChanged(ui->startTxButton, !canTransmit || isTransmitting || emptyText);
 
     if (m_txTextDirty) {
         // debounce frame and word count
@@ -6271,7 +6270,8 @@ void UI_Constructor::updateTxButtonDisplay() {
                 : State::Send.toString();
         ui->startTxButton->setText(buttonText);
         ui->startTxButton->setEnabled(canTransmit &&
-                                      m_txFrameCountEstimate > 0);
+                                      m_txFrameCountEstimate > 0 &&
+                                      !ui->extFreeTextMsgEdit->toPlainText().isEmpty());
         ui->startTxButton->setFlat(false);
     }
 }
