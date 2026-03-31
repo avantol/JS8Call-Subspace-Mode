@@ -75,10 +75,11 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 if (auto const it = m_messageDupeCache.find(dedupeKey);
                     it != m_messageDupeCache.end()) {
                     auto ageSecs = it->second.secsTo(QDateTime::currentDateTimeUtc());
-                    // FT2 L2: 90K buffer holds ~7.5s, same frame re-decodes for ~5s.
-                    // Use 6s dedup window for FT2, half-period for other modes.
+                    // FT2 L2: 90K buffer holds ~7.5s, same frame can re-decode
+                    // from non-overlapping buffer positions up to 7.5s apart.
+                    // Use 8s dedup window for FT2, half-period for other modes.
                     auto window = (decodedtext.submode() == Varicode::JS8CallFT2)
-                        ? 6.0
+                        ? 8.0
                         : 0.5 * JS8::Submode::period(decodedtext.submode());
                     if (ageSecs < window) {
                         qWarning() << "[DECODE-EVENT] DUPLICATE, skipping frame=" << decodedtext.frame()
@@ -230,6 +231,32 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     m_bandActivity[offset].append(d);
                     while (m_bandActivity[offset].count() > 10) {
                         m_bandActivity[offset].removeFirst();
+                    }
+
+                    // Merge nearby same-mode entries that weren't caught on first decode
+                    {
+                        int const mergeRange = JS8::Submode::rxThreshold(decodedtext.submode());
+                        bool isFT2 = decodedtext.submode() == Varicode::JS8CallFT2;
+                        for (int nearby = offset - mergeRange; nearby <= offset + mergeRange; ++nearby) {
+                            if (nearby == offset) continue;
+                            if (!m_bandActivity.contains(nearby)) continue;
+                            if (m_bandActivity[nearby].isEmpty()) continue;
+                            bool nearbyIsFT2 = m_bandActivity[nearby].last().submode == Varicode::JS8CallFT2;
+                            if (nearbyIsFT2 != isFT2) continue;
+
+                            auto &current = m_bandActivity[offset];
+                            auto &other = m_bandActivity[nearby];
+                            current.append(other);
+                            std::sort(current.begin(), current.end(),
+                                      [](const ActivityDetail &a, const ActivityDetail &b) {
+                                          return a.utcTimestamp < b.utcTimestamp;
+                                      });
+                            while (current.count() > 10) {
+                                current.removeFirst();
+                            }
+                            m_bandActivity.remove(nearby);
+                            break;
+                        }
                     }
                 }
 #endif

@@ -1233,6 +1233,9 @@ Radio::Frequency UI_Constructor::dialFrequency() {
 }
 
 void UI_Constructor::setSubmode(int submode) {
+    // Block mode switch during active TX — stale m_TRperiod causes truncated frames
+    if (m_transmitting || m_txFrameCount > 0 || !m_txFrameQueue.isEmpty())
+        return;
     m_nSubMode = submode;
     ui->actionModeJS8Normal->setChecked(submode == Varicode::JS8CallNormal);
     ui->actionModeJS8Fast->setChecked(submode == Varicode::JS8CallFast);
@@ -1260,9 +1263,15 @@ void UI_Constructor::setSubmode(int submode) {
 }
 
 void UI_Constructor::switchSubmode(int submode) {
+    // Block mode switch during active TX — stale m_TRperiod causes truncated frames
+    if (m_transmitting || m_txFrameCount > 0 || !m_txFrameQueue.isEmpty())
+        return;
     // Lightweight mode switch — UI indicators only, no radio reconfiguration.
     // Use for call-selection mode switching where setupJS8() is unnecessary.
     m_nSubMode = submode;
+    // Critical: update period timer so guiUpdate() uses correct boundaries
+    m_TRperiod = JS8::Submode::period(submode);
+    m_wideGraph->setPeriod(JS8::Submode::periodMS(submode));
     ui->actionModeJS8Normal->setChecked(submode == Varicode::JS8CallNormal);
     ui->actionModeJS8Fast->setChecked(submode == Varicode::JS8CallFast);
     ui->actionModeJS8Turbo->setChecked(submode == Varicode::JS8CallTurbo);
@@ -3057,12 +3066,18 @@ void UI_Constructor::transmit() {
     // on devices like the IC-7300, producing a ~2 second audio gap.
     if (!m_modulator->isIdle()) {
         qWarning() << "[FT2-TX] transmit(): SKIPPED — Modulator already active"
-                    << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode;
+                    << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode
+                    << "m_transmitting=" << m_transmitting
+                    << "genAudio=" << m_generateAudioWhenPttConfirmedByTX
+                    << "m_iptt=" << m_iptt << "m_iptt0=" << m_iptt0;
         return;
     }
     qWarning() << "[FT2-TX] transmit(): emitting sendMessage"
                 << "freq=" << (freq() + m_XIT) << "submode=" << m_nSubMode
-                << "modIdle=" << m_modulator->isIdle();
+                << "modIdle=" << m_modulator->isIdle()
+                << "m_transmitting=" << m_transmitting
+                << "genAudio=" << m_generateAudioWhenPttConfirmedByTX
+                << "m_iptt=" << m_iptt << "m_iptt0=" << m_iptt0;
     Q_EMIT sendMessage(freq() + m_XIT, m_nSubMode, m_TxDelay, m_soundOutput,
                        m_config.audio_output_channel());
     ui->signal_meter_widget->setValue(0, 0);
@@ -5322,7 +5337,7 @@ void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
                     if (ch.isLetter()) hl = true;
                     if (ch.isDigit()) hd = true;
                 }
-                if (hl && hd && !cand.startsWith(m_config.my_callsign()))
+                if (hl && hd && cand != m_config.my_callsign())
                     call = cand;
             }
         }
@@ -5335,7 +5350,7 @@ void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
                     if (ch.isLetter()) hl = true;
                     if (ch.isDigit()) hd = true;
                 }
-                if (hl && hd && !first.startsWith(m_config.my_callsign()))
+                if (hl && hd && first != m_config.my_callsign())
                     call = first;
             }
         }

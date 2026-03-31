@@ -195,6 +195,7 @@ void UI_Constructor::processCommandActivity() {
         ad.snr = d.snr;
         ad.text = text;
         ad.utcTimestamp = d.utcTimestamp;
+        ad.submode = d.submode;
 
         // we'd be double printing here if were on frequency, so let's be
         // "smart" about this...
