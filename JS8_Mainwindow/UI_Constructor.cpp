@@ -792,8 +792,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                             if (ch.isDigit()) hasDigit = true;
                         }
                         if (hasLetter && hasDigit) {
-                            // If it's our own callsign, look for the target after the colon
-                            if (candidate.startsWith(m_config.my_callsign())) {
+                            // If it's exactly our own callsign, look for the target after the colon
+                            // (WM8Q/P is NOT WM8Q — exact match required)
+                            if (candidate == m_config.my_callsign()) {
                                 QString afterColon = lineText.mid(lastColonPos + 1).trimmed();
                                 QString target = afterColon.split(QRegularExpression("\\s+")).first();
                                 if (target.length() >= 3 && target.length() <= 10) {

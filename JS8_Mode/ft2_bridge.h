@@ -108,7 +108,7 @@ void ft2_triggered_decode_c(
     int *snr_out, float *dt_out, float *freq_out, float *sync_out,
     std::int8_t *msgbits_out, int *ndecoded,
     const std::int8_t *known_bits, int nknown,
-    int nfqso_only);
+    int nfqso_only, float sync_score);
 
 /**
  * Lightweight sync scanner: downsample + sync2d at a frequency grid.

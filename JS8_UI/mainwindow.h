@@ -1024,7 +1024,7 @@ class UI_Constructor : public QMainWindow {
                       QString grid);
     Radio::Frequency dialFrequency();
     void setSubmode(int submode);     // full reconfiguration (radio, FFT, tables)
-    void switchSubmode(int submode);  // lightweight UI-only mode switch
+    // switchSubmode() removed — use setSubmode() for all mode changes
     void updateCurrentBand();
     void displayDialFrequency();
     void transmitDisplay(bool);

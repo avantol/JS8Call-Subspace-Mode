@@ -1,7 +1,7 @@
 subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
      ndepth, ncontest, mycall, hiscall, &
      snr_out, dt_out, freq_out, sync_out, msgbits_out, ndecoded, &
-     known_bits, nknown, nfqso_only)
+     known_bits, nknown, nfqso_only, sync_score)
 
 ! Level 2: Sync-Triggered FT2 Decoder (JS8Call-Subspace variant)
 ! ==============================================================
@@ -42,6 +42,8 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 
 ! nfqso_only=1: skip getcandidates2, use single candidate at nfqso
   integer, intent(in) :: nfqso_only
+! Costas sync score from C++ sync monitor (used as SNR proxy when nfqso_only=1)
+  real, intent(in) :: sync_score
 
 ! Phase 1 hit storage
   real hit_freq(MAXHITS), hit_sync(MAXHITS), hit_snr(MAXHITS)
@@ -104,9 +106,10 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
   if(nfqso_only.eq.1) then
 ! L2 mode: skip getcandidates2 spectrogram (308 FFTs + baseline)
 ! Just use nfqso as the single candidate — we know the frequency
+! Use Costas sync score as approximate SNR proxy (avoids -21 floor clamp)
     ncand = 1
     candidate(1,1) = real(nfqso)
-    candidate(2,1) = 0.0
+    candidate(2,1) = max(sync_score, 0.0)
   else
     ! TEMPORARY: threshold raised from 0.50 to 0.60 to reduce false candidates on noise
     call getcandidates2(dd, real(nfa), real(nfb), 0.60, nfqso, MAXCAND, &
@@ -355,10 +358,24 @@ subroutine ft2_triggered_decode(iwave, nqsoprogress, nfqso, nfa, nfb, &
 ! Calculate SNR
         if(snr0.gt.0.0) then
           xsnr = 10*log10(snr0) - 13.0
+          if(nfqso_only.eq.1) then
+! Calibrate sync-score-based SNR to match spectral SNR
+! Linear fit from measured data: est +7→actual +12, est -15→actual -03
+! +5 dB offset correction from field testing
+            xsnr = 0.6818 * xsnr + 7.227 + 5.0
+          endif
         else
-          xsnr = -21.0
+          if(nfqso_only.eq.1) then
+            xsnr = -16.0
+          else
+            xsnr = -21.0
+          endif
         endif
-        snr_out(ndecoded) = nint(max(-21.0, xsnr))
+        if(nfqso_only.eq.1) then
+          snr_out(ndecoded) = nint(max(-16.0, min(24.0, xsnr)))
+        else
+          snr_out(ndecoded) = nint(max(-21.0, xsnr))
+        endif
 
 ! DT from known sync position
         dt_out(ndecoded) = xibest/1333.33 - 0.5

@@ -1262,43 +1262,10 @@ void UI_Constructor::setSubmode(int submode) {
     Q_EMIT submodeChanged(Varicode::intToSubmode(submode));
 }
 
-void UI_Constructor::switchSubmode(int submode) {
-    // Block mode switch during active TX — stale m_TRperiod causes truncated frames
-    if (m_transmitting || m_txFrameCount > 0 || !m_txFrameQueue.isEmpty())
-        return;
-    // Lightweight mode switch — UI indicators only, no radio reconfiguration.
-    // Use for call-selection mode switching where setupJS8() is unnecessary.
-    m_nSubMode = submode;
-    // Critical: update period timer so guiUpdate() uses correct boundaries
-    m_TRperiod = JS8::Submode::period(submode);
-    m_wideGraph->setPeriod(JS8::Submode::periodMS(submode));
-    ui->actionModeJS8Normal->setChecked(submode == Varicode::JS8CallNormal);
-    ui->actionModeJS8Fast->setChecked(submode == Varicode::JS8CallFast);
-    ui->actionModeJS8Turbo->setChecked(submode == Varicode::JS8CallTurbo);
-    ui->actionModeJS8Slow->setChecked(submode == Varicode::JS8CallSlow);
-    ui->actionModeJS8Ultra->setChecked(submode == Varicode::JS8CallUltra);
-#ifdef JS8_ENABLE_FT2
-    ui->actionModeFT2->setChecked(submode == Varicode::JS8CallFT2);
-#endif
-
-    mode_label.setText(submode == Varicode::JS8CallFT2
-        ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
-        : JS8::Submode::name(submode));
-
-    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); }
-    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false); }
-    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false); }
-    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(submode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false); }
-    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false); }
-
-    m_wideGraph->setSubMode(m_nSubMode);
-    m_wideGraph->setFilterMinimumBandwidth(
-        JS8::Submode::bandwidth(m_nSubMode) +
-        JS8::Submode::rxThreshold(m_nSubMode) * 2);
-
-    prepareHeartbeatMode(canCurrentModeSendHeartbeat() &&
-                         ui->actionModeJS8HB->isChecked());
-}
+// switchSubmode() removed — all mode switches go through setSubmode() which
+// calls setupJS8() to update all layers (UI, wideGraph, dec_data.params, period
+// timer). Using a "lightweight" switch caused dec_data.params mismatch leading
+// to truncated TX frames after mode switch.
 
 void UI_Constructor::updateCurrentBand() {
     QVariant state = ui->readFreq->property("state");
@@ -3084,10 +3051,11 @@ void UI_Constructor::transmit() {
 }
 
 void UI_Constructor::stopTx() {
-    if (m_nSubMode == Varicode::JS8CallFT2)
-        qWarning() << "[FT2-TX] stopTx(): m_iptt=" << m_iptt
-                    << "m_iptt0=" << m_iptt0
-                    << "m_transmitting=" << m_transmitting;
+    qWarning() << "[FT2-TX] stopTx(): m_iptt=" << m_iptt
+                << "m_iptt0=" << m_iptt0
+                << "m_transmitting=" << m_transmitting
+                << "submode=" << m_nSubMode
+                << "m_TRperiod=" << m_TRperiod;
     Q_EMIT endTransmitMessage();
 
     auto dt = DecodedText(m_currentMessage.trimmed(), m_currentMessageBits,
@@ -3438,8 +3406,8 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
         }
     }
 
-    // Don't append RX text to a TX block
-    if (found && !isTx && c.block().userState() == State::TX)
+    // Don't cross TX/RX boundary — each gets its own block
+    if (found && isTx != (c.block().userState() == State::TX))
         found = false;
 
     if (found) {
@@ -6331,14 +6299,14 @@ void UI_Constructor::callsignSelectedChanged(QString /*old*/,
     m_prevSelectedCallsign = selectedCall;
 
     // Auto-switch mode to match selected callsign's submode
-    // Uses switchSubmode() — lightweight UI update only, no radio reconfiguration
+    // Uses setSubmode() — full mode switch with setupJS8() to update all layers
     if (!selectedCall.isEmpty() && m_callActivity.contains(selectedCall)) {
         int callSubmode = m_callActivity[selectedCall].submode;
         if (callSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
             m_prevStandardSubmode = m_nSubMode;
-            switchSubmode(Varicode::JS8CallFT2);
+            setSubmode(Varicode::JS8CallFT2);
         } else if (callSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
-            switchSubmode(m_prevStandardSubmode);
+            setSubmode(m_prevStandardSubmode);
         }
     }
 
@@ -6367,6 +6335,7 @@ void UI_Constructor::selectCallsign(QString call, int submode) {
         }
         if (ui->cqMacroButton->isChecked()) {
             ui->cqMacroButton->setChecked(false);
+            m_cq_loop->onLoopCancel();
         }
     }
 
@@ -6448,9 +6417,9 @@ void UI_Constructor::autoSwitchMode(int submode) {
         return;
     if (submode == Varicode::JS8CallFT2) {
         m_prevStandardSubmode = m_nSubMode;
-        switchSubmode(Varicode::JS8CallFT2);
+        setSubmode(Varicode::JS8CallFT2);
     } else if (m_nSubMode == Varicode::JS8CallFT2) {
-        switchSubmode(m_prevStandardSubmode);
+        setSubmode(m_prevStandardSubmode);
     }
 }
 
@@ -7644,11 +7613,10 @@ void UI_Constructor::l2TryDecode(char const *source) {
                             &syncBest, &syncFreq, &syncIbest, &syncIdf);
             auto syncMs = QDateTime::currentMSecsSinceEpoch() - tSync;
 
-            // DIAG BUILD 51: suppressed — fires every ~1s (revert in Build 52)
-            // qWarning() << "[FT2-L2] sync scan:" << syncMs << "ms"
-            //            << "nfreqs=" << nScanFreqs
-            //            << "sync=" << syncBest << "freq=" << syncFreq
-            //            << "ibest=" << syncIbest << "idf=" << syncIdf;
+            qWarning() << "[FT2-L2] sync scan:" << syncMs << "ms"
+                       << "nfreqs=" << nScanFreqs
+                       << "sync=" << syncBest << "freq=" << syncFreq
+                       << "ibest=" << syncIbest << "idf=" << syncIdf;
 
             if (syncBest >= 3.00f) {
                 // Strong sync well above noise floor (~2.6) — skip getcandidates2
@@ -7671,15 +7639,16 @@ void UI_Constructor::l2TryDecode(char const *source) {
             },
             knownSnap, nknownSnap,
             newBits, &nNewDecoded,
-            useNfqsoOnly, &decodedFreq);
+            useNfqsoOnly, &decodedFreq,
+            syncBest);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        // Warn if decode cycle approaches ring buffer limit (7500ms)
+        // Log every decode cycle for SNR calibration investigation
+        qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
+                   << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
+                   << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
+                   << "sync=" << syncBest;
         if (elapsed > 3000) {
-            qWarning() << "[FT2-L2] WARNING: decode cycle took" << elapsed
-                       << "ms, approaching buffer limit (7500ms)"
-                       << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
-                       << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
-                       << "sync=" << syncBest;
+            qWarning() << "[FT2-L2] WARNING: decode cycle approaching buffer limit (7500ms)";
         }
 
         // Expire known frames older than one full buffer (90K samples)

@@ -66,7 +66,8 @@ class DecodeFT2 {
                                 std::int8_t *decoded_bits_out = nullptr,
                                 int *ndecoded_out = nullptr,
                                 int nfqso_only = 0,
-                                float *decoded_freq_out = nullptr);
+                                float *decoded_freq_out = nullptr,
+                                float sync_score = 0.0f);
 
     /** Clear multi-period averaging state (call on band/mode change). */
     void clearAveraging();

@@ -148,7 +148,8 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                                 std::int8_t *decoded_bits_out,
                                 int *ndecoded_out,
                                 int nfqso_only,
-                                float *decoded_freq_out) {
+                                float *decoded_freq_out,
+                                float sync_score) {
     int snr_out[20] = {};
     float dt_out[20] = {};
     float freq_out[20] = {};
@@ -170,7 +171,7 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
     ft2_triggered_decode_c(samples, nfqso, nfa, nfb, 3,
                            snr_out, dt_out, freq_out, sync_out,
                            msgbits_out, &ndecoded,
-                           known_bits, nknown, nfqso_only);
+                           known_bits, nknown, nfqso_only, sync_score);
 
     if (ndecoded > 0)
         qWarning() << "[FT2-L2] ft2_triggered_decode returned ndecoded=" << ndecoded;
