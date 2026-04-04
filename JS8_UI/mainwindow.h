@@ -710,7 +710,6 @@ class UI_Constructor : public QMainWindow {
         QDateTime ackTimestamp;
         QDateTime utcTimestamp;
         int snr;
-        bool snrSuspect{false};
         int bits;
         float tdrift;
         int submode;

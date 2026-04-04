@@ -291,7 +291,6 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     cd.grid = decodedtext.extra(); // compound calls via pings
                                                    // may contain grid...
                     cd.snr = decodedtext.snr();
-                    cd.snrSuspect = d.snrSuspect;
                     cd.dial = freq;
                     cd.offset = decodedtext.frequencyOffset();
                     cd.utcTimestamp = DriftingDateTime::currentDateTimeUtc();
