@@ -269,7 +269,7 @@ void UI_Constructor::displayCallActivity() {
                 ageItem->setToolTip(d.utcTimestamp.toString());
                 ui->tableWidgetCalls->setItem(row, col++, ageItem);
 
-                auto snrText = Varicode::formatSNR(d.snr);
+                auto snrText = d.snrSuspect ? QString() : Varicode::formatSNR(d.snr);
                 auto snrItem = new QTableWidgetItem(
                     snrText.isEmpty()
                         ? ""

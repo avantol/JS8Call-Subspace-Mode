@@ -140,6 +140,7 @@ void UI_Constructor::displayBandActivity() {
                 QStringList text;
                 QString age;
                 int snr = 0;
+                bool snrSuspect = false;
                 float tdrift = 0;
                 int submode = -1;
 
@@ -212,6 +213,7 @@ void UI_Constructor::displayBandActivity() {
                     }
                     text.append(item.text);
                     snr = item.snr;
+                    snrSuspect = item.snrSuspect;
                     age = since(item.utcTimestamp);
                     timestamp = item.utcTimestamp;
                     tdrift = item.tdrift;
@@ -245,7 +247,7 @@ void UI_Constructor::displayBandActivity() {
                 ageItem->setToolTip(timestamp.toString());
                 ui->tableWidgetRXAll->setItem(row, col++, ageItem);
 
-                auto snrText = Varicode::formatSNR(snr);
+                auto snrText = snrSuspect ? QString() : Varicode::formatSNR(snr);
                 auto snrItem = new QTableWidgetItem(
                     snrText.isEmpty()
                         ? ""

@@ -193,6 +193,22 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     d.snr = decodedtext.snr();
                     d.isBuffered = false;
                     d.submode = decodedtext.submode();
+
+                    // Detect single-frame-in-buffer condition for SNR accuracy
+                    if (d.submode == Varicode::JS8CallFT2) {
+                        bool singleFrame = true;
+                        if (m_bandActivity.contains(offset) &&
+                            !m_bandActivity[offset].isEmpty()) {
+                            auto lastTime = m_bandActivity[offset].last().utcTimestamp;
+                            auto gapSecs = lastTime.secsTo(d.utcTimestamp);
+                            if (gapSecs < 8)
+                                singleFrame = false;
+                        }
+                        d.snrSuspect = singleFrame;
+                        if (singleFrame)
+                            qWarning() << "[SNR-SUSPECT] single frame in buffer"
+                                       << "snr=" << d.snr << "freq=" << offset;
+                    }
                     d.tdrift = (d.submode == Varicode::JS8CallFT2)
                                    ? 0.0
                                    : m_wideGraph->shouldAutoSyncSubmode(d.submode)
@@ -232,6 +248,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     while (m_bandActivity[offset].count() > 10) {
                         m_bandActivity[offset].removeFirst();
                     }
+
 
                     // Merge nearby same-mode entries that weren't caught on first decode
                     {
@@ -274,6 +291,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     cd.grid = decodedtext.extra(); // compound calls via pings
                                                    // may contain grid...
                     cd.snr = decodedtext.snr();
+                    cd.snrSuspect = d.snrSuspect;
                     cd.dial = freq;
                     cd.offset = decodedtext.frequencyOffset();
                     cd.utcTimestamp = DriftingDateTime::currentDateTimeUtc();

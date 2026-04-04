@@ -710,6 +710,7 @@ class UI_Constructor : public QMainWindow {
         QDateTime ackTimestamp;
         QDateTime utcTimestamp;
         int snr;
+        bool snrSuspect{false};
         int bits;
         float tdrift;
         int submode;
@@ -745,6 +746,7 @@ class UI_Constructor : public QMainWindow {
         QString text;
         QDateTime utcTimestamp;
         int snr;
+        bool snrSuspect{false}; // true when single frame in buffer (noisy SNR estimate)
         bool shouldDisplay;
         float tdrift;
         int submode;

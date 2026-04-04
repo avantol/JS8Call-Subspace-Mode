@@ -2358,7 +2358,14 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
         return;
     }
 
-    if (m_callActivity.contains(d.call)) {
+    bool isUpdate = m_callActivity.contains(d.call);
+    int oldSnr = isUpdate ? m_callActivity[d.call].snr : -999;
+    qWarning() << "[CALL-SNR]" << (isUpdate ? "UPDATE" : "NEW")
+               << "call=" << d.call << "snr=" << d.snr
+               << "oldSnr=" << oldSnr << "suspect=" << d.snrSuspect
+               << "offset=" << d.offset << "submode=" << d.submode;
+
+    if (isUpdate) {
         // update (keep grid)
         CallDetail old = m_callActivity[d.call];
         if (d.grid.isEmpty() && !old.grid.isEmpty()) {
