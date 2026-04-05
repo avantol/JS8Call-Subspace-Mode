@@ -413,7 +413,7 @@ if(type == "STATION.SET_SPOT") {
     if (type == "TX.SEND_MESSAGE") {
         auto text = message.value();
         if (!text.isEmpty()) {
-            enqueueMessage(PriorityNormal, text, -1, nullptr);
+            enqueueMessage(PriorityHigh, text, -1, nullptr);
             processTxQueue();
             return;
         }
