@@ -386,7 +386,8 @@ void UI_Constructor::writeSettings() {
 
     m_settings->beginGroup("Common");
     m_settings->setValue("Freq", freq());
-    m_settings->setValue("SubMode", m_nSubMode);
+    m_settings->setValue("SubMode", Varicode::JS8CallNormal); // always save Normal for JS8Call-Improved compat
+    m_settings->setValue("SsSubMode", m_nSubMode);
     m_settings->setValue("SubModeHB", ui->actionModeJS8HB->isChecked());
     m_settings->setValue("SubModeHBAck",
                          ui->actionHeartbeatAcknowledgements->isChecked());
@@ -419,7 +420,7 @@ void UI_Constructor::writeSettings() {
     auto now = DriftingDateTime::currentDateTimeUtc();
     int callsignAging = m_config.callsign_aging();
 
-    m_settings->beginGroup("CallActivity");
+    m_settings->beginGroup("SsCallActivity");
     m_settings->remove(""); // remove all keys in current group
     foreach (auto cd, m_callActivity.values()) {
         if (cd.call.trimmed().isEmpty()) {
@@ -515,7 +516,8 @@ void UI_Constructor::readSettings() {
     setFreqOffsetForRestore(
         m_settings->value("Freq", Default::FREQUENCY).toInt(), false); // XXX
 
-    setSubmode(m_settings->value("SubMode", Default::SUBMODE).toInt());
+    setSubmode(m_settings->value("SsSubMode",
+        m_settings->value("SubMode", Default::SUBMODE).toInt()).toInt());
     ui->actionModeJS8HB->setChecked(
         m_settings->value("SubModeHB", false).toBool());
     ui->actionHeartbeatAcknowledgements->setChecked(
@@ -600,7 +602,15 @@ void UI_Constructor::readSettings() {
     if (m_config.reset_activity()) {
         // NOOP
     } else {
-        m_settings->beginGroup("CallActivity");
+        // Migrate from old [CallActivity] to [SsCallActivity] if needed,
+        // then delete [CallActivity] to prevent JS8Call-Improved crashes.
+        QString readGroup = "SsCallActivity";
+        if (!m_settings->childGroups().contains("SsCallActivity") &&
+            m_settings->childGroups().contains("CallActivity")) {
+            readGroup = "CallActivity";  // one-time migration
+        }
+
+        m_settings->beginGroup(readGroup);
         foreach (auto call, m_settings->allKeys()) {
 
             auto values = m_settings->value(call).toMap();
@@ -642,6 +652,13 @@ void UI_Constructor::readSettings() {
             logCallActivity(cd, false);
         }
         m_settings->endGroup();
+
+        // Always delete [CallActivity] to prevent JS8Call-Improved crashes
+        if (m_settings->childGroups().contains("CallActivity")) {
+            m_settings->beginGroup("CallActivity");
+            m_settings->remove("");
+            m_settings->endGroup();
+        }
     }
 
     QTimer::singleShot(0, this, [this]{
