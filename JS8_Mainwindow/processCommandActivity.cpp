@@ -152,17 +152,17 @@ void UI_Constructor::processCommandActivity() {
         // Log to DIRECTED.txt (includes FROM prefix)
         writeMsgTxt(text, d.snr, d.offset);
 
-        // Send to TCP API (FROM is a separate JSON field, so use baseText without prefix)
+        // Send to TCP API — use full text with FROM prefix for JS8 Spotter compat
         if (canSendNetworkMessage()) {
             sendNetworkMessage(
-                "RX.DIRECTED", baseText,
+                "RX.DIRECTED", text,
                 {{"_ID", QVariant(-1)},
                  {"FROM", QVariant(d.from)},
                  {"TO", QVariant(d.to)},
                  {"CMD", QVariant(d.cmd)},
                  {"GRID", QVariant(d.grid)},
                  {"EXTRA", QVariant(d.extra)},
-                 {"TEXT", QVariant(baseText)},
+                 {"TEXT", QVariant(text)},
                  {"FREQ", QVariant(d.dial + d.offset)},
                  {"DIAL", QVariant(d.dial)},
                  {"OFFSET", QVariant(d.offset)},
