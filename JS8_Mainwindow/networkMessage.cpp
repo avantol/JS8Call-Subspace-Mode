@@ -19,8 +19,10 @@
 void UI_Constructor::networkMessage(Message const &message) {
     auto type = message.type();
 
+#if 0  // TCP diagnostic logging — enable for JS8 Spotter debugging
     qWarning() << "[TCP-CMD] type=" << type
                << "value=" << message.value().left(100);
+#endif
 
     if (type == "PING") {
         return;

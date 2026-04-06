@@ -7197,10 +7197,12 @@ void UI_Constructor::udpNetworkMessage(Message const &message) {
 }
 
 void UI_Constructor::tcpNetworkMessage(Message const &message) {
+#if 0  // TCP diagnostic logging — enable for JS8 Spotter debugging
     qWarning() << "[TCP-RX] type=" << message.type()
                << "value=" << message.value().left(100)
                << "tcpEnabled=" << m_config.tcpEnabled()
                << "acceptTcp=" << m_config.accept_tcp_requests();
+#endif
     if (!m_config.tcpEnabled()) {
         return;
     }
@@ -7243,8 +7245,10 @@ void UI_Constructor::sendNetworkMessage(QString const &type,
     }
 
     // Log outgoing RX notifications for TCP API debugging
+#if 0  // TCP diagnostic logging — enable for JS8 Spotter debugging
     if (type.startsWith("RX.") || type.startsWith("TX."))
         qWarning() << "[TCP-TX]" << type << "msg=" << message.left(60);
+#endif
 
     auto m = Message(type, message, params);
 
