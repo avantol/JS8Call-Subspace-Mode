@@ -7242,6 +7242,10 @@ void UI_Constructor::sendNetworkMessage(QString const &type,
         return;
     }
 
+    // Log outgoing RX notifications for TCP API debugging
+    if (type.startsWith("RX.") || type.startsWith("TX."))
+        qWarning() << "[TCP-TX]" << type << "msg=" << message.left(60);
+
     auto m = Message(type, message, params);
 
     if (m_config.udpEnabled()) {
