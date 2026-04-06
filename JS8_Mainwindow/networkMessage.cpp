@@ -19,6 +19,9 @@
 void UI_Constructor::networkMessage(Message const &message) {
     auto type = message.type();
 
+    qWarning() << "[TCP-CMD] type=" << type
+               << "value=" << message.value().left(100);
+
     if (type == "PING") {
         return;
     }

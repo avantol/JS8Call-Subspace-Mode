@@ -7197,6 +7197,10 @@ void UI_Constructor::udpNetworkMessage(Message const &message) {
 }
 
 void UI_Constructor::tcpNetworkMessage(Message const &message) {
+    qWarning() << "[TCP-RX] type=" << message.type()
+               << "value=" << message.value().left(100)
+               << "tcpEnabled=" << m_config.tcpEnabled()
+               << "acceptTcp=" << m_config.accept_tcp_requests();
     if (!m_config.tcpEnabled()) {
         return;
     }
