@@ -58,7 +58,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET 12.0)
 project(
   JS8Call
   VERSION   2.5.0
-  LANGUAGES C CXX Fortran
+  LANGUAGES C CXX
 )
 
 set(PROJECT_VENDOR "Jordan Sherer, KN4CRD")
@@ -322,69 +322,21 @@ target_link_libraries(
 )
 
 #------------------------------------------------------------------------------#
-# FT2 Mode Support (Decodium Fortran decoder/encoder)
+# FT2 Mode Support (C++ port — Fortran removed)
 #------------------------------------------------------------------------------#
 
-option(ENABLE_FT2 "Enable FT2 mode (requires gfortran)" ON)
+option(ENABLE_FT2 "Enable FT2 mode (C++ DSP, no Fortran required)" ON)
 
 if(ENABLE_FT2)
-  set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -cpp -fno-range-check")
-
-  add_library(ft2_fortran STATIC
-    # Shared Fortran dependencies (order matters for module compilation)
-    lib/ft2_deps/fftw3.f90
-    lib/ft2_deps/timer_module.f90
-    lib/ft2_deps/crc.f90
-    lib/ft2_deps/crc14.cpp
-    lib/ft2_deps/packjt.f90
-    lib/ft2_deps/packjt77var.f90
-    lib/ft2_deps/packjt77.f90
-    lib/ft2_deps/four2a.f90
-    lib/ft2_deps/twkfreq1.f90
-    lib/ft2_deps/nuttal_window.f90
-    lib/ft2_deps/pctile.f90
-    lib/ft2_deps/polyfit.f90
-    lib/ft2_deps/normalizebmet.f90
-    lib/ft2_deps/encode174_91.f90
-    lib/ft2_deps/encode174_91_nocrc.f90
-    lib/ft2_deps/get_crc14.f90
-    lib/ft2_deps/bpdecode174_91.f90
-    lib/ft2_deps/osd174_91.f90
-    lib/ft2_deps/decode174_91.f90
-    lib/ft2_deps/indexx.f90
-    lib/ft2_deps/shell.f90
-    lib/ft2_deps/determ.f90
-    lib/ft2_deps/chkcall.f90
-    lib/ft2_deps/platanh.f90
-    # FT2-specific Fortran sources
-    lib/ft2/ft2_baseline.f90
-    lib/ft2/ft2_downsample.f90
-    lib/ft2/getcandidates2.f90
-    lib/ft2/get_ft2_bitmetrics.f90
-    lib/ft2/sync2d.f90
-    lib/ft2/subtractft2.f90
-    lib/ft2/gfsk_pulse.f90
-    lib/ft2/genft2.f90
-    lib/ft2/gen_ft2wave.f90
-    lib/ft2/ft2_iwave.f90
-    lib/ft2/ft2_gfsk_iwave.f90
-    lib/ft2/ft2_decode.f90
-    lib/ft2/ft2_triggered_decode.f90
-    lib/ft2/ft2_sync_scan.f90
-    lib/ft2/ft2_bridge.f90
+  target_sources(${TARGET} PRIVATE
+    JS8_Mode/DecodeFT2.cpp
+    JS8_Mode/FT2OnsetDetector.cpp
+    JS8_Mode/ft2_impl.cpp
+    JS8_Mode/ft2_ldpc.cpp
+    JS8_Mode/ft2_modem.cpp
   )
-
-  target_include_directories(ft2_fortran PRIVATE
-    ${CMAKE_SOURCE_DIR}/lib
-    ${CMAKE_SOURCE_DIR}/lib/ft2
-    ${CMAKE_SOURCE_DIR}/lib/ft2_deps
-  )
-
-  target_link_libraries(ft2_fortran PRIVATE ${FFTW3_LIBRARIES})
-
-  target_sources(${TARGET} PRIVATE JS8_Mode/DecodeFT2.cpp JS8_Mode/FT2OnsetDetector.cpp)
   target_compile_definitions(${TARGET} PRIVATE JS8_ENABLE_FT2=1)
-  target_link_libraries(${TARGET} PRIVATE ft2_fortran)
+  message(STATUS "FT2/Subspace mode enabled (C++ decoder port)")
 endif()
 
 #------------------------------------------------------------------------------#

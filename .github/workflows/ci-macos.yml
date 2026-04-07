@@ -1,0 +1,171 @@
+permissions:
+  contents: read
+  attestations: write
+  id-token: write
+
+name: macOS Build (Subspace)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build_macos:
+    runs-on: macos-15
+    permissions: write-all
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install dependencies
+      run: |
+        brew update
+        brew install autoconf automake libtool pkgconf fdk-aac git lame libass libtool libvorbis \
+          libvpx opus sdl shtool texi2html theora wget x264 x265 xvid nasm create-dmg
+
+    - name: Cache libusb 1.0.29
+      id: cache-usb
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ github.workspace }}/local/libusb
+        key: ${{ runner.os }}-${{ runner.arch }}-libusb1029
+
+    - name: Cache ffmpeg 7.1.3
+      id: cache-ffmpeg
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ github.workspace }}/local/ffmpeg
+        key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg713
+
+    - name: Cache Hamlib 4.6.5
+      id: cache-hamlib
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ github.workspace }}/local/hamlib
+        key: ${{ runner.os }}-${{ runner.arch }}-hamlib465
+
+    - name: Cache fftw 3.3.10
+      id: cache-fftw
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ github.workspace }}/local/fftw
+        key: ${{ runner.os }}-${{ runner.arch }}-fftw3310
+
+    - name: Cache Boost 1.88
+      id: cache-boost
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ github.workspace }}/local/boost
+        key: ${{ runner.os }}-${{ runner.arch }}-boost188
+
+    - name: Install libusb 1.0.29
+      if: steps.cache-usb.outputs.cache-hit != 'true'
+      run: |
+        curl --location --output /tmp/v1.0.29.tar.gz https://github.com/libusb/libusb/archive/refs/tags/v1.0.29.tar.gz
+        cd /tmp && tar zxf v1.0.29.tar.gz && cd libusb-1.0.29
+        ./bootstrap.sh
+        ./configure --prefix=${GITHUB_WORKSPACE}/local/libusb
+        make && make install
+
+    - name: Save libusb cache
+      if: steps.cache-usb.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ runner.os }}-${{ runner.arch }}-libusb1029
+        path: ${{ github.workspace }}/local/libusb
+
+    - name: Install Hamlib 4.6.5
+      if: steps.cache-hamlib.outputs.cache-hit != 'true'
+      run: |
+        git clone --depth=1 --branch=4.6.5 https://github.com/Hamlib/Hamlib.git /tmp/hamlib
+        cd /tmp/hamlib
+        ./bootstrap
+        ./configure --prefix=${GITHUB_WORKSPACE}/local/hamlib
+        make -j 4 && make install-strip
+
+    - name: Save Hamlib cache
+      if: steps.cache-hamlib.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ runner.os }}-${{ runner.arch }}-hamlib465
+        path: ${{ github.workspace }}/local/hamlib
+
+    - name: Install fftw 3.3.10
+      if: steps.cache-fftw.outputs.cache-hit != 'true'
+      run: |
+        cd /tmp
+        curl --location --output fftw-3.3.10.tar.gz https://www.fftw.org/fftw-3.3.10.tar.gz
+        tar zxf fftw-3.3.10.tar.gz && cd fftw-3.3.10
+        ./configure --prefix=${GITHUB_WORKSPACE}/local/fftw --enable-threads --enable-shared --enable-float
+        make && make install
+
+    - name: Save fftw cache
+      if: steps.cache-fftw.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ runner.os }}-${{ runner.arch }}-fftw3310
+        path: ${{ github.workspace }}/local/fftw
+
+    - name: Install Boost 1.88
+      if: steps.cache-boost.outputs.cache-hit != 'true'
+      run: |
+        cd /tmp
+        curl --location --output boost-1.88.0.tar.gz https://archives.boost.io/release/1.88.0/source/boost_1_88_0.tar.gz
+        tar zxf boost-1.88.0.tar.gz && cd boost_1_88_0
+        ./bootstrap.sh --prefix=${GITHUB_WORKSPACE}/local/boost
+        ./b2 install
+
+    - name: Save Boost cache
+      if: steps.cache-boost.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ runner.os }}-${{ runner.arch }}-boost188
+        path: ${{ github.workspace }}/local/boost
+
+    - name: Install ffmpeg 7.1.3
+      if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+      run: |
+        git clone --depth=1 --branch n7.1.3 https://git.ffmpeg.org/ffmpeg.git /tmp/ffmpeg
+        mkdir -p /tmp/ffmpeg/build && cd /tmp/ffmpeg/build
+        ../configure --prefix=${GITHUB_WORKSPACE}/local/ffmpeg --enable-shared --enable-static --disable-doc --enable-network
+        make install
+
+    - name: Save ffmpeg cache
+      if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg713
+        path: ${{ github.workspace }}/local/ffmpeg
+
+    - name: Install Qt 6.9.3
+      uses: jurplel/install-qt-action@v4
+      with:
+        cache: true
+        aqtversion: '==3.1.*'
+        version: '6.9.3'
+        host: 'mac'
+        target: 'desktop'
+        arch: 'clang_64'
+        modules: 'qtmultimedia qtserialport'
+        archives: 'qtsvg qtdeclarative qtbase'
+
+    - name: Build JS8Call
+      run: |
+        mkdir -p ./build && cd ./build
+        cmake -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${GITHUB_WORKSPACE}/local/fftw;${GITHUB_WORKSPACE}/local/boost;${GITHUB_WORKSPACE}/local/libusb" \
+              -DCMAKE_BUILD_TYPE=Release \
+              ..
+        make -j 4
+
+    - name: Create DMG
+      run: create-dmg "JS8Call-Subspace.dmg" "build/JS8Call.app"
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v5
+      with:
+        name: "JS8Call-Subspace_${{ github.ref_name }}_${{ runner.arch }}_macos.dmg"
+        path: ${{ github.workspace }}/JS8Call-Subspace.dmg
