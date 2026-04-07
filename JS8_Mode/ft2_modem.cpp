@@ -19,6 +19,10 @@
 #include "JS8_Include/commons.h"   // extern std::mutex fftw_mutex
 #include <memory>                  // std::make_unique (heap allocation for large arrays)
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include <fftw3.h>
 
 #include <algorithm>
