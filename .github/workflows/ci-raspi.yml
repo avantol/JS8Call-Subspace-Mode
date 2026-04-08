@@ -29,8 +29,9 @@ jobs:
     - name: Build in arm64 container
       uses: uraimo/run-on-arch-action@v2
       with:
-        arch: aarch64
-        distro: trixie
+        arch: none
+        distro: none
+        base_image: arm64v8/debian:trixie
         githubToken: ${{ github.token }}
         run: |
           apt-get update
