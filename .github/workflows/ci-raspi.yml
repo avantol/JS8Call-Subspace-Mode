@@ -26,13 +26,15 @@ jobs:
         PATCH=$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
         echo "ver=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
 
-    - name: Build in armhf container
+    - name: Build and package in armhf container
       uses: uraimo/run-on-arch-action@v2
       with:
         arch: armv7
         distro: none
         base_image: debian:trixie
         githubToken: ${{ github.token }}
+        setup: mkdir -p "${PWD}/output"
+        dockerRunArgs: --volume "${PWD}/output:/output"
         run: |
           apt-get update
           apt-get install -y build-essential cmake git pkg-config \
@@ -43,26 +45,25 @@ jobs:
           mkdir -p build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release ..
           make -j1
-
-    - name: Package .deb
-      run: |
-        VER=${{ steps.version.outputs.ver }}
-        mkdir -p deb-pkg/DEBIAN
-        mkdir -p deb-pkg/usr/local/bin
-        mkdir -p deb-pkg/usr/share/applications
-        mkdir -p deb-pkg/usr/share/icons/hicolor/256x256/apps
-        cp build/JS8Call deb-pkg/usr/local/bin/js8call-subspace
-        if [ -f deb-staging/usr/share/applications/js8call-subspace.desktop ]; then
-          cp deb-staging/usr/share/applications/js8call-subspace.desktop deb-pkg/usr/share/applications/
-        fi
-        if [ -f deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png ]; then
-          cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png deb-pkg/usr/share/icons/hicolor/256x256/apps/
-        fi
-        printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: armhf\nMaintainer: WM8Q\nDescription: JS8Call Subspace Edition - weak-signal messaging\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4 | libhamlib4t64, libusb-1.0-0\n' "${VER}" > deb-pkg/DEBIAN/control
-        dpkg-deb -Zxz --build deb-pkg js8call-subspace_${VER}_armhf.deb
+          cd ..
+          mkdir -p deb-pkg/DEBIAN
+          mkdir -p deb-pkg/usr/local/bin
+          mkdir -p deb-pkg/usr/share/applications
+          mkdir -p deb-pkg/usr/share/icons/hicolor/256x256/apps
+          cp build/JS8Call deb-pkg/usr/local/bin/js8call-subspace
+          if [ -f deb-staging/usr/share/applications/js8call-subspace.desktop ]; then
+            cp deb-staging/usr/share/applications/js8call-subspace.desktop deb-pkg/usr/share/applications/
+          fi
+          if [ -f deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png ]; then
+            cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png deb-pkg/usr/share/icons/hicolor/256x256/apps/
+          fi
+          VER=$(grep WSJTX_VERSION_MAJOR Versions.cmake | sed 's/[^0-9]//g').$(grep WSJTX_VERSION_MINOR Versions.cmake | sed 's/[^0-9]//g').$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
+          printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: armhf\nMaintainer: WM8Q\nDescription: JS8Call Subspace Edition - weak-signal messaging\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4 | libhamlib4t64, libusb-1.0-0\n' "${VER}" > deb-pkg/DEBIAN/control
+          dpkg-deb -Zxz --build deb-pkg "/output/js8call-subspace_${VER}_armhf.deb"
+          file deb-pkg/usr/local/bin/js8call-subspace
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
       with:
         name: "JS8Call-Subspace-${{ steps.version.outputs.ver }}-armhf-raspi.deb"
-        path: js8call-subspace_${{ steps.version.outputs.ver }}_armhf.deb
+        path: output/js8call-subspace_${{ steps.version.outputs.ver }}_armhf.deb
