@@ -127,8 +127,10 @@ void MessagePanel::populateMessages(QList<QPair<int, Message>> msgs) {
       ui->messageTableWidget->setItem(row, col++, midItem);
 
       const auto dateStr = params.value("UTC").toString();
-      QDateTime ts = QDateTime::fromString(dateStr, "yyyy-MM-dd HH:mm:ss");
-      ts.setTimeZone(QTimeZone::utc());
+      QDateTime ts = QDateTime(
+          QDate::fromString(dateStr.left(10), "yyyy-MM-dd"),
+          QTime::fromString(dateStr.mid(11), "HH:mm:ss"),
+          QTimeZone::utc());
 
       auto *dateItem = new DateItem(ts.toString("ddd MMM d HH:mm:ss yyyy"));
       dateItem->setData(Qt::UserRole, ts.toSecsSinceEpoch());   // sort key

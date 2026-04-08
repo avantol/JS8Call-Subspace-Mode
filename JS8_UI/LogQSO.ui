@@ -164,9 +164,6 @@
                <verstretch>0</verstretch>
               </sizepolicy>
              </property>
-             <property name="timeSpec">
-              <enum>Qt::UTC</enum>
-             </property>
              <property name="displayFormat">
               <string>yyyy-MM-dd HH:mm:ss</string>
              </property>
@@ -221,9 +218,6 @@
                <horstretch>0</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
-             </property>
-             <property name="timeSpec">
-              <enum>Qt::UTC</enum>
              </property>
              <property name="displayFormat">
               <string>yyyy-MM-dd HH:mm:ss</string>

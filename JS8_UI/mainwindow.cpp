@@ -6775,9 +6775,10 @@ void UI_Constructor::refreshInboxCounts() {
                 cd.dial = dial;
                 cd.offset = offset;
                 cd.tdrift = tdrift;
-                cd.utcTimestamp =
-                    QDateTime::fromString(utc, "yyyy-MM-dd hh:mm:ss");
-                cd.utcTimestamp.setTimeZone(QTimeZone::utc());
+                cd.utcTimestamp = QDateTime(
+                    QDate::fromString(utc.left(10), "yyyy-MM-dd"),
+                    QTime::fromString(utc.mid(11), "hh:mm:ss"),
+                    QTimeZone::utc());
                 cd.ackTimestamp = cd.utcTimestamp;
                 cd.submode = submode;
                 logCallActivity(cd, false);
