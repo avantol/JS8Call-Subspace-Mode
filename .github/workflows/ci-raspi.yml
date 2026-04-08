@@ -28,14 +28,11 @@ jobs:
 
     - name: Build in arm64 container
       uses: uraimo/run-on-arch-action@v2
-      env:
-        DOCKER_DEFAULT_PLATFORM: linux/arm64
       with:
         arch: aarch64
-        distro: bookworm
+        distro: none
         base_image: debian:trixie
         githubToken: ${{ github.token }}
-        dockerRunArgs: --platform linux/arm64
         run: |
           apt-get update
           apt-get install -y build-essential cmake git pkg-config \
