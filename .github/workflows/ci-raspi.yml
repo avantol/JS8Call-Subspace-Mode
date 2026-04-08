@@ -4,9 +4,7 @@ permissions:
 name: Raspberry Pi Build (Subspace)
 
 on:
-  push:
-    branches: [master]
-  workflow_dispatch:
+  workflow_dispatch:  # manual trigger only — QEMU build takes 30-60 min
 
 jobs:
   build_raspi:
