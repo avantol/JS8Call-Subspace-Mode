@@ -16,7 +16,7 @@ jobs:
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
       with:
-        platforms: arm64
+        platforms: linux/arm/v7
 
     - name: Get version
       id: version
@@ -26,10 +26,10 @@ jobs:
         PATCH=$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
         echo "ver=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
 
-    - name: Build in arm64 container
+    - name: Build in armhf container
       uses: uraimo/run-on-arch-action@v2
       with:
-        arch: aarch64
+        arch: armv7
         distro: none
         base_image: debian:trixie
         githubToken: ${{ github.token }}
@@ -58,11 +58,11 @@ jobs:
         if [ -f deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png ]; then
           cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png deb-pkg/usr/share/icons/hicolor/256x256/apps/
         fi
-        printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: arm64\nMaintainer: WM8Q\nDescription: JS8Call Subspace Edition - weak-signal messaging\nDepends: libqt6core6t64, libqt6gui6t64, libqt6widgets6t64, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4t64, libusb-1.0-0\n' "${VER}" > deb-pkg/DEBIAN/control
-        dpkg-deb -Zxz --build deb-pkg js8call-subspace_${VER}_arm64.deb
+        printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: armhf\nMaintainer: WM8Q\nDescription: JS8Call Subspace Edition - weak-signal messaging\nDepends: libqt6core6t64, libqt6gui6t64, libqt6widgets6t64, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4t64, libusb-1.0-0\n' "${VER}" > deb-pkg/DEBIAN/control
+        dpkg-deb -Zxz --build deb-pkg js8call-subspace_${VER}_armhf.deb
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
       with:
-        name: "JS8Call-Subspace-${{ steps.version.outputs.ver }}-arm64-raspi.deb"
-        path: js8call-subspace_${{ steps.version.outputs.ver }}_arm64.deb
+        name: "JS8Call-Subspace-${{ steps.version.outputs.ver }}-armhf-raspi.deb"
+        path: js8call-subspace_${{ steps.version.outputs.ver }}_armhf.deb
