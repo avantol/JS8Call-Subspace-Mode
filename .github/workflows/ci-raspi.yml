@@ -39,7 +39,7 @@ jobs:
             qt6-base-dev qt6-multimedia-dev qt6-serialport-dev \
             libqt6svg6-dev \
             libfftw3-dev libhamlib-dev libboost-all-dev \
-            libusb-1.0-0-dev
+            libusb-1.0-0-dev libudev-dev
           mkdir -p build && cd build
           cmake -DCMAKE_BUILD_TYPE=Release ..
           make -j1
