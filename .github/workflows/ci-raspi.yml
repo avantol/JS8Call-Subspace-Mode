@@ -31,7 +31,7 @@ jobs:
       with:
         arch: aarch64
         distro: none
-        base_image: debian:trixie
+        base_image: arm64v8/debian:trixie
         githubToken: ${{ github.token }}
         setup: mkdir -p "${PWD}/output"
         dockerRunArgs: --volume "${PWD}/output:/output"
