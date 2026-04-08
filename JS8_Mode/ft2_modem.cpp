@@ -995,8 +995,9 @@ void decodeFT2(const int16_t *iwave, int nmax,
                 sum_cb /= (float)(NSS * NN);
                 if (sum_cb > 0.f) { float inv=1.f/sqrtf(sum_cb); for(int n=0;n<NP;n++) cb[n]*=inv; }
 
-                // Extract signal at ibest
-                Cx cd[NN*NSS] = {};
+                // Extract signal at ibest (heap-allocated: NN*NSS=3296 Cx = 26KB)
+                auto cd_buf = std::make_unique<Cx[]>(NN*NSS);
+                Cx *cd = cd_buf.get();
                 if (ibest >= 0) {
                     int np = std::min(NDMAX - ibest, NN*NSS);
                     memcpy(cd, cb + ibest, sizeof(Cx) * np);
@@ -1184,8 +1185,9 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
         sum_cb /= (float)NDMAX;
         if (sum_cb > 0.f) { float inv=1.f/sqrtf(sum_cb); for(int n=0;n<NP;n++) cb[n]*=inv; }
 
-        // Extract signal at known position
-        Cx cd[NN*NSS] = {};
+        // Extract signal at known position (heap-allocated: NN*NSS=3296 Cx = 26KB)
+        auto cd_buf = std::make_unique<Cx[]>(NN*NSS);
+        Cx *cd = cd_buf.get();
         if (ibest >= 0) {
             int np = std::min(NDMAX - ibest, NN*NSS);
             if (np > 0) memcpy(cd, cb + ibest, sizeof(Cx) * np);
@@ -1288,7 +1290,9 @@ void syncScanFT2(const int16_t *iwave, int nfreqs, const float *freqs,
 
     if (!g.initialized || nfreqs <= 0) return;
 
-    float dd[NMAX];
+    // heap-allocated: NMAX=90000 floats = 360KB, too large for stack
+    auto dd_buf = std::make_unique<float[]>(NMAX);
+    float *dd = dd_buf.get();
     for (int i = 0; i < NMAX; i++) dd[i] = (float)iwave[i];
 
     float best_sync = -99.f;
@@ -1301,14 +1305,16 @@ void syncScanFT2(const int16_t *iwave, int nfreqs, const float *freqs,
     for (int ifreq = 0; ifreq < nfreqs; ifreq++) {
         float f0 = freqs[ifreq];
 
-        Cx cd2[NP];
+        // heap-allocated: NP=10000 Cx = 80KB, too large for stack
+        auto cd2_buf = std::make_unique<Cx[]>(NP);
+        Cx *cd2 = cd2_buf.get();
         ft2Downsample(dd, dobigfft, f0, cd2);
         if (dobigfft) dobigfft = false;
 
         float sum2 = 0.f;
         for (int n = 0; n < NP; n++) sum2 += std::norm(cd2[n]);
         sum2 /= (float)NP;
-        if (sum2 > 0.f) { float inv=1.f/sqrtf(sum2); for(auto &v:cd2) v*=inv; }
+        if (sum2 > 0.f) { float inv=1.f/sqrtf(sum2); for(int n=0;n<NP;n++) cd2[n]*=inv; }
 
         for (int idf = -12; idf <= 12; idf += 3) {
             const Cx *ctwk = g.ctwk2[idf + 16];
