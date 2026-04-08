@@ -342,6 +342,11 @@ void UI_Constructor::manualBandHop(const StationList::Station station) {
 
 //--------------------------------------------------- UI_Constructor destructor
 UI_Constructor::~UI_Constructor() {
+#ifdef JS8_ENABLE_FT2
+    m_l2DecodeTimer.stop();
+    m_l2DecodeWatcher.waitForFinished();
+#endif
+
     {
         std::lock_guard<std::mutex> lock(fftw_mutex);
         fftwf_export_wisdom_to_filename(wisdomFileName());

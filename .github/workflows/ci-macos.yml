@@ -161,11 +161,19 @@ jobs:
               ..
         make -j 4
 
+    - name: Get version
+      id: version
+      run: |
+        MAJOR=$(grep WSJTX_VERSION_MAJOR Versions.cmake | sed 's/[^0-9]//g')
+        MINOR=$(grep WSJTX_VERSION_MINOR Versions.cmake | sed 's/[^0-9]//g')
+        PATCH=$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
+        echo "ver=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+
     - name: Create DMG
-      run: create-dmg "JS8Call-Subspace.dmg" "build/JS8Call.app"
+      run: create-dmg "JS8Call-Subspace-${{ steps.version.outputs.ver }}-arm64-macos.dmg" "build/JS8Call.app"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
       with:
-        name: "JS8Call-Subspace_${{ github.ref_name }}_${{ runner.arch }}_macos.dmg"
-        path: ${{ github.workspace }}/JS8Call-Subspace.dmg
+        name: "JS8Call-Subspace-${{ steps.version.outputs.ver }}-arm64-macos.dmg"
+        path: ${{ github.workspace }}/JS8Call-Subspace-${{ steps.version.outputs.ver }}-arm64-macos.dmg

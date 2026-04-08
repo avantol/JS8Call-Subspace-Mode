@@ -47,15 +47,13 @@ QDataStream &operator>>(QDataStream &is, StationList::Station &station) {
     is >> station.band_name_ >> station.frequency_ >> station.switch_at_ >>
         station.switch_until_ >> station.description_;
 
-    // Set the timezones to UTC. Will be local time when read from the saved
-    // configuration
-    station.switch_at_.setTimeZone(QTimeZone::utc());
-    station.switch_until_.setTimeZone(QTimeZone::utc());
-
-    // Convert to UTC. This is necessary because the TimeSpec needs to be
-    // Qt::UTC
-    station.switch_at_ = station.switch_at_.toUTC();
-    station.switch_until_ = station.switch_until_.toUTC();
+    // Times are always saved as UTC values (see setData line 447).
+    // QSettings loses the timezone tag on round-trip, so reconstruct
+    // with UTC timezone without converting the numeric value.
+    station.switch_at_ = QDateTime(station.switch_at_.date(),
+                                    station.switch_at_.time(), QTimeZone::utc());
+    station.switch_until_ = QDateTime(station.switch_until_.date(),
+                                       station.switch_until_.time(), QTimeZone::utc());
 
     return is;
 }
