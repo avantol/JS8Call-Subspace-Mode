@@ -122,7 +122,7 @@ cmake_dependent_option(
 # Boost and FFTW3 libraries.
 #------------------------------------------------------------------------------#
 
-find_package(Boost 1.77 REQUIRED)
+find_package(Boost 1.74 REQUIRED)
 find_package(FFTW3      REQUIRED COMPONENTS single threads)
 find_package(Hamlib     REQUIRED)
 find_package(Qt6    6.4 REQUIRED COMPONENTS Multimedia Network SerialPort Widgets)
