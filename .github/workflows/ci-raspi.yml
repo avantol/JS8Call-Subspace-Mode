@@ -43,9 +43,9 @@ jobs:
             libfftw3-dev libhamlib-dev libboost-all-dev \
             libusb-1.0-0-dev libudev-dev
           mkdir -p /tmp/arm-build && cd /tmp/arm-build
-          cmake -DCMAKE_BUILD_TYPE=Release /home/runner/work/*/*
+          cmake -DCMAKE_BUILD_TYPE=Release "${GITHUB_WORKSPACE}"
           make -j1
-          cd /home/runner/work/*/*
+          cd "${GITHUB_WORKSPACE}"
           mkdir -p deb-pkg/DEBIAN
           mkdir -p deb-pkg/usr/local/bin
           mkdir -p deb-pkg/usr/share/applications
