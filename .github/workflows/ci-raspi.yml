@@ -59,14 +59,14 @@ jobs:
         if [ -f deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png ]; then
           cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png deb-pkg/usr/share/icons/hicolor/256x256/apps/
         fi
-        cat > deb-pkg/DEBIAN/control << EOF
-        Package: js8call-subspace
-        Version: ${VER}
-        Architecture: arm64
-        Maintainer: WM8Q
-        Description: JS8Call Subspace Edition - weak-signal messaging
-        Depends: libqt6core6t64, libqt6gui6t64, libqt6widgets6t64, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4t64, libusb-1.0-0
-        EOF
+        cat > deb-pkg/DEBIAN/control <<CTRL
+Package: js8call-subspace
+Version: ${VER}
+Architecture: arm64
+Maintainer: WM8Q
+Description: JS8Call Subspace Edition - weak-signal messaging
+Depends: libqt6core6t64, libqt6gui6t64, libqt6widgets6t64, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4t64, libusb-1.0-0
+CTRL
         dpkg-deb --build deb-pkg js8call-subspace_${VER}_arm64.deb
 
     - name: Upload Artifact
