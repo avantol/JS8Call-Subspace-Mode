@@ -42,15 +42,15 @@ jobs:
             libqt6svg6-dev \
             libfftw3-dev libhamlib-dev libboost-all-dev \
             libusb-1.0-0-dev libudev-dev
-          mkdir -p build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release ..
+          mkdir -p /tmp/arm-build && cd /tmp/arm-build
+          cmake -DCMAKE_BUILD_TYPE=Release /home/runner/work/*/*
           make -j1
-          cd ..
+          cd /home/runner/work/*/*
           mkdir -p deb-pkg/DEBIAN
           mkdir -p deb-pkg/usr/local/bin
           mkdir -p deb-pkg/usr/share/applications
           mkdir -p deb-pkg/usr/share/icons/hicolor/256x256/apps
-          cp build/JS8Call deb-pkg/usr/local/bin/js8call-subspace
+          cp /tmp/arm-build/JS8Call deb-pkg/usr/local/bin/js8call-subspace
           if [ -f deb-staging/usr/share/applications/js8call-subspace.desktop ]; then
             cp deb-staging/usr/share/applications/js8call-subspace.desktop deb-pkg/usr/share/applications/
           fi
