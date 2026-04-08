@@ -34,13 +34,13 @@ jobs:
         githubToken: ${{ github.token }}
         run: |
           apt-get update
-          apt-get install -y build-essential cmake git pkg-config \
+          apt-get install -y build-essential cmake git pkg-config g++-13 \
             qt6-base-dev qt6-multimedia-dev qt6-serialport-dev \
             libqt6svg6-dev \
             libfftw3-dev libhamlib-dev libboost-all-dev \
             libusb-1.0-0-dev
           mkdir -p build && cd build
-          cmake -DCMAKE_BUILD_TYPE=Release ..
+          CC=gcc-13 CXX=g++-13 cmake -DCMAKE_BUILD_TYPE=Release ..
           make -j1
 
     - name: Package .deb
