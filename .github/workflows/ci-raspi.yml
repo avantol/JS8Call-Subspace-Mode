@@ -30,18 +30,21 @@ jobs:
       uses: uraimo/run-on-arch-action@v2
       with:
         arch: aarch64
-        distro: none
-        base_image: arm64v8/debian:trixie
+        distro: bookworm
         githubToken: ${{ github.token }}
         setup: mkdir -p "${PWD}/output"
         dockerRunArgs: --volume "${PWD}/output:/output"
         run: |
+          echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie.list
           apt-get update
+          apt-get install -y -t trixie gcc-14 g++-14
           apt-get install -y build-essential cmake git pkg-config \
             qt6-base-dev qt6-multimedia-dev qt6-serialport-dev \
             libqt6svg6-dev \
             libfftw3-dev libhamlib-dev libboost-all-dev \
             libusb-1.0-0-dev libudev-dev
+          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
           mkdir -p /tmp/arm-build && cd /tmp/arm-build
           cmake -DCMAKE_BUILD_TYPE=Release "${GITHUB_WORKSPACE}"
           make -j1
@@ -58,7 +61,7 @@ jobs:
             cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png deb-pkg/usr/share/icons/hicolor/256x256/apps/
           fi
           VER=$(grep WSJTX_VERSION_MAJOR Versions.cmake | sed 's/[^0-9]//g').$(grep WSJTX_VERSION_MINOR Versions.cmake | sed 's/[^0-9]//g').$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
-          printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: arm64\nMaintainer: WM8Q\nDescription: JS8Call Subspace Edition - weak-signal messaging\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4 | libhamlib4t64, libusb-1.0-0\n' "${VER}" > deb-pkg/DEBIAN/control
+          printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: arm64\nMaintainer: WM8Q\nDescription: JS8Call Subspace Edition - weak-signal messaging\nDepends: libqt6core6, libqt6gui6, libqt6widgets6, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4, libusb-1.0-0\n' "${VER}" > deb-pkg/DEBIAN/control
           dpkg-deb -Zxz --build deb-pkg "/output/js8call-subspace_${VER}_arm64.deb"
           file deb-pkg/usr/local/bin/js8call-subspace
 
