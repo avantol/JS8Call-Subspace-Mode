@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=JS8Call Subspace
+Comment=JS8Call Subspace Edition - weak-signal messaging
+Exec=/usr/local/bin/js8call-subspace
+Icon=js8call-subspace
+Terminal=false
+Type=Application
+Categories=HamRadio;Audio;
