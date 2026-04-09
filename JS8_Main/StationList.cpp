@@ -48,11 +48,11 @@ QDataStream &operator>>(QDataStream &is, StationList::Station &station) {
         station.switch_until_ >> station.description_;
 
     // Times are always saved as UTC values (see setData line 447).
-    // QSettings loses the timezone tag on round-trip, so reconstruct
-    // with UTC timezone without converting the numeric value.
-    station.switch_at_ = QDateTime(station.switch_at_.date(),
+    // QDataStream may restore with wrong timezone tag, but the numeric
+    // time value is correct. Just take .time() and label as UTC.
+    station.switch_at_ = QDateTime(QDate(2000, 1, 1),
                                     station.switch_at_.time(), QTimeZone::utc());
-    station.switch_until_ = QDateTime(station.switch_until_.date(),
+    station.switch_until_ = QDateTime(QDate(2000, 1, 1),
                                        station.switch_until_.time(), QTimeZone::utc());
 
     return is;

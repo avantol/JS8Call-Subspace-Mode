@@ -6224,7 +6224,8 @@ void UI_Constructor::updateTextWordCheckerDisplay() {
 }
 
 void UI_Constructor::updateTextStatsDisplay(QString text, int count) {
-    const double fpm = 60.0 / m_TRperiod;
+    // Use precise period in ms to avoid rounding error (3750ms → 4s loses accuracy)
+    const double fpm = 60000.0 / JS8::Submode::periodMS(m_nSubMode);
     if (count > 0) {
         auto words = text.split(" ", Qt::SkipEmptyParts).length();
         auto wpm = QString::number(words / (count / fpm), 'f', 1);

@@ -61,12 +61,21 @@ jobs:
             cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png deb-pkg/usr/share/icons/hicolor/256x256/apps/
           fi
           VER=$(grep WSJTX_VERSION_MAJOR Versions.cmake | sed 's/[^0-9]//g').$(grep WSJTX_VERSION_MINOR Versions.cmake | sed 's/[^0-9]//g').$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
-          printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: arm64\nMaintainer: WM8Q\nDescription: JS8Call Subspace Edition - weak-signal messaging\nDepends: libqt6core6, libqt6gui6, libqt6widgets6, libqt6multimedia6, libqt6serialport6, libfftw3-single3, libhamlib4, libusb-1.0-0\n' "${VER}" > deb-pkg/DEBIAN/control
-          dpkg-deb -Zxz --build deb-pkg "/output/js8call-subspace_${VER}_arm64.deb"
+          cat > deb-pkg/DEBIAN/control << CTRL
+          Package: js8call-subspace
+          Version: ${VER}
+          Architecture: arm64
+          Maintainer: WM8Q
+          Description: JS8Call Subspace Edition - weak-signal messaging
+           Install with: sudo apt install ./js8call-subspace_${VER}_arm64.deb
+          Depends: libqt6core6, libqt6gui6, libqt6widgets6, libqt6multimedia6, libqt6network6, libqt6serialport6, libfftw3-single3, libhamlib4, libusb-1.0-0, libudev1
+          CTRL
+          sed -i 's/^          //' deb-pkg/DEBIAN/control
+          dpkg-deb -Zxz --build deb-pkg "/output/js8call-subspace_${VER}_arm64-raspi.deb"
           file deb-pkg/usr/local/bin/js8call-subspace
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
       with:
         name: "JS8Call-Subspace-${{ steps.version.outputs.ver }}-arm64-raspi.deb"
-        path: output/js8call-subspace_${{ steps.version.outputs.ver }}_arm64.deb
+        path: output/js8call-subspace_${{ steps.version.outputs.ver }}_arm64-raspi.deb

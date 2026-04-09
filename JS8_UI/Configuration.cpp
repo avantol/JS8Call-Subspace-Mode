@@ -2409,11 +2409,15 @@ void Configuration::impl::write_settings() {
     settings_->setValue("colorTableHighlight", color_table_highlight_);
     settings_->setValue("colorTableForeground", color_table_foreground_);
 
-    settings_->setValue("Font", font_.toString());
-    settings_->setValue("RXTextFont", rx_text_font_.toString());
-    settings_->setValue("TXTextFont", tx_text_font_.toString());
-    settings_->setValue("composeTextFont", compose_text_font_.toString());
-    settings_->setValue("tableFont", table_font_.toString());
+    // QFont::toString() accesses QFontDatabase which requires QGuiApplication.
+    // Skip font writes during destructor shutdown to avoid crash.
+    if (QGuiApplication::instance()) {
+        settings_->setValue("Font", font_.toString());
+        settings_->setValue("RXTextFont", rx_text_font_.toString());
+        settings_->setValue("TXTextFont", tx_text_font_.toString());
+        settings_->setValue("composeTextFont", compose_text_font_.toString());
+        settings_->setValue("tableFont", table_font_.toString());
+    }
 
     settings_->setValue("TxDelay", txDelay_);
     settings_->setValue("PTTMethod", QVariant::fromValue(rig_params_.ptt_type));
