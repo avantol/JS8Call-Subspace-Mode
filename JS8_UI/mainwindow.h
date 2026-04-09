@@ -148,7 +148,7 @@ namespace {
 namespace Default {
 constexpr Radio::Frequency DIAL_FREQUENCY = 14078000;
 constexpr auto FREQUENCY = 1500;
-constexpr auto SUBMODE = Varicode::JS8CallNormal;
+constexpr auto SUBMODE = Varicode::JS8CallFT2;
 } // namespace Default
 
 namespace State {
