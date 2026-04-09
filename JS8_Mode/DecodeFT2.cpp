@@ -231,7 +231,8 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                     .data = rejData,
                     .type = frameBits,
                     .quality = 1.0f,
-                    .mode = 16
+                    .mode = 16,
+                    .l2 = true
                 });
             }
             continue;
@@ -245,7 +246,8 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
             .data = frame.toStdString(),
             .type = frameBits,
             .quality = 1.0f,  // LDPC-verified decode — not low confidence
-            .mode = 16 // Varicode::JS8CallFT2
+            .mode = 16, // Varicode::JS8CallFT2
+            .l2 = true
         });
 
         ++count;

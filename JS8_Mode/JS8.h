@@ -69,6 +69,7 @@ struct Decoded {
     int type;
     float quality;
     int mode;
+    bool l2 = false;
 };
 
 struct DecodeFinished {

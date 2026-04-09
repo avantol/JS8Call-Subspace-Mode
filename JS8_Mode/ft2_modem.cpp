@@ -1249,19 +1249,31 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
 
         memcpy(prev_bits[local_ndecoded], message77, 77);
 
-        // SNR estimate
+        // SNR estimate: use getCandidates speak for accurate spectral SNR.
+        // For nfqso_only, getCandidates was skipped pre-decode for speed;
+        // run it now only on successful decodes (~40ms cost).
+        if (nfqso_only == 1) {
+            float snr_savg[NH1], snr_sbase[NH1];
+            float snr_cand[MAXCAND][2];
+            int snr_ncand = 0;
+            getCandidates(dd, (float)nfa, (float)nfb, 0.60f, nfqso, MAXCAND,
+                          snr_savg, snr_cand, snr_ncand, snr_sbase);
+            // Find the speak value nearest our decoded frequency
+            snr0 = 0.f;
+            for (int i = 0; i < snr_ncand; i++) {
+                if (fabsf(snr_cand[i][0] - f1) <= 20.f) {
+                    snr0 = snr_cand[i][1] - 1.0f;
+                    break;
+                }
+            }
+        }
         float xsnr;
         if (snr0 > 0.f) {
             xsnr = 10.f * log10f(snr0) - 13.f;
-            if (nfqso_only == 1) xsnr = 0.6818f * xsnr + 7.227f + 5.0f;
         } else {
-            xsnr = (nfqso_only == 1) ? -16.f : -21.f;
+            xsnr = -21.f;
         }
-        int nsnr;
-        if (nfqso_only == 1)
-            nsnr = (int)roundf(std::max(-16.f, std::min(24.f, xsnr)));
-        else
-            nsnr = (int)roundf(std::max(-21.f, xsnr));
+        int nsnr = (int)roundf(std::max(-21.f, xsnr));
 
         // Store results
         if (snr_out)  snr_out[local_ndecoded]  = nsnr;

@@ -2148,12 +2148,10 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
         case Varicode::JS8CallFT2:
             dec_data.params.kposFT2 = params.start;
             dec_data.params.kszFT2 = params.sz;
-            // Synchronous FT2 decoder disabled while L2 is enabled.
-            // L2 holds the Fortran lock almost continuously, so the sync
-            // decoder's CAS always fails — produces 0 decodes (verified).
-            // Re-enable if L2 is ever made to yield the lock at boundaries.
-            if (!m_l2Enabled)
-                dec_data.params.nsubmodes |= 16; // bit 4
+            // Standard FT2 decoder runs alongside L2. With C++ port
+            // (no Fortran lock conflict), both can run concurrently.
+            // Standard decoder provides accurate SNR via getCandidates.
+            dec_data.params.nsubmodes |= 16; // bit 4
             break;
 #endif
         }

@@ -59,11 +59,26 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 //       manner, likely by sorting the raw take from the initial
                 //       selection pass.
 
-                qWarning() << "[DECODE-EVENT] processDecodeEvent received:"
-                           << "snr=" << e.snr << "freq=" << e.frequency
-                           << "mode=" << e.mode << "data=" << QString::fromStdString(e.data);
+                // Use standard decoder's SNR for L2 decodes when available
+                auto ev = e;
+                if (ev.mode == 16) {
+                    int freqKey = static_cast<int>(ev.frequency) / 10;
+                    if (!ev.l2) {
+                        m_ft2StdSnr[freqKey] = ev.snr;
+                    } else {
+                        auto it = m_ft2StdSnr.find(freqKey);
+                        if (it != m_ft2StdSnr.end()) {
+                            ev.snr = it.value();
+                        }
+                    }
+                }
 
-                DecodedText decodedtext(e);
+                qWarning() << "[DECODE-EVENT] processDecodeEvent received:"
+                           << "snr=" << ev.snr << "freq=" << ev.frequency
+                           << "mode=" << ev.mode << "l2=" << ev.l2
+                           << "data=" << QString::fromStdString(ev.data);
+
+                DecodedText decodedtext(ev);
                 // Mode-agnostic dedup: same frame content = same message
                 // regardless of which decoder/mode produced it
                 FrameCacheKey dedupeKey(0, decodedtext.frame());
