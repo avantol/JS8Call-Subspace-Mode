@@ -46,7 +46,7 @@ jobs:
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
           update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
           mkdir -p /tmp/arm-build && cd /tmp/arm-build
-          cmake -DCMAKE_BUILD_TYPE=Release "${GITHUB_WORKSPACE}"
+          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-O1" "${GITHUB_WORKSPACE}"
           make -j1
           cd "${GITHUB_WORKSPACE}"
           mkdir -p deb-pkg/DEBIAN
