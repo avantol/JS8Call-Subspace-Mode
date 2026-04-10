@@ -21,7 +21,7 @@ class Modulator final : public AudioDevice {
     Q_OBJECT;
 
   public:
-    enum class State { Synchronizing, Active, Idle };
+    enum class State { Synchronizing, Active, KeepAlive, Idle };
 
     // Constructor
 
@@ -34,9 +34,13 @@ class Modulator final : public AudioDevice {
      *
      * This method is thread-safe, i.e., can be called from a different thread.
      */
-    bool isIdle() const { return m_state.load() == State::Idle; }
+    bool isIdle() const {
+        auto s = m_state.load();
+        return s == State::Idle || s == State::KeepAlive;
+    }
     bool isFT2WaveformDone() const {
-        return m_state.load() == State::Idle
+        auto s = m_state.load();
+        return s == State::Idle || s == State::KeepAlive
             || (m_ft2Mode && m_ic >= static_cast<unsigned>(m_ft2WaveLen));
     }
 

@@ -73,7 +73,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     }
                 }
 
-                qWarning() << "[DECODE-EVENT] processDecodeEvent received:"
+                qCDebug(mainwindow_js8) << "[DECODE-EVENT] received:"
                            << "snr=" << ev.snr << "freq=" << ev.frequency
                            << "mode=" << ev.mode << "l2=" << ev.l2
                            << "data=" << QString::fromStdString(ev.data);
@@ -83,7 +83,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 // regardless of which decoder/mode produced it
                 FrameCacheKey dedupeKey(0, decodedtext.frame());
 
-                qWarning() << "[DECODE-EVENT] DecodedText: submode=" << decodedtext.submode()
+                qCDebug(mainwindow_js8) << "[DECODE-EVENT] DecodedText: submode=" << decodedtext.submode()
                            << "frame=" << decodedtext.frame()
                            << "msg=" << decodedtext.message();
 
@@ -97,7 +97,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                         ? 8.0
                         : 0.5 * JS8::Submode::period(decodedtext.submode());
                     if (ageSecs < window) {
-                        qWarning() << "[DECODE-EVENT] DUPLICATE, skipping frame=" << decodedtext.frame()
+                        qCDebug(mainwindow_js8) << "[DECODE-EVENT] DUPLICATE, skipping frame=" << decodedtext.frame()
                                    << "age=" << ageSecs << "s, window=" << window << "s";
                         return;
                     }

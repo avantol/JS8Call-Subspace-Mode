@@ -47,8 +47,8 @@ void Modulator::start(double const frequency, int const submode,
                << "freq=" << frequency
                << "submode=" << submode << "state=" << (int)current_state
                << "tuning=" << m_tuning;
-    if (current_state != State::Idle) {
-        qWarning() << "[FT2-TX] Modulator not idle, SKIPPING duplicate start"
+    if (current_state != State::Idle && current_state != State::KeepAlive) {
+        qWarning() << "[FT2-TX] Modulator not idle/keepalive, SKIPPING duplicate start"
                     << "cycle#" << m_txCycleCount;
         return;
     }
@@ -130,29 +130,49 @@ void Modulator::start(double const frequency, int const submode,
         qCDebug(modulator_js8) << "Modulator finds it is tuning.";
     }
 
-    initialize(QIODevice::ReadOnly, channel);
-
-    if (0 < m_silentFrames) {
-        m_state.store(State::Synchronizing);
-        qCDebug(modulator_js8)
-            << "Symbol transmission to start after"
-            << ((float)m_silentFrames) / FRAME_RATE * MS_PER_SEC
-            << "ms of silence.";
-    } else {
-        m_state.store(State::Active);
-        qCDebug(modulator_js8) << "Symbol transmission to start immediately.";
-    }
-
-    m_stream = stream;
-    if (m_stream) {
-        qWarning() << "[FT2-TX] Modulator::start() calling m_stream->restart()"
+    if (current_state == State::KeepAlive && m_stream && isOpen()) {
+        // Warm restart: stream is already running and pulling from us.
+        // Just switch state — readData() will produce waveform on next call.
+        if (0 < m_silentFrames) {
+            m_state.store(State::Synchronizing);
+        } else {
+            m_state.store(State::Active);
+        }
+        m_stream = stream;
+        qWarning() << "[FT2-TX] Modulator::start() warm restart from KeepAlive"
                     << "cycle#" << m_txCycleCount
                     << "ft2Mode=" << m_ft2Mode
-                    << "ft2WaveLen=" << m_ft2WaveLen
                     << "state=" << (int)m_state.load();
-        m_stream->restart(this);
     } else {
-        qWarning() << "[FT2-TX] Modulator::start: NO audio output stream!";
+        // Reset state to Idle if KeepAlive but stream is dead
+        if (current_state == State::KeepAlive) {
+            m_state.store(State::Idle);
+        }
+        // Cold start: initialize device and start stream.
+        initialize(QIODevice::ReadOnly, channel);
+
+        if (0 < m_silentFrames) {
+            m_state.store(State::Synchronizing);
+            qCDebug(modulator_js8)
+                << "Symbol transmission to start after"
+                << ((float)m_silentFrames) / FRAME_RATE * MS_PER_SEC
+                << "ms of silence.";
+        } else {
+            m_state.store(State::Active);
+            qCDebug(modulator_js8) << "Symbol transmission to start immediately.";
+        }
+
+        m_stream = stream;
+        if (m_stream) {
+            qWarning() << "[FT2-TX] Modulator::start() calling m_stream->restart()"
+                        << "cycle#" << m_txCycleCount
+                        << "ft2Mode=" << m_ft2Mode
+                        << "ft2WaveLen=" << m_ft2WaveLen
+                        << "state=" << (int)m_state.load();
+            m_stream->restart(this);
+        } else {
+            qWarning() << "[FT2-TX] Modulator::start: NO audio output stream!";
+        }
     }
 }
 
@@ -174,9 +194,21 @@ void Modulator::tune(bool const tuning) {
  */
 void Modulator::stop(bool const quickClose) {
     qWarning() << "[FT2-TX] Modulator::stop() quickClose=" << quickClose
-               << "cycle#" << m_txCycleCount;
-    m_quickClose = quickClose;
-    close();
+               << "cycle#" << m_txCycleCount
+               << "state=" << (int)m_state.load();
+    if (quickClose) {
+        // Hard stop: kill the stream immediately (tune cancel, etc.)
+        m_quickClose = true;
+        close();  // sets Idle, stops stream
+        return;
+    }
+    auto s = m_state.load();
+    if (s == State::Active || s == State::Synchronizing) {
+        // Soft stop from active TX: transition to KeepAlive.
+        // Stream stays alive, readData() feeds silence.
+        m_state.store(State::KeepAlive);
+    }
+    // If already Idle or KeepAlive, nothing to do.
 }
 
 /**
@@ -300,9 +332,9 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         }
 
         if (m_amp == 0.0) {
-            m_state.store(State::Idle);
-            return framesGenerated * bytesPerFrame();
+            m_state.store(State::KeepAlive);
             m_phi = 0.0;
+            return framesGenerated * bytesPerFrame();
         }
         } // end JS8 else block
 
@@ -319,6 +351,14 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         return framesGenerated * bytesPerFrame();
     }
         [[fallthrough]];
+
+    case State::KeepAlive:
+        // Feed silence to keep USB audio codec awake.
+        while (samples != samplesEnd) {
+            samples = load(0, samples);
+            ++framesGenerated;
+        }
+        return framesGenerated * bytesPerFrame();
 
     case State::Idle:
         break;

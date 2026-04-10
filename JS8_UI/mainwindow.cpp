@@ -5795,7 +5795,7 @@ void UI_Constructor::handle_transceiver_update(
             transmit();
         } else {
             if (m_nSubMode == Varicode::JS8CallFT2)
-                qWarning() << "[FT2-TX] PTT update but NOT transmitting:"
+                qCDebug(mainwindow_js8) << "[FT2-TX] PTT update but NOT transmitting:"
                             << "genAudio=" << m_generateAudioWhenPttConfirmedByTX
                             << "m_iptt=" << m_iptt;
         }
@@ -7647,7 +7647,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
                             &syncBest, &syncFreq, &syncIbest, &syncIdf);
             auto syncMs = QDateTime::currentMSecsSinceEpoch() - tSync;
 
-            qWarning() << "[FT2-L2] sync scan:" << syncMs << "ms"
+            qCDebug(mainwindow_js8) << "[FT2-L2] sync scan:" << syncMs << "ms"
                        << "nfreqs=" << nScanFreqs
                        << "sync=" << syncBest << "freq=" << syncFreq
                        << "ibest=" << syncIbest << "idf=" << syncIdf;
@@ -7676,8 +7676,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
             useNfqsoOnly, &decodedFreq,
             syncBest);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        // Log every decode cycle for SNR calibration investigation
-        qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
+        qCDebug(mainwindow_js8) << "[FT2-L2] decode took" << elapsed << "ms"
                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
                    << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
                    << "sync=" << syncBest;
