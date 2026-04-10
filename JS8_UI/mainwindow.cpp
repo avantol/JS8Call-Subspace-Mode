@@ -217,6 +217,7 @@ void UI_Constructor::tryBandHop() {
 
     // get the current band
     auto dialFreq = dialFrequency();
+    if (dialFreq == 0) return;  // rig not yet connected
 
     auto currentBand = m_config.bands()->find(dialFreq);
 
@@ -280,8 +281,10 @@ void UI_Constructor::tryBandHop() {
 
         bool canSwitch = (noOverride && freqIsDifferent);
 
-        // switch, if we can and the band is different than our current band
         if (canSwitch) {
+            qWarning() << "[BAND-HOP] canSwitch: hop=" << hopStation->frequency_
+                       << "dial=" << dialFreq << "bandHopped=" << m_bandHopped
+                       << "bandHoppedFreq=" << m_bandHoppedFreq;
             Frequency frequency = hopStation->frequency_;
 
             m_bandHopped = false;
@@ -6606,8 +6609,8 @@ void UI_Constructor::processIdleActivity() {
             continue;
         if (last.text == m_config.mfi())
             continue;
-        if (last.utcTimestamp.secsTo(now) <
-            JS8::Submode::period(last.submode) * 1.50)
+        if (last.utcTimestamp.msecsTo(now) <
+            JS8::Submode::periodMS(last.submode) * 2)
             continue;
 
         ActivityDetail d = {};

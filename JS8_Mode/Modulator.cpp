@@ -130,8 +130,9 @@ void Modulator::start(double const frequency, int const submode,
         qCDebug(modulator_js8) << "Modulator finds it is tuning.";
     }
 
-    if (current_state == State::KeepAlive && m_stream && isOpen()) {
-        // Warm restart: stream is already running and pulling from us.
+    if (current_state == State::KeepAlive && m_stream && isOpen()
+        && m_stream->isStreaming()) {
+        // Warm restart: stream is still running and pulling from us.
         // Just switch state — readData() will produce waveform on next call.
         if (0 < m_silentFrames) {
             m_state.store(State::Synchronizing);
@@ -353,9 +354,12 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         [[fallthrough]];
 
     case State::KeepAlive:
-        // Feed silence to keep USB audio codec awake.
+        // Feed near-zero samples to keep USB audio codec awake.
+        // Actual zeros cause Qt/PipeWire to treat stream as empty
+        // and transition to Idle→Stopped. Amplitude 1 is inaudible
+        // (-90 dBFS) but keeps the sink in Active state.
         while (samples != samplesEnd) {
-            samples = load(0, samples);
+            samples = load(1, samples);
             ++framesGenerated;
         }
         return framesGenerated * bytesPerFrame();

@@ -18,6 +18,7 @@ class SoundOutput : public QObject {
 
     qreal attenuation() const;
     QAudioFormat format() const;
+    bool isStreaming() const;
 
   public Q_SLOTS:
     void setFormat(QAudioDevice const &device, unsigned channels,
@@ -45,6 +46,7 @@ class SoundOutput : public QObject {
   private:
     QAudioDevice m_device;
     QScopedPointer<QAudioSink> m_stream;
+    QIODevice *m_source = nullptr;  // current pull-mode source device
     QAudioFormat m_format;
     unsigned m_msBuffered = 0u;
     qreal m_volume = 1.0;

@@ -958,9 +958,9 @@ class UI_Constructor : public QMainWindow {
     QHash<QString, QDateTime> m_aprsRelayDedupCache;
     QSet<QString> m_callSeenHeartbeat; // call
     int m_previousFreq;
-    bool m_shouldRestoreFreq;
-    bool m_bandHopped;
-    Frequency m_bandHoppedFreq;
+    bool m_shouldRestoreFreq = false;
+    bool m_bandHopped = false;
+    Frequency m_bandHoppedFreq = 0;
 
     /** Repeat period of HBs, in seconds. */
     int m_hbInterval;

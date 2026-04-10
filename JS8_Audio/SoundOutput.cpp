@@ -183,6 +183,7 @@ void SoundOutput::restart(QIODevice *source) {
             m_stream->format().bytesForDuration(m_msBuffered));
     }
 
+    m_source = source;
     m_stream->start(source);
 }
 
@@ -243,6 +244,10 @@ qreal SoundOutput::attenuation() const {
  */
 QAudioFormat SoundOutput::format() const { return m_format; }
 
+bool SoundOutput::isStreaming() const {
+    return m_stream && m_stream->state() != QAudio::StoppedState;
+}
+
 /**
  * @brief Sets the attenuation in decibels.
  * @param a The attenuation value.
@@ -288,6 +293,11 @@ void SoundOutput::handleStateChanged(QAudio::State newState) const {
 
     switch (newState) {
     case QAudio::IdleState:
+        // Wake the sink to prevent permanent underrun (QTBUG-108672).
+        // When the Modulator is in KeepAlive, it has silence data available.
+        // Emit readyRead() on the source to tell the sink to resume pulling.
+        if (m_source)
+            QMetaObject::invokeMethod(m_source, "readyRead");
         Q_EMIT status(tr("Idle"));
         break;
     case QAudio::ActiveState:
