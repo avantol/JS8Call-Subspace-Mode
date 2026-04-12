@@ -597,11 +597,11 @@ class UI_Constructor : public QMainWindow {
     QScopedPointer<HelpTextWindow> m_mouseCmnds;
 
     Transceiver::TransceiverState m_rigState;
-    Frequency m_lastDialFreq;
+    Frequency m_lastDialFreq = 0;
     QString m_lastBand;
 
     Detector *m_detector;
-    unsigned m_FFTSize;
+    unsigned m_FFTSize = 0;
     SoundInput *m_soundInput;
     Modulator *m_modulator;
     SoundOutput *m_soundOutput;
@@ -609,7 +609,7 @@ class UI_Constructor : public QMainWindow {
 
     // Configuration might one day offer to send a txDelayChanged signal.
     // As long as it doesn't, we poll and compare with the previous value.
-    double m_TxDelay; // in seconds.
+    double m_TxDelay = 0.0; // in seconds.
 
     TxLoop *m_cq_loop;
     TxLoop *m_hb_loop;
@@ -619,55 +619,55 @@ class UI_Constructor : public QMainWindow {
     QThread m_notificationAudioThread;
     JS8::Decoder m_decoder;
 
-    qint64 m_secBandChanged;
+    qint64 m_secBandChanged = 0;
 
-    Frequency m_freqNominal;
-    Frequency m_freqTxNominal;
+    Frequency m_freqNominal = 0;
+    Frequency m_freqTxNominal = 0;
 
-    int m_freq;
+    int m_freq = 0;
 
-    qint32 m_XIT;
-    qint32 m_sec0;
-    qint32 m_RxLog;
-    qint32 m_nutc0;
+    qint32 m_XIT = 0;
+    qint32 m_sec0 = 0;
+    qint32 m_RxLog = 0;
+    qint32 m_nutc0 = 0;
     // The period of the current submode, in seconds. (15 for normal, 10 for
     // fast, ...)
-    qint32 m_TRperiod;
-    qint32 m_inGain;
-    qint32 m_idleMinutes;
-    qint32 m_nSubMode;
-    qint32 m_prevStandardSubmode;  // saved standard mode for click-to-switch
+    qint32 m_TRperiod = 15;
+    qint32 m_inGain = 0;
+    qint32 m_idleMinutes = 0;
+    qint32 m_nSubMode = 0;
+    qint32 m_prevStandardSubmode = 0;  // saved standard mode for click-to-switch
     bool m_submodeChanging{false}; // guard against recursive mode switch
     FrequencyList_v3::const_iterator m_frequency_list_fcal_iter;
-    qint32 m_i3bit;
+    qint32 m_i3bit = 0;
 
-    bool m_btxok; // True if OK to transmit
-    bool m_decoderBusy;
+    bool m_btxok = false; // True if OK to transmit
+    bool m_decoderBusy = false;
     QString m_decoderBusyBand;
     QMap<qint32, qint32>
         m_lastDecodeStartMap; // submode, decode k start position
-    Radio::Frequency m_decoderBusyFreq;
+    Radio::Frequency m_decoderBusyFreq = 0;
     QDateTime m_decoderBusyStartTime;
-    bool m_auto;
-    bool m_restart;
-    bool m_bDecoded;
-    int m_currentMessageType;
+    bool m_auto = false;
+    bool m_restart = false;
+    bool m_bDecoded = false;
+    int m_currentMessageType = 0;
     QString m_currentMessage;
-    int m_currentMessageBits;
-    int m_lastMessageType;
+    int m_currentMessageBits = 0;
+    int m_lastMessageType = 0;
     QString m_lastMessageSent;
-    bool m_tuneup;
-    bool m_isTimeToSend;
+    bool m_tuneup = false;
+    bool m_isTimeToSend = false;
 
-    int m_ihsym;
-    float m_px;
-    float m_pxmax;
-    float m_df3;
+    int m_ihsym = 0;
+    float m_px = 0.0f;
+    float m_pxmax = 0.0f;
+    float m_df3 = 0.0f;
     quint32 m_iptt = 0;
-    quint32 m_iptt0;
-    bool m_btxok0;
-    double m_onAirFreq0;
-    bool m_first_error;
+    quint32 m_iptt0 = 0;
+    bool m_btxok0 = false;
+    double m_onAirFreq0 = 0.0;
+    bool m_first_error = false;
 
     char m_msg[100][80];
 
@@ -765,10 +765,10 @@ class UI_Constructor : public QMainWindow {
     int m_waterfallHeight;
     bool m_bandActivityWasVisible;
     bool m_rxDirty;
-    bool m_rxDisplayDirty;
-    int m_txFrameCountEstimate;
-    int m_txFrameCount;
-    int m_txFrameCountSent;
+    bool m_rxDisplayDirty = false;
+    int m_txFrameCountEstimate = 0;
+    int m_txFrameCount = 0;
+    int m_txFrameCountSent = 0;
     QTimer m_txTextDirtyDebounce;
     bool m_txTextDirty;
     QString m_txTextDirtyLastText;
@@ -977,20 +977,20 @@ class UI_Constructor : public QMainWindow {
 
     LogBook m_logBook;
     unsigned m_msAudioOutputBuffered;
-    unsigned m_framesAudioInputBuffered;
-    QThread::Priority m_audioThreadPriority;
-    QThread::Priority m_notificationAudioThreadPriority;
-    QThread::Priority m_decoderThreadPriority;
-    QThread::Priority m_networkThreadPriority;
-    bool m_splitMode;
-    bool m_monitoring;
-    bool m_generateAudioWhenPttConfirmedByTX;
-    bool m_transmitting;
-    bool m_tune;
-    bool m_tx_watchdog; // true when watchdog triggered
-    bool m_block_pwr_tooltip;
-    bool m_PwrBandSetOK;
-    Frequency m_lastMonitoredFrequency;
+    unsigned m_framesAudioInputBuffered = 0;
+    QThread::Priority m_audioThreadPriority = QThread::HighPriority;
+    QThread::Priority m_notificationAudioThreadPriority = QThread::LowPriority;
+    QThread::Priority m_decoderThreadPriority = QThread::HighPriority;
+    QThread::Priority m_networkThreadPriority = QThread::LowPriority;
+    bool m_splitMode = false;
+    bool m_monitoring = false;
+    bool m_generateAudioWhenPttConfirmedByTX = false;
+    bool m_transmitting = false;
+    bool m_tune = false;
+    bool m_tx_watchdog = false; // true when watchdog triggered
+    bool m_block_pwr_tooltip = false;
+    bool m_PwrBandSetOK = true;
+    Frequency m_lastMonitoredFrequency = 0;
     MessageClient *m_messageClient;
     MessageServer *m_messageServer;
     WSJTXMessageClient *m_wsjtxMessageClient;

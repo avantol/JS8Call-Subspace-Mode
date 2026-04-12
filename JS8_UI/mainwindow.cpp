@@ -524,8 +524,7 @@ void UI_Constructor::readSettings() {
     setFreqOffsetForRestore(
         m_settings->value("Freq", Default::FREQUENCY).toInt(), false); // XXX
 
-    setSubmode(m_settings->value("SsSubMode",
-        m_settings->value("SubMode", Default::SUBMODE).toInt()).toInt());
+    setSubmode(m_settings->value("SsSubMode", Default::SUBMODE).toInt());
     ui->actionModeJS8HB->setChecked(
         m_settings->value("SubModeHB", false).toBool());
     ui->actionHeartbeatAcknowledgements->setChecked(

@@ -4,7 +4,9 @@ permissions:
 name: Raspberry Pi Build (Subspace)
 
 on:
-  workflow_dispatch:  # manual trigger only
+  push:
+    branches: [master]
+  workflow_dispatch:
 
 jobs:
   build_raspi:
