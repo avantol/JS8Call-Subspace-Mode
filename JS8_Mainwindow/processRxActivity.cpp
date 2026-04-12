@@ -67,15 +67,10 @@ void UI_Constructor::processRxActivity() {
             // TODO: should the buffer be reopened?
             shouldDisplay = true;
 
-        } else if (d.isDirected && d.text.contains("<....>")) {
-            // if this is a _partial_ directed message, skip until the complete
-            // call comes through.
-            continue;
-
-        } else if (d.isDirected &&
-                   (d.text.contains(": HB ") ||
-                    d.text.contains(": @ALLCALL HB"))) { // TODO: HEARTBEAT
-            // if this is a heartbeat, process elsewhere...
+        } else if (d.isDirected) {
+            // All directed messages (commands, SNR, heartbeats, partials)
+            // are displayed by processCommandActivity. Skip here to
+            // prevent duplicate display.
             continue;
         }
 

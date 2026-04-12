@@ -15,7 +15,7 @@ CAboutDlg::CAboutDlg(QWidget *parent) : QDialog(parent), ui(new Ui::CAboutDlg) {
     ui->labelTxt->setText(QString{
         "<h2><a href=\"https://github.com/avantol/JS8Call-Subspace-Mode\">%1</a></h2>"
         "<h3>The Subspace Edition by <a href=\"https://www.qrz.com/db/WM8Q\">WM8Q</a> "
-        "adds FT2-based async decoding<br />with time-independent sync, "
+        "adds fast async decoding<br />with time-independent sync, "
         "achieving -15 dB SNR sensitivity<br />at 5 characters/second.</h3>"
         "<h4>JS8Call Subspace Edition was derived from 'JS8Call-Improved'</h4>"
         "<p align='left'>JS8Call-Improved was developed by the team that "

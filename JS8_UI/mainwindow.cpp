@@ -210,8 +210,8 @@ void UI_Constructor::tryBandHop() {
         return;
     }
 
-    // make sure we're not transmitting
-    if (isMessageQueuedForTransmit()) {
+    // make sure we're not transmitting (split/fake-split shifts VFO during TX)
+    if (isMessageQueuedForTransmit() || m_transmitting) {
         return;
     }
 
@@ -277,7 +277,8 @@ void UI_Constructor::tryBandHop() {
             (m_bandHopped ||
              (!m_bandHopped && hopStation->frequency_ != m_bandHoppedFreq));
 
-        bool freqIsDifferent = (hopStation->frequency_ != dialFreq);
+        // Tolerance: ignore differences under 1 kHz (split TX offset, drift)
+        bool freqIsDifferent = (std::abs((qint64)hopStation->frequency_ - (qint64)dialFreq) > 1000);
 
         bool canSwitch = (noOverride && freqIsDifferent);
 
@@ -6289,7 +6290,7 @@ QString UI_Constructor::callsignSelected(bool) {
 void UI_Constructor::callsignSelectedChanged(QString /*old*/,
                                              QString selectedCall) {
     auto placeholderText =
-        QString("Type your outgoing messages here. Type partial call sign to search list.").toUpper();
+        QString("Type your outgoing messages here.\nType partial call sign to search list.").toUpper();
     if (selectedCall.isEmpty()) {
         // try to restore hb
         if (m_hbPaused) {
@@ -6426,7 +6427,7 @@ void UI_Constructor::clearSelection() {
     }
 
     ui->extFreeTextMsgEdit->setPlaceholderText(
-        QString("Type your outgoing messages here. Type partial call sign to search list.").toUpper());
+        QString("Type your outgoing messages here.\nType partial call sign to search list.").toUpper());
 
     updateButtonDisplay();
     updateTextDisplay();
