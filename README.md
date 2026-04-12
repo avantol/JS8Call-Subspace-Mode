@@ -1,4 +1,4 @@
-# JS8Call Subspace mode
+# JS8Call Subspace Edition (3.75 sec Tx period, async protocol)
 JS8Call Subspace mode is a continued development of JS8Call that adds a new "Subspace" mode for faster communication, spectral efficiency, and freedom from time accuracy requirements.
 
 Installers are available for Windows, Mac OS, Linux, and Raspberry Pi, at the <a href="https://github.com/avantol/JS8Call-Subspace-Mode/releases/latest">Release page</a>.
