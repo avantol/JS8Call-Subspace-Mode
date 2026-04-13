@@ -4477,6 +4477,7 @@ void UI_Constructor::setFreq(int const n) {
     m_wideGraph->setFreq(n);
     Q_EMIT transmitFrequency(n + m_XIT);
     statusUpdate();
+    updateButtonDisplay();
 }
 
 void UI_Constructor::on_actionErase_ALL_TXT_triggered() // Erase ALL.TXT
@@ -6093,8 +6094,19 @@ void UI_Constructor::updateButtonDisplay() {
     setDisabledIfChanged(ui->snrMacroButton, isTransmitting || emptyCallsign);
     setDisabledIfChanged(ui->infoMacroButton, isTransmitting || emptyInfo);
     setDisabledIfChanged(ui->statusMacroButton, isTransmitting || emptyStatus);
-    setDisabledIfChanged(ui->typingMacroButton,
-        isTransmitting || emptyCallsign || m_nSubMode != Varicode::JS8CallFT2);
+    {
+        // TYPING enabled if: Subspace mode, not transmitting, and either
+        // a callsign is selected OR cursor is on the last decoded signal freq
+        bool onPartnerFreq = false;
+        if (emptyCallsign && m_nSubMode == Varicode::JS8CallFT2
+            && m_l2SignalFreq > 0) {
+            int threshold = JS8::Submode::rxThreshold(m_nSubMode);
+            onPartnerFreq = abs(freq() - m_l2SignalFreq) <= threshold;
+        }
+        setDisabledIfChanged(ui->typingMacroButton,
+            isTransmitting || m_nSubMode != Varicode::JS8CallFT2
+            || (emptyCallsign && !onPartnerFreq));
+    }
     setDisabledIfChanged(ui->macrosMacroButton, isTransmitting);
     setDisabledIfChanged(ui->queryButton, isTransmitting || emptyCallsign);
     setDisabledIfChanged(ui->deselectButton, isTransmitting || emptyCallsign);

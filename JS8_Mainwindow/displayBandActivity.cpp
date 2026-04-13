@@ -338,8 +338,14 @@ void UI_Constructor::displayBandActivity() {
 
                 // Show full line contents as tooltip on Offset, Time Delta,
                 // and SNR columns (not Age or Speed — they have their own tips)
+                // Bold callsign: patterns for readability
                 {
                     auto fullTip = joined.toHtmlEscaped();
+                    static const QRegularExpression callRe(R"((\b(?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}:)(?=\s))");
+                    fullTip.replace(callRe, "<br/><b>\\1</b>");
+                    if (fullTip.startsWith("<br/>"))
+                        fullTip = fullTip.mid(5);
+                    fullTip = QString("<div style='white-space:nowrap;'>%1</div>").arg(fullTip);
                     offsetItem->setToolTip(fullTip);
                     tdriftItem->setToolTip(fullTip);
                     snrItem->setToolTip(fullTip);

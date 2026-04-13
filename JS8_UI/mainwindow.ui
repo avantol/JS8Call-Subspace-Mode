@@ -1734,7 +1734,7 @@ color:#222;
            </size>
           </property>
           <property name="toolTip">
-           <string>Send typing indicator (Subspace mode only)</string>
+           <string>Send typing indicator (Subspace mode only). Fastest when callsign deselected but still on callsign frequency.</string>
           </property>
           <property name="text">
            <string>TYPING...</string>

@@ -364,6 +364,7 @@ qt_add_resources(
   FILES
   artwork/up.png
   artwork/down.png
+  Tranya.JPG
 )
 
 #------------------------------------------------------------------------------#

@@ -4,7 +4,23 @@
 #include <QApplication>
 #include <QHelpEvent>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QToolTip>
+
+namespace {
+// Bold callsign patterns (CALL:) in HTML for tooltips, with line breaks
+QString boldCallsigns(const QString &text) {
+    QString html = text.toHtmlEscaped();
+    // Match CALLSIGN: — must contain at least one digit (real callsigns always do)
+    static const QRegularExpression re(R"((\b(?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}:)(?=\s))");
+    html.replace(re, "<br/><b>\\1</b>");
+    // Remove leading <br/> if text starts with a callsign
+    if (html.startsWith("<br/>"))
+        html = html.mid(5);
+    // Wrap in a wide container to prevent premature line wrapping
+    return QString("<div style='white-space:nowrap;'>%1</div>").arg(html);
+}
+}
 
 BandActivityMessageDelegate::BandActivityMessageDelegate(QObject *parent)
     : QStyledItemDelegate(parent) {}
@@ -18,9 +34,62 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
                                         const QModelIndex &index) const {
     auto groups = getGroups(index);
 
-    // Fall back to default rendering if no groups or single group
+    // Single group or no groups: render with bold callsigns but no dividers
     if (groups.size() <= 1) {
-        QStyledItemDelegate::paint(painter, option, index);
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        QString text = opt.text;
+        opt.text.clear();
+        QApplication::style()->drawControl(QStyle::CE_ItemViewItem, &opt, painter);
+
+        painter->save();
+        QRect textRect = option.rect.adjusted(4, 0, -4, 0);
+        QColor textColor = option.state & QStyle::State_Selected
+            ? option.palette.highlightedText().color()
+            : option.palette.text().color();
+        painter->setPen(textColor);
+
+        // Elide from left (show most recent) for consistency
+        QFontMetrics fm(option.font);
+        QString elided = fm.elidedText(text, Qt::ElideLeft, textRect.width());
+
+        // Draw text with bold callsigns (CALL: pattern with at least one digit)
+        static const QRegularExpression callRe(R"(\b((?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}: ))");
+        QFont boldFont = option.font;
+        boldFont.setBold(true);
+        int xPos = textRect.x();
+        int remaining = textRect.width();
+        auto it = callRe.globalMatch(elided);
+        int lastEnd = 0;
+        while (it.hasNext() && remaining > 0) {
+            auto match = it.next();
+            // Draw text before the callsign (normal)
+            if (match.capturedStart() > lastEnd) {
+                QString before = elided.mid(lastEnd, match.capturedStart() - lastEnd);
+                painter->setFont(option.font);
+                painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
+                                  Qt::AlignLeft | Qt::AlignVCenter, before);
+                int w = QFontMetrics(option.font).horizontalAdvance(before);
+                xPos += w;
+                remaining -= w;
+            }
+            // Draw callsign in bold
+            QString call = match.captured(0);
+            painter->setFont(boldFont);
+            painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
+                              Qt::AlignLeft | Qt::AlignVCenter, call);
+            int w = QFontMetrics(boldFont).horizontalAdvance(call);
+            xPos += w;
+            remaining -= w;
+            lastEnd = match.capturedEnd();
+        }
+        // Draw remaining text (normal)
+        if (lastEnd < elided.length() && remaining > 0) {
+            painter->setFont(option.font);
+            painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
+                              Qt::AlignLeft | Qt::AlignVCenter, elided.mid(lastEnd));
+        }
+        painter->restore();
         return;
     }
 
@@ -56,7 +125,7 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
             painter->drawLine(regionRect.topLeft(), regionRect.bottomLeft());
         }
 
-        // Draw text, elided to fit. Left-justify (ElideRight) for
+        // Draw text with bold callsigns. Left-justify (ElideRight) for
         // key status messages where the start is most important.
         QRect textRect = regionRect.adjusted(textMargin, 0, -textMargin, 0);
         bool leftJustify = text.contains("@HB HEARTBEAT ")
@@ -67,10 +136,42 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
         auto elideMode = leftJustify ? Qt::ElideRight : Qt::ElideLeft;
         QString elided = fm.elidedText(text, elideMode, textRect.width());
 
-        painter->setPen(selected
-                            ? option.palette.highlightedText().color()
-                            : option.palette.text().color());
-        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elided);
+        // Draw text with bold callsigns only (CALL: with digit)
+        QColor textColor = selected
+            ? option.palette.highlightedText().color()
+            : option.palette.text().color();
+        painter->setPen(textColor);
+
+        static const QRegularExpression callRe(R"(\b((?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}: ))");
+        QFont boldFont = option.font;
+        boldFont.setBold(true);
+        int xPos = textRect.x();
+        int remaining = textRect.width();
+        auto it = callRe.globalMatch(elided);
+        int lastEnd = 0;
+        while (it.hasNext() && remaining > 0) {
+            auto match = it.next();
+            if (match.capturedStart() > lastEnd) {
+                QString before = elided.mid(lastEnd, match.capturedStart() - lastEnd);
+                painter->setFont(option.font);
+                painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
+                                  Qt::AlignLeft | Qt::AlignVCenter, before);
+                int w = QFontMetrics(option.font).horizontalAdvance(before);
+                xPos += w; remaining -= w;
+            }
+            QString call = match.captured(0);
+            painter->setFont(boldFont);
+            painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
+                              Qt::AlignLeft | Qt::AlignVCenter, call);
+            int w = QFontMetrics(boldFont).horizontalAdvance(call);
+            xPos += w; remaining -= w;
+            lastEnd = match.capturedEnd();
+        }
+        if (lastEnd < elided.length() && remaining > 0) {
+            painter->setFont(option.font);
+            painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
+                              Qt::AlignLeft | Qt::AlignVCenter, elided.mid(lastEnd));
+        }
     }
 
     painter->restore();
@@ -92,7 +193,7 @@ bool BandActivityMessageDelegate::helpEvent(QHelpEvent *event,
             QFontMetrics fm(option.font);
             int cellWidth = option.rect.width();
             if (fm.horizontalAdvance(text) > cellWidth) {
-                QToolTip::showText(event->globalPos(), text.toHtmlEscaped(), view);
+                QToolTip::showText(event->globalPos(), boldCallsigns(text), view);
                 return true;
             }
         }
@@ -109,7 +210,7 @@ bool BandActivityMessageDelegate::helpEvent(QHelpEvent *event,
 
     auto map = groups[regionIndex].toMap();
     QString text = map["text"].toString();
-    QToolTip::showText(event->globalPos(), text.toHtmlEscaped(), view);
+    QToolTip::showText(event->globalPos(), boldCallsigns(text), view);
     return true;
 }
 
