@@ -11,7 +11,7 @@
 
 CAboutDlg::CAboutDlg(QWidget *parent) : QDialog(parent), ui(new Ui::CAboutDlg) {
     ui->setupUi(this);
-    setWindowTitle("About JS8Call Subspace Edition");
+    setWindowTitle("About JS8Call Subspace Edition \"Tranya\"");
     ui->labelTxt->setText(QString{
         "<h2><a href=\"https://github.com/avantol/JS8Call-Subspace-Mode\">%1</a></h2>"
         "<h3>The Subspace Edition by <a href=\"https://www.qrz.com/db/WM8Q\">WM8Q</a> "

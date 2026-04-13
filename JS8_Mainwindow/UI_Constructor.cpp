@@ -5,6 +5,7 @@
  */
 
 #include "JS8_UI/mainwindow.h"
+#include "JS8_Widgets/BandActivityMessageDelegate.h"
 
 #ifdef JS8_ENABLE_FT2
 #include "JS8_Mode/ft2_bridge.h"
@@ -986,6 +987,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 
             displayActivity(true);
         });
+
+    // Install custom delegate for sub-divided Message(s) column
+    auto *msgDelegate = new BandActivityMessageDelegate(ui->tableWidgetRXAll);
+    msgDelegate->setMyCallsign(m_config.my_callsign());
+    ui->tableWidgetRXAll->setItemDelegateForColumn(5, msgDelegate);
 
     auto clearAction3 = new QAction(QString("Clear"), ui->tableWidgetRXAll);
     connect(clearAction3, &QAction::triggered, this,

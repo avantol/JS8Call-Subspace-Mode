@@ -392,6 +392,7 @@ class UI_Constructor : public QMainWindow {
     void on_snrMacroButton_clicked();
     void on_infoMacroButton_clicked();
     void on_statusMacroButton_clicked();
+    void on_typingMacroButton_clicked();
     void setShowColumn(QString tableKey, QString columnKey, bool value);
     bool showColumn(QString tableKey, QString columnKey, bool default_ = true);
     void buildShowColumnsMenu(QMenu *menu, QString tableKey);

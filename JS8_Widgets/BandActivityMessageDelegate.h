@@ -15,6 +15,8 @@ class BandActivityMessageDelegate : public QStyledItemDelegate {
 public:
     explicit BandActivityMessageDelegate(QObject *parent = nullptr);
 
+    void setMyCallsign(const QString &call) { m_myCall = call; }
+
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override;
 
@@ -29,6 +31,7 @@ public:
 
 private:
     static QVariantList getGroups(const QModelIndex &index);
+    QString m_myCall;
 };
 
 #endif // BAND_ACTIVITY_MESSAGE_DELEGATE_H

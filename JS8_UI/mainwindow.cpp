@@ -4904,6 +4904,13 @@ void UI_Constructor::on_statusMacroButton_clicked() {
         toggleTx(true);
 }
 
+void UI_Constructor::on_typingMacroButton_clicked() {
+    addMessageText(QString("TYPING..."));
+
+    if (m_config.transmit_directed())
+        toggleTx(true);
+}
+
 void UI_Constructor::setShowColumn(QString tableKey, QString columnKey,
                                    bool value) {
     m_showColumnsCache[tableKey + columnKey] = QVariant(value);
@@ -6086,6 +6093,8 @@ void UI_Constructor::updateButtonDisplay() {
     setDisabledIfChanged(ui->snrMacroButton, isTransmitting || emptyCallsign);
     setDisabledIfChanged(ui->infoMacroButton, isTransmitting || emptyInfo);
     setDisabledIfChanged(ui->statusMacroButton, isTransmitting || emptyStatus);
+    setDisabledIfChanged(ui->typingMacroButton,
+        isTransmitting || emptyCallsign || m_nSubMode != Varicode::JS8CallFT2);
     setDisabledIfChanged(ui->macrosMacroButton, isTransmitting);
     setDisabledIfChanged(ui->queryButton, isTransmitting || emptyCallsign);
     setDisabledIfChanged(ui->deselectButton, isTransmitting || emptyCallsign);

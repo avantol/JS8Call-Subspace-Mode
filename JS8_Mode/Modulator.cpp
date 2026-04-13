@@ -130,9 +130,11 @@ void Modulator::start(double const frequency, int const submode,
         qCDebug(modulator_js8) << "Modulator finds it is tuning.";
     }
 
+
+#ifndef Q_OS_WIN
     if (current_state == State::KeepAlive && m_stream && isOpen()
         && m_stream->isStreaming()) {
-        // Warm restart: stream is still running and pulling from us.
+        // Warm restart (Linux/macOS): stream is still running and pulling.
         // Just switch state — readData() will produce waveform on next call.
         if (0 < m_silentFrames) {
             m_state.store(State::Synchronizing);
@@ -144,9 +146,19 @@ void Modulator::start(double const frequency, int const submode,
                     << "cycle#" << m_txCycleCount
                     << "ft2Mode=" << m_ft2Mode
                     << "state=" << (int)m_state.load();
-    } else {
-        // Reset state to Idle if KeepAlive but stream is dead
+    } else
+#endif
+    {
+        // Cold start (always on Windows, fallback on Linux/macOS).
+        // On Windows, warm restart is unreliable — the FFmpeg/WASAPI
+        // backend can silently stop pulling after Idle→Stopped transitions.
+        // Cold restart via m_stream->restart() is cheap (~20ms) because
+        // SoundOutput reuses the existing QAudioSink on Windows.
         if (current_state == State::KeepAlive) {
+            qWarning() << "[FT2-TX] Modulator::start() cold restart from KeepAlive"
+                        << "cycle#" << m_txCycleCount
+                        << "streaming=" << (m_stream ? m_stream->isStreaming() : false)
+                        << "isOpen=" << isOpen();
             m_state.store(State::Idle);
         }
         // Cold start: initialize device and start stream.

@@ -217,6 +217,8 @@ void UI_Constructor::displayBandActivity() {
                     }
 
                     // Extract "from" callsign from "CALL: text" pattern
+                    // Format is always CALLSIGN: @GROUP/message — the callsign
+                    // is the sender, @GROUP is the destination.
                     QString frameCall;
                     int colonPos = item.text.indexOf(": ");
                     if (colonPos > 0 && colonPos <= 15) {

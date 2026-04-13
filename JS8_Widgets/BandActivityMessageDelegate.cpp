@@ -56,9 +56,16 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
             painter->drawLine(regionRect.topLeft(), regionRect.bottomLeft());
         }
 
-        // Draw text, elided to fit
+        // Draw text, elided to fit. Left-justify (ElideRight) for
+        // key status messages where the start is most important.
         QRect textRect = regionRect.adjusted(textMargin, 0, -textMargin, 0);
-        QString elided = fm.elidedText(text, Qt::ElideLeft, textRect.width());
+        bool leftJustify = text.contains("@HB HEARTBEAT ")
+            || text.contains("HEARTBEAT SNR")
+            || text.contains("@ALLCALL CQ")
+            || (!m_myCall.isEmpty() && (text.contains(m_myCall + " SNR")
+                                       || text.contains(m_myCall + " YES")));
+        auto elideMode = leftJustify ? Qt::ElideRight : Qt::ElideLeft;
+        QString elided = fm.elidedText(text, elideMode, textRect.width());
 
         painter->setPen(selected
                             ? option.palette.highlightedText().color()

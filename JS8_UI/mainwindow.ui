@@ -1481,7 +1481,7 @@ QTextEdit[transmitting=&quot;true&quot;] {
           </property>
          </widget>
         </item>
-        <item row="1" column="7">
+        <item row="1" column="8">
          <spacer name="horizontalSpacer_11">
           <property name="orientation">
            <enum>Qt::Orientation::Horizontal</enum>
@@ -1525,7 +1525,7 @@ QTextEdit[transmitting=&quot;true&quot;] {
           </property>
          </widget>
         </item>
-        <item row="1" column="8">
+        <item row="1" column="9">
          <widget class="QPushButton" name="macrosMacroButton">
           <property name="minimumSize">
            <size>
@@ -1661,7 +1661,7 @@ color:#222;
           </property>
          </spacer>
         </item>
-        <item row="1" column="9">
+        <item row="1" column="10">
          <spacer name="horizontalSpacerSavedDirected">
           <property name="orientation">
            <enum>Qt::Orientation::Horizontal</enum>
@@ -1722,6 +1722,22 @@ color:#222;
           </property>
           <property name="text">
            <string>STATUS</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="7">
+         <widget class="QPushButton" name="typingMacroButton">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Send typing indicator (Subspace mode only)</string>
+          </property>
+          <property name="text">
+           <string>TYPING...</string>
           </property>
          </widget>
         </item>
