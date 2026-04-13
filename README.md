@@ -13,7 +13,7 @@ Subspace mode eliminates any need to keep your PC's clock adjusted, it's **100% 
  
 Subspace mode is only ~150 Hz wide, compared to the JS8Call-Improved JS8-60 mode requiring ~250 Hz.... this makes a huge difference keeping the audio passband clear of QRM: 17 simultaneous QSOs possible as opposed to 10 in the 2500 Hz audio passband.
 
-<br><img src="https://github.com/avantol/JS8Call-Subspace-Mode/blob/master/Tranya.JPG"></img>
+<img src="https://github.com/avantol/JS8Call-Subspace-Mode/blob/master/Tranya.JPG"></img>
 
 > Technical sidebar:
 > I use carefully selected levels of search depth to "sync up" quickly to the received signal as soon as sound is received, instead of waiting until the message is complete. The process does not depend on clock time at all. Two problems solved!
