@@ -1,4 +1,4 @@
-# JS8Call Subspace Edition (3.75 sec Tx period, async protocol)
+# JS8Call Subspace Edition "Tranya" (3.75 sec Tx period, async protocol)
 JS8Call Subspace mode is a continued development of JS8Call that adds a new "Subspace" mode for faster communication, spectral efficiency, and freedom from time accuracy requirements.
 
 Installers are available for Windows, Mac OS, Linux, and Raspberry Pi, at the <a href="https://github.com/avantol/JS8Call-Subspace-Mode/releases/latest">Release page</a>.
@@ -36,3 +36,6 @@ To make finding Subspace messages easy:
 See the [JS8Call Subspace Edition discussion group](https://groups.io/g/JS8Call-Subspace/topics) for full details, and to comment, ask questions, or to suggest something. We look forward to hearing from you!
 
 _I also want to keep JS8Call itself properly maintained aside from adding Subspace mode, things happen all the time that need attention, use "Check for updates" in JS8Call Subspace Edition often._
+
+"I hope you will relish it as much as I"
+<br><img src="https://github.com/avantol/JS8Call-Subspace-Mode/blob/master/Tranya.JPG"></img>
