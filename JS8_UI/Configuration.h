@@ -127,6 +127,7 @@ class Configuration final : public QObject {
     bool write_logs() const;
     bool reset_activity() const;
     bool diagnostic_logging() const;
+    int message_subdivisions() const;
     bool tx_qsy_allowed() const;
     bool spot_to_reporting_networks() const;
     void set_spot_to_reporting_networks(bool);

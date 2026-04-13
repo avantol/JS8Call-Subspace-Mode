@@ -194,7 +194,12 @@ void UI_Constructor::displayBandActivity() {
                     items[i].shouldDisplay = shouldDisplay;
                 }
 
-                // show the items that should appear
+                // show the items that should appear, grouped by callsign
+                // Each group: {callsign, accumulated text}
+                struct CallGroup { QString call; QString text; };
+                QList<CallGroup> callGroups;
+                QString currentCall;
+
                 foreach (ActivityDetail item, items) {
                     if (!item.shouldDisplay) {
                         continue;
@@ -206,11 +211,60 @@ void UI_Constructor::displayBandActivity() {
 
                     if ((item.bits & Varicode::JS8CallLast) ==
                         Varicode::JS8CallLast) {
-                        // append the eot character to the text
                         item.text = QString("%1 %2 ")
                                         .arg(Varicode::rstrip(item.text))
                                         .arg(m_config.eot());
                     }
+
+                    // Extract "from" callsign from "CALL: text" pattern
+                    QString frameCall;
+                    int colonPos = item.text.indexOf(": ");
+                    if (colonPos > 0 && colonPos <= 15) {
+                        QString candidate = item.text.left(colonPos).trimmed();
+                        // Valid callsign: 3-15 chars, has letter and digit
+                        if (candidate.length() >= 3 && candidate.length() <= 15
+                            && candidate.contains(QRegularExpression("[A-Z]"))
+                            && candidate.contains(QRegularExpression("[0-9]"))) {
+                            frameCall = candidate;
+                        }
+                    }
+
+                    // Assign frame to callsign group — consolidate by callsign
+                    int maxGroups = m_config.message_subdivisions();
+                    if (!frameCall.isEmpty()) {
+                        // Find existing group for this callsign
+                        int existingIdx = -1;
+                        for (int g = 0; g < callGroups.size(); g++) {
+                            if (callGroups[g].call == frameCall) {
+                                existingIdx = g;
+                                break;
+                            }
+                        }
+                        if (existingIdx >= 0) {
+                            // Append to existing group for this callsign
+                            callGroups[existingIdx].text += item.text;
+                        } else if (callGroups.size() < maxGroups) {
+                            // New callsign — create new group
+                            callGroups.append({frameCall, item.text});
+                        } else {
+                            // No room — drop oldest subdivision to make
+                            // room for the most recent callsign.
+                            callGroups.removeFirst();
+                            callGroups.append({frameCall, item.text});
+                        }
+                        currentCall = frameCall;
+                    } else if (frameCall.isEmpty()) {
+                        // Anonymous frame — append to current callsign's group
+                        // as continuation. If no group exists yet, skip it
+                        // (orphan fragment, visible via tooltip on other columns).
+                        if (!callGroups.isEmpty()) {
+                            callGroups.last().text += item.text;
+                        }
+                    } else {
+                        // Continuation frame (same callsign) — append to current group
+                        callGroups.last().text += item.text;
+                    }
+
                     text.append(item.text);
                     snr = item.snr;
                     snrSuspect = item.snrSuspect;
@@ -265,26 +319,29 @@ void UI_Constructor::displayBandActivity() {
                 submodeItem->setTextAlignment(Qt::AlignCenter);
                 ui->tableWidgetRXAll->setItem(row, col++, submodeItem);
 
-                // align right if eliding...
-                int colWidth = ui->tableWidgetRXAll->columnWidth(3);
-                auto textItem = new QTableWidgetItem(joined);
-                auto html = QString("<qt/>%1").arg(joined.toHtmlEscaped());
-                html =
-                    html.replace(m_config.eot(), m_config.eot() + "<br/><br/>");
-                html = html.replace(QRegularExpression("([<]br[/][>])+$"), "");
-                textItem->setToolTip(html);
-
-                QFontMetrics fm(textItem->font());
-                auto elidedText =
-                    fm.elidedText(joined, Qt::ElideLeft, colWidth);
-                auto flag = Qt::AlignLeft | Qt::AlignVCenter;
-                if (elidedText != joined) {
-                    flag = Qt::AlignRight | Qt::AlignVCenter;
-                    textItem->setText(joined);
+                // Store callsign groups for sub-divided rendering
+                QVariantList groupData;
+                for (const auto &g : callGroups) {
+                    QVariantMap m;
+                    m["call"] = g.call;
+                    m["text"] = Varicode::rstrip(g.text);
+                    groupData.append(m);
                 }
-                textItem->setTextAlignment(flag);
+
+                auto textItem = new QTableWidgetItem(joined);
+                textItem->setData(Qt::UserRole, groupData);
+                textItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
                 ui->tableWidgetRXAll->setItem(row, col++, textItem);
+
+                // Show full line contents as tooltip on Offset, Time Delta,
+                // and SNR columns (not Age or Speed — they have their own tips)
+                {
+                    auto fullTip = joined.toHtmlEscaped();
+                    offsetItem->setToolTip(fullTip);
+                    tdriftItem->setToolTip(fullTip);
+                    snrItem->setToolTip(fullTip);
+                }
 
                 if (isOffsetSelected) {
                     for (int i = 0; i < ui->tableWidgetRXAll->columnCount();

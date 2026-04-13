@@ -626,6 +626,7 @@ class Configuration::impl final : public QDialog {
     bool write_logs_;
     bool reset_activity_;
     bool diagnostic_logging_;
+    int message_subdivisions_;
     bool tx_qsy_allowed_;
     bool spot_to_reporting_networks_;
     bool spot_to_aprs_;
@@ -812,6 +813,7 @@ double Configuration::txDelay() const { return m_->txDelay_; }
 bool Configuration::write_logs() const { return m_->write_logs_; }
 bool Configuration::reset_activity() const { return m_->reset_activity_; }
 bool Configuration::diagnostic_logging() const { return m_->diagnostic_logging_; }
+int Configuration::message_subdivisions() const { return m_->message_subdivisions_; }
 bool Configuration::tx_qsy_allowed() const { return m_->tx_qsy_allowed_; }
 bool Configuration::spot_to_reporting_networks() const {
     // rig must be open and working to spot externally
@@ -1740,6 +1742,9 @@ void Configuration::impl::initialize_models() {
     ui_->save_path_display_label->setText(save_directory_.absolutePath());
     ui_->write_logs_check_box->setChecked(write_logs_);
     ui_->reset_activity_check_box->setChecked(reset_activity_);
+    // ComboBox index: 0=None(1), 1=2, 2=3, 3=4
+    ui_->cbSubdivisions->setCurrentIndex(
+        message_subdivisions_ <= 1 ? 0 : message_subdivisions_ - 1);
     ui_->diagnosticLogging_checkBox->setChecked(diagnostic_logging_);
     ui_->tx_qsy_check_box->setChecked(tx_qsy_allowed_);
     ui_->psk_reporter_check_box->setChecked(spot_to_reporting_networks_);
@@ -2143,6 +2148,7 @@ void Configuration::impl::read_settings() {
     write_logs_ = settings_->value("WriteLogs", true).toBool();
     reset_activity_ = settings_->value("ResetActivity", false).toBool();
     diagnostic_logging_ = settings_->value("DiagnosticLogging", false).toBool();
+    message_subdivisions_ = settings_->value("MessageSubdivisions", 2).toInt();
     tx_qsy_allowed_ = settings_->value("TxQSYAllowed", false).toBool();
     use_dynamic_info_ = settings_->value("AutoGrid", false).toBool();
 
@@ -2452,6 +2458,7 @@ void Configuration::impl::write_settings() {
     settings_->setValue("WriteLogs", write_logs_);
     settings_->setValue("ResetActivity", reset_activity_);
     settings_->setValue("DiagnosticLogging", diagnostic_logging_);
+    settings_->setValue("MessageSubdivisions", message_subdivisions_);
     settings_->setValue("TxQSYAllowed", tx_qsy_allowed_);
     settings_->setValue("Macros", macros_.stringList());
     settings_->setValue(versionedFrequenciesSettingsKey,
@@ -3092,6 +3099,9 @@ void Configuration::impl::accept() {
     write_logs_ = ui_->write_logs_check_box->isChecked();
     reset_activity_ = ui_->reset_activity_check_box->isChecked();
     diagnostic_logging_ = ui_->diagnosticLogging_checkBox->isChecked();
+    // ComboBox index: 0=None(1), 1=2, 2=3, 3=4
+    int idx = ui_->cbSubdivisions->currentIndex();
+    message_subdivisions_ = (idx == 0) ? 1 : idx + 1;
     tx_qsy_allowed_ = ui_->tx_qsy_check_box->isChecked();
     transmit_directed_ = ui_->transmit_directed_check_box->isChecked();
     autoreply_on_at_startup_ = ui_->autoreply_on_check_box->isChecked();

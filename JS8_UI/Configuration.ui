@@ -433,6 +433,48 @@
                    </widget>
                   </item>
                   <item>
+                   <layout class="QHBoxLayout">
+                    <item>
+                     <widget class="QLabel" name="label_subdivisions">
+                      <property name="text">
+                       <string>Band Activity message subdivisions by call:</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
+                     <widget class="QComboBox" name="cbSubdivisions">
+                      <item>
+                       <property name="text">
+                        <string>None</string>
+                       </property>
+                      </item>
+                      <item>
+                       <property name="text">
+                        <string>2</string>
+                       </property>
+                      </item>
+                      <item>
+                       <property name="text">
+                        <string>3</string>
+                       </property>
+                      </item>
+                      <item>
+                       <property name="text">
+                        <string>4</string>
+                       </property>
+                      </item>
+                     </widget>
+                    </item>
+                    <item>
+                     <spacer>
+                      <property name="orientation">
+                       <enum>Qt::Orientation::Horizontal</enum>
+                      </property>
+                     </spacer>
+                    </item>
+                   </layout>
+                  </item>
+                  <item>
                    <widget class="QCheckBox" name="diagnosticLogging_checkBox">
                     <property name="text">
                      <string>Enable diagnostic logging (restart required)</string>

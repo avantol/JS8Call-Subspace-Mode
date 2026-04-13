@@ -6,6 +6,7 @@
  */
 
 #include "mainwindow.h"
+#include "JS8_Widgets/BandActivityMessageDelegate.h"
 
 #ifdef JS8_ENABLE_FT2
 #include "JS8_Mode/DecodeFT2.h"
@@ -5304,45 +5305,59 @@ void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
                << "rowSubmode=" << rowSubmode
                << "speedText=" << (speedItem ? speedItem->text() : "null");
 
-    // Find callsign: parse last CALL: from row text, fall back to m_callActivity
+    // Find callsign from sub-divided Message(s) column
     QString call;
-    // Band activity — get text from the message column (last column)
-    auto msgItem = ui->tableWidgetRXAll->item(row, ui->tableWidgetRXAll->columnCount() - 1);
-    QString rowText = msgItem ? msgItem->text() : QString();
+    int msgCol = ui->tableWidgetRXAll->columnCount() - 1;
+    auto msgItem = ui->tableWidgetRXAll->item(row, msgCol);
 
-    // Parse last CALLSIGN: pattern from row text (spec: use displayed text first)
-    if (!rowText.isEmpty()) {
-        int lastColon = -1;
-        for (int i = rowText.length() - 1; i >= 0; --i) {
-            if (rowText[i] == ':') { lastColon = i; break; }
+    if (msgItem) {
+        // Try sub-region detection first (grouped callsigns)
+        auto groups = msgItem->data(Qt::UserRole).toList();
+        if (groups.size() > 1) {
+            // Get mouse X relative to the Message(s) cell
+            QPoint cursorPos = ui->tableWidgetRXAll->viewport()->mapFromGlobal(QCursor::pos());
+            int cellLeft = ui->tableWidgetRXAll->columnViewportPosition(msgCol);
+            int cellWidth = ui->tableWidgetRXAll->columnWidth(msgCol);
+            int mouseX = cursorPos.x() - cellLeft;
+            call = BandActivityMessageDelegate::callsignAtPosition(groups, cellWidth, mouseX);
         }
-        if (lastColon > 0) {
-            int ws = lastColon - 1;
-            while (ws >= 0 && (rowText[ws].isLetterOrNumber() || rowText[ws] == '/'))
-                --ws;
-            ++ws;
-            QString cand = rowText.mid(ws, lastColon - ws).trimmed();
-            if (cand.length() >= 3 && cand.length() <= 15) {
-                bool hl = false, hd = false;
-                for (auto ch : cand) {
-                    if (ch.isLetter()) hl = true;
-                    if (ch.isDigit()) hd = true;
-                }
-                if (hl && hd && cand != m_config.my_callsign())
-                    call = cand;
-            }
-        }
-        // If no CALL: found, try first word as callsign (e.g. "XE2MAM HEARTBEAT SNR -20")
+
+        // Fallback: parse from concatenated text (single group or no groups)
         if (call.isEmpty()) {
-            QString first = rowText.trimmed().split(' ').first();
-            if (first.length() >= 3 && first.length() <= 10) {
-                bool hl = false, hd = false;
-                for (auto ch : first) {
-                    if (ch.isLetter()) hl = true;
-                    if (ch.isDigit()) hd = true;
+            QString rowText = msgItem->text();
+            if (!rowText.isEmpty()) {
+                int lastColon = -1;
+                for (int i = rowText.length() - 1; i >= 0; --i) {
+                    if (rowText[i] == ':') { lastColon = i; break; }
                 }
-                if (hl && hd && first != m_config.my_callsign())
-                    call = first;
+                if (lastColon > 0) {
+                    int ws = lastColon - 1;
+                    while (ws >= 0 && (rowText[ws].isLetterOrNumber() || rowText[ws] == '/'))
+                        --ws;
+                    ++ws;
+                    QString cand = rowText.mid(ws, lastColon - ws).trimmed();
+                    if (cand.length() >= 3 && cand.length() <= 15) {
+                        bool hl = false, hd = false;
+                        for (auto ch : cand) {
+                            if (ch.isLetter()) hl = true;
+                            if (ch.isDigit()) hd = true;
+                        }
+                        if (hl && hd && cand != m_config.my_callsign())
+                            call = cand;
+                    }
+                }
+                if (call.isEmpty()) {
+                    QString first = rowText.trimmed().split(' ').first();
+                    if (first.length() >= 3 && first.length() <= 10) {
+                        bool hl = false, hd = false;
+                        for (auto ch : first) {
+                            if (ch.isLetter()) hl = true;
+                            if (ch.isDigit()) hd = true;
+                        }
+                        if (hl && hd && first != m_config.my_callsign())
+                            call = first;
+                    }
+                }
             }
         }
     }
@@ -5372,8 +5387,9 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
     auto item = ui->tableWidgetRXAll->item(row, 0);
     int offset = item->text().replace(" Hz", "").toInt();
 
-    // switch to the offset of this row
-    setFreqOffsetForRestore(offset, false);
+    // switch to the offset of this row (inhibit if too low — likely noise)
+    if (offset > 1000)
+        setFreqOffsetForRestore(offset, false);
 
     // print the history in the main window...
     // Read submode from the row's speed column to filter by mode
