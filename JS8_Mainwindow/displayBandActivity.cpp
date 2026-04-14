@@ -39,22 +39,44 @@ void UI_Constructor::displayBandActivity() {
         auto const sort = getSortByReverse("bandActivity", "offset");
         auto keys = m_bandActivity.keys();
 
-        // Base comparison, called by the detail comparisons. We may not need
-        // to proceed to the detail comparison at all here, if at least one of
-        // the lists is empty. If both are non-empty, delegate to the detail
-        // comparison, providing it with the last list elements.
+        // Pre-compute last visible item per offset for accurate sorting.
+        // The raw list may contain hidden items (aged, heartbeats) that
+        // shouldn't affect sort order.
+        int activityAging = m_config.activity_aging();
+        bool showHB = ui->actionShow_Band_Heartbeats_and_ACKs->isChecked();
+        QMap<int, ActivityDetail> lastVisible;
+        for (int key : keys) {
+            auto const &items = m_bandActivity[key];
+            for (int i = items.size() - 1; i >= 0; --i) {
+                auto const &item = items[i];
+                if (item.text.isEmpty()) continue;
+                if (activityAging && item.utcTimestamp.secsTo(now) / 60 >= activityAging) continue;
+                if (!showHB) {
+                    if (item.text.contains(" @HB ") || item.text.contains(" HEARTBEAT ")) continue;
+                    auto const &myCall = m_config.my_callsign();
+                    if (item.text.contains(" ACK ") && !item.text.contains(myCall + " ACK")) continue;
+                    static const QRegularExpression yesSnrRe(R"(\b\w+:\s+\w+\s+YES\s+[+-]\d{2}\b)");
+                    if (yesSnrRe.match(item.text).hasMatch() && !item.text.contains(myCall + " YES")) continue;
+                    static const QRegularExpression noRe(R"(\b\w+:\s+\w+\s+NO\s)");
+                    if (noRe.match(item.text).hasMatch() && !item.text.contains(myCall + " NO")) continue;
+                }
+                lastVisible[key] = item;
+                break;
+            }
+        }
 
-        auto const compare = [this](int const lhsKey, int const rhsKey,
+        // Base comparison using last visible item, not raw list end.
+        auto const compare = [&lastVisible](int const lhsKey, int const rhsKey,
                                     auto &&detail) {
-            auto const &lhs = m_bandActivity[lhsKey];
-            auto const &rhs = m_bandActivity[rhsKey];
+            bool lhsHas = lastVisible.contains(lhsKey);
+            bool rhsHas = lastVisible.contains(rhsKey);
 
-            if (lhs.isEmpty())
+            if (!lhsHas)
                 return false;
-            if (rhs.isEmpty())
+            if (!rhsHas)
                 return true;
 
-            return detail(lhs.last(), rhs.last());
+            return detail(lastVisible[lhsKey], lastVisible[rhsKey]);
         };
 
         // Time stamp comparison, easy stuff, just a total ordering on the
@@ -159,10 +181,11 @@ void UI_Constructor::displayBandActivity() {
                         shouldDisplay = false;
                     }
 
-                    // hide heartbeat items
+                    // hide heartbeat, ACK, and YES SNR items
                     if (!ui->actionShow_Band_Heartbeats_and_ACKs->isChecked()) {
-                        // hide heartbeats and acks if we have heartbeating
-                        // hidden
+                        auto const &myCall = m_config.my_callsign();
+
+                        // hide heartbeats
                         if (item.text.contains(" @HB ") ||
                             item.text.contains(" HEARTBEAT ")) {
                             shouldDisplay = false;
@@ -172,6 +195,33 @@ void UI_Constructor::displayBandActivity() {
                             if (i > 0 && items[i - 1].shouldDisplay &&
                                 items[i - 1].text.endsWith(": ")) {
                                 items[i - 1].shouldDisplay = false;
+                            }
+                        }
+
+                        // hide ACK messages not directed to me
+                        if (item.text.contains(" ACK ") &&
+                            !item.text.contains(myCall + " ACK")) {
+                            shouldDisplay = false;
+                        }
+
+                        // hide "CALL: CALL NO" (exact) not directed to me
+                        {
+                            static const QRegularExpression noRe(
+                                R"(\b\w+:\s+\w+\s+NO\s*[^\w]*$)");
+                            if (noRe.match(item.text).hasMatch() &&
+                                !item.text.contains(myCall + " NO")) {
+                                shouldDisplay = false;
+                            }
+                        }
+
+                        // hide YES SNR replies not directed to me
+                        // pattern: "CALL: CALL YES -XX" or "CALL: CALL YES +XX"
+                        {
+                            static const QRegularExpression yesSnrRe(
+                                R"(\b\w+:\s+\w+\s+YES\s+[+-]\d{2}\b)");
+                            if (yesSnrRe.match(item.text).hasMatch() &&
+                                !item.text.contains(myCall + " YES")) {
+                                shouldDisplay = false;
                             }
                         }
 

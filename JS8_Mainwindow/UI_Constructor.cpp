@@ -846,8 +846,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     int parenClose = lineText.lastIndexOf(')');
                     if (parenOpen >= 0 && parenClose > parenOpen)
                         lineFreq = lineText.mid(parenOpen + 1, parenClose - parenOpen - 1).toInt();
-                    if (lineFreq > 0) {
+                    if (lineFreq > 1000) {
                         // Set frequency from the line, not from m_callActivity
+                        // Inhibit if <= 1000 Hz (likely noise)
                         setFreqOffsetForRestore(lineFreq, false);
                         for (int r = 0; r < ui->tableWidgetRXAll->rowCount(); ++r) {
                             auto item = ui->tableWidgetRXAll->item(r, 0);

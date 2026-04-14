@@ -261,7 +261,14 @@ QString name(int const submode) { return QObject::tr(data(submode).name()); }
  * @param submode
  * @return unsigned int
  */
-unsigned int bandwidth(int const submode) { return data(submode).bandwidth(); }
+unsigned int bandwidth(int const submode) {
+    auto bw = data(submode).bandwidth();
+    // FT2/Subspace: reduce by 25 Hz to align waterfall dial with
+    // visible GFSK energy distribution
+    if (submode == Varicode::JS8CallFT2 && bw > 7)
+        bw -= 7;
+    return bw;
+}
 /**
  * @brief Get the Costas array type of the submode
  *

@@ -1260,8 +1260,13 @@ Radio::Frequency UI_Constructor::dialFrequency() {
 
 void UI_Constructor::setSubmode(int submode) {
     // Block mode switch during active TX — stale m_TRperiod causes truncated frames
-    if (m_transmitting || m_txFrameCount > 0 || !m_txFrameQueue.isEmpty())
+    if (m_transmitting || m_txFrameCount > 0 || !m_txFrameQueue.isEmpty()) {
+        qWarning() << "[UI] setSubmode BLOCKED: submode=" << submode
+                    << "m_transmitting=" << m_transmitting
+                    << "m_txFrameCount=" << m_txFrameCount
+                    << "queueEmpty=" << m_txFrameQueue.isEmpty();
         return;
+    }
     m_nSubMode = submode;
     ui->actionModeJS8Normal->setChecked(submode == Varicode::JS8CallNormal);
     ui->actionModeJS8Fast->setChecked(submode == Varicode::JS8CallFast);
@@ -6098,10 +6103,15 @@ void UI_Constructor::updateButtonDisplay() {
         // TYPING enabled if: Subspace mode, not transmitting, and either
         // a callsign is selected OR cursor is on the last decoded signal freq
         bool onPartnerFreq = false;
-        if (emptyCallsign && m_nSubMode == Varicode::JS8CallFT2
-            && m_l2SignalFreq > 0) {
+        if (emptyCallsign && m_nSubMode == Varicode::JS8CallFT2) {
+            int myOffset = freq();
             int threshold = JS8::Submode::rxThreshold(m_nSubMode);
-            onPartnerFreq = abs(freq() - m_l2SignalFreq) <= threshold;
+            for (auto const &cd : m_callActivity) {
+                if (abs(cd.offset - myOffset) <= threshold) {
+                    onPartnerFreq = true;
+                    break;
+                }
+            }
         }
         setDisabledIfChanged(ui->typingMacroButton,
             isTransmitting || m_nSubMode != Varicode::JS8CallFT2
