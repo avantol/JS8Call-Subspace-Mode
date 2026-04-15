@@ -43,19 +43,19 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
         QApplication::style()->drawControl(QStyle::CE_ItemViewItem, &opt, painter);
 
         painter->save();
-        QRect textRect = option.rect.adjusted(4, 0, -4, 0);
-        QColor textColor = option.state & QStyle::State_Selected
-            ? option.palette.highlightedText().color()
-            : option.palette.text().color();
+        QRect textRect = opt.rect.adjusted(4, 0, -4, 0);
+        QColor textColor = opt.state & QStyle::State_Selected
+            ? opt.palette.highlightedText().color()
+            : opt.palette.text().color();
         painter->setPen(textColor);
 
         // Elide from left (show most recent) for consistency
-        QFontMetrics fm(option.font);
+        QFontMetrics fm(opt.font);
         QString elided = fm.elidedText(text, Qt::ElideLeft, textRect.width());
 
         // Draw text with bold callsigns (CALL: pattern with at least one digit)
         static const QRegularExpression callRe(R"(\b((?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}: ))");
-        QFont boldFont = option.font;
+        QFont boldFont = opt.font;
         boldFont.setBold(true);
         int xPos = textRect.x();
         int remaining = textRect.width();
@@ -66,10 +66,10 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
             // Draw text before the callsign (normal)
             if (match.capturedStart() > lastEnd) {
                 QString before = elided.mid(lastEnd, match.capturedStart() - lastEnd);
-                painter->setFont(option.font);
+                painter->setFont(opt.font);
                 painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
                                   Qt::AlignLeft | Qt::AlignVCenter, before);
-                int w = QFontMetrics(option.font).horizontalAdvance(before);
+                int w = QFontMetrics(opt.font).horizontalAdvance(before);
                 xPos += w;
                 remaining -= w;
             }
@@ -85,7 +85,7 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
         }
         // Draw remaining text (normal)
         if (lastEnd < elided.length() && remaining > 0) {
-            painter->setFont(option.font);
+            painter->setFont(opt.font);
             painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
                               Qt::AlignLeft | Qt::AlignVCenter, elided.mid(lastEnd));
         }
@@ -101,12 +101,12 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
 
     painter->save();
 
-    const QRect rect = option.rect;
+    const QRect rect = opt.rect;
     const int n = groups.size();
     const int regionWidth = rect.width() / n;
-    const QFontMetrics fm(option.font);
+    const QFontMetrics fm(opt.font);
     const int textMargin = 4;
-    const bool selected = option.state & QStyle::State_Selected;
+    const bool selected = opt.state & QStyle::State_Selected;
 
     for (int i = 0; i < n; i++) {
         auto map = groups[i].toMap();
@@ -119,7 +119,7 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
         if (i > 0) {
             // Use background color when selected, gray otherwise
             QColor divColor = selected
-                ? option.palette.base().color()
+                ? opt.palette.base().color()
                 : QColor(180, 180, 180);
             painter->setPen(QPen(divColor, 1));
             painter->drawLine(regionRect.topLeft(), regionRect.bottomLeft());
@@ -138,12 +138,12 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
 
         // Draw text with bold callsigns only (CALL: with digit)
         QColor textColor = selected
-            ? option.palette.highlightedText().color()
-            : option.palette.text().color();
+            ? opt.palette.highlightedText().color()
+            : opt.palette.text().color();
         painter->setPen(textColor);
 
         static const QRegularExpression callRe(R"(\b((?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}: ))");
-        QFont boldFont = option.font;
+        QFont boldFont = opt.font;
         boldFont.setBold(true);
         int xPos = textRect.x();
         int remaining = textRect.width();
@@ -153,10 +153,10 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
             auto match = it.next();
             if (match.capturedStart() > lastEnd) {
                 QString before = elided.mid(lastEnd, match.capturedStart() - lastEnd);
-                painter->setFont(option.font);
+                painter->setFont(opt.font);
                 painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
                                   Qt::AlignLeft | Qt::AlignVCenter, before);
-                int w = QFontMetrics(option.font).horizontalAdvance(before);
+                int w = QFontMetrics(opt.font).horizontalAdvance(before);
                 xPos += w; remaining -= w;
             }
             QString call = match.captured(0);
@@ -168,7 +168,7 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
             lastEnd = match.capturedEnd();
         }
         if (lastEnd < elided.length() && remaining > 0) {
-            painter->setFont(option.font);
+            painter->setFont(opt.font);
             painter->drawText(QRect(xPos, textRect.y(), remaining, textRect.height()),
                               Qt::AlignLeft | Qt::AlignVCenter, elided.mid(lastEnd));
         }
