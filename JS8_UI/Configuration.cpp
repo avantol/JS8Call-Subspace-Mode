@@ -876,6 +876,14 @@ bool Configuration::hold_ptt() const { return m_->hold_ptt_; }
 bool Configuration::avoid_forced_identify() const {
     return m_->avoid_forced_identify_;
 }
+void Configuration::set_avoid_forced_identify(bool avoid) {
+    m_->avoid_forced_identify_ = avoid;
+    m_->ui_->avoid_forced_identify_check_box->setChecked(avoid);
+    // Write this single key directly — write_settings() depends on
+    // SettingsGroup context which may target the wrong radio group.
+    SettingsGroup g{m_->settings_, "Configuration"};
+    m_->settings_->setValue("AvoidForcedIdentify", avoid);
+}
 bool Configuration::avoid_allcall() const { return m_->avoid_allcall_; }
 void Configuration::set_avoid_allcall(bool avoid) {
     if (m_->avoid_allcall_ != avoid) {

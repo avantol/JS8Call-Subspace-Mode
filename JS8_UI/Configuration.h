@@ -149,6 +149,7 @@ class Configuration final : public QObject {
     bool miles() const;
     bool hold_ptt() const;
     bool avoid_forced_identify() const;
+    void set_avoid_forced_identify(bool avoid);
     bool avoid_allcall() const;
     void set_avoid_allcall(bool avoid);
     bool spellcheck() const;

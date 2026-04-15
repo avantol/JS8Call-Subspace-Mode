@@ -2579,6 +2579,7 @@ void UI_Constructor::refuseToSendIn30mWSPRBand() {
             if (m_auto)
                 auto_tx_mode(false);
             if (m_hb_loop->isActive()) {
+                qWarning() << "[HAIL-DIAG] loop cancelled: WSPR guard band";
                 m_hb_loop->onLoopCancel();
             }
             if (m_cq_loop->isActive()) {
@@ -4378,6 +4379,8 @@ void UI_Constructor::prepareHeartbeatMode(bool enabled) {
     m_hbModeAvailable = enabled;
     ui->hbMacroButton->setEnabled(enabled);
     if (!enabled) {
+        if (m_hb_loop->isActive())
+            qWarning() << "[HAIL-DIAG] loop cancelled: mode not available";
         m_hb_loop->onLoopCancel();
         ui->hbMacroButton->setChecked(false);
     }
@@ -4776,7 +4779,9 @@ void UI_Constructor::sendHeartbeatAck(QString to, int snr, QString extra) {
 }
 
 void UI_Constructor::on_hbMacroButton_toggled(bool checked) {
-    qCDebug(mainwindow_js8) << "on_hbMacroButton_toggled(" << checked << ")";
+    qWarning() << "[HAIL-DIAG] hbMacroButton toggled:" << checked
+               << "interval=" << m_hbInterval
+               << "loopActive=" << m_hb_loop->isActive();
     if (checked) {
         // only clear callsign if we do not allow hbs while in qso
         if (m_config.heartbeat_qso_pause()) {
@@ -4785,14 +4790,13 @@ void UI_Constructor::on_hbMacroButton_toggled(bool checked) {
 
         if (m_hbInterval) {
             if (!m_hb_loop->isActive()) {
-                qCDebug(mainwindow_js8)
-                    << "Starting HB loop from on_hbMacroButton_toggled()";
+                qWarning() << "[HAIL-DIAG] starting loop, period="
+                           << m_hbInterval << "min";
                 m_hb_loop->onTxLoopPeriodChangeStart(m_hbInterval *
                                                      (qint64)60000);
             }
         } else {
-            qCDebug(mainwindow_js8)
-                << "Sending single HB from on_hbMacroButton_toggled()";
+            qWarning() << "[HAIL-DIAG] single-shot send (no loop)";
             m_hb_loop->onLoopCancel();
             // Heartbeat, but not in a loop.
             sendHB();
@@ -4802,8 +4806,7 @@ void UI_Constructor::on_hbMacroButton_toggled(bool checked) {
         }
     } else {
         if (m_hb_loop->isActive() && m_hbButtonIsLongterm) {
-            qCDebug(mainwindow_js8)
-                << "Stopping HB loop from on_hbMacroButton_toggled()";
+            qWarning() << "[HAIL-DIAG] loop cancelled: button unchecked (longterm)";
             m_hb_loop->onLoopCancel();
         }
     }
@@ -4937,6 +4940,9 @@ void UI_Constructor::on_statusMacroButton_clicked() {
 }
 
 void UI_Constructor::on_typingMacroButton_clicked() {
+    // TYPING... should send without callsign prefix
+    m_config.set_avoid_forced_identify(true);
+
     addMessageText(QString("TYPING..."));
 
     if (m_config.transmit_directed())
@@ -5701,6 +5707,8 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
     resetMessage();
 
     if (m_stopTxButtonIsLongterm) {
+        if (m_hb_loop->isActive())
+            qWarning() << "[HAIL-DIAG] loop cancelled: stop button (longterm)";
         m_hb_loop->onLoopCancel();
         m_cq_loop->onLoopCancel();
     }
@@ -6435,6 +6443,7 @@ void UI_Constructor::selectCallsign(QString call, int submode) {
     // Pause HB when selecting a callsign (entering QSO)
     if (m_config.heartbeat_qso_pause()) {
         if (ui->hbMacroButton->isChecked()) {
+            qWarning() << "[HAIL-DIAG] loop cancelled: callsign selected (QSO pause) call=" << call;
             ui->hbMacroButton->setChecked(false);
             m_hb_loop->onLoopCancel();
             m_hbPaused = true;
@@ -7504,8 +7513,9 @@ void UI_Constructor::tx_watchdog(bool triggered) {
 
         // save the button states
         ui->actionModeAutoreply->setChecked(false);
-        qCDebug(mainwindow_js8) << "Unchecking the hbMacroButton and "
-                                   "cqMacroButton from TX watchdog.";
+        if (wasHB)
+            qWarning() << "[HAIL-DIAG] loop cancelled: idle watchdog after"
+                        << m_config.watchdog() << "minutes";
         ui->hbMacroButton->setChecked(false);
         ui->cqMacroButton->setChecked(false);
 
