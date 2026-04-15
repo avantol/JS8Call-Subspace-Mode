@@ -53,6 +53,7 @@ QMap<QString, int> directed_cmds = {
                         // processing of HBs as directed commands)
     {" HB", -1}, // this is my heartbeat (unused except for faux processing of
                  // HBs as directed commands)
+    {" HAIL", -1}, // presence beacon (Subspace) — like HB but no grid, no ACK
     {" CQ", -1}, // this is my cq (unused except for faux processing of CQs as
                  // directed commands)
 
@@ -139,7 +140,7 @@ QString optional_cmd_pattern =
     QString("(?<cmd>\\s?(?:AGN[?]|QSL[?]|HW CPY[?]|MSG "
             "TO[:]|SNR[?]|INFO[?]|GRID[?]|STATUS[?]|QUERY "
             "MSGS[?]|HEARING[?]|(?:(?:STATUS|HEARING|QUERY CALL|QUERY "
-            "MSGS|QUERY|CMD|MSG|NACK|ACK|73|YES|NO|HEARTBEAT "
+            "MSGS|QUERY|CMD|MSG|NACK|ACK|73|YES|NO|HAIL|HEARTBEAT "
             "SNR|SNR|QSL|RR|SK|FB|INFO|GRID|DIT DIT)(?=[ ]|$))|[?> ]))?");
 QString optional_grid_pattern = QString("(?<grid>\\s?[A-R]{2}[0-9]{2})?");
 QString optional_extended_grid_pattern =
@@ -151,7 +152,7 @@ QRegularExpression directed_re("^" + callsign_pattern + optional_cmd_pattern +
                                optional_num_pattern);
 
 QRegularExpression heartbeat_re(
-    R"(^\s*(?<callsign>[@](?:ALLCALL|HB)\s+)?(?<type>CQ CQ CQ|CQ DX|CQ QRP|CQ CONTEST|CQ FIELD|CQ FD|CQ CQ|CQ|HB|HEARTBEAT(?!\s+SNR))(?:\s(?<grid>[A-R]{2}[0-9]{2}))?\b)");
+    R"(^\s*(?<callsign>[@](?:ALLCALL|HB)\s+)?(?<type>CQ CQ CQ|CQ DX|CQ QRP|CQ CONTEST|CQ FIELD|CQ FD|CQ CQ|CQ|HB|HAIL|HEARTBEAT(?!\s+SNR))(?:\s(?<grid>[A-R]{2}[0-9]{2}))?\b)");
 
 QRegularExpression
     compound_re("^\\s*[`]" + callsign_pattern + "(?<extra>" +
@@ -286,7 +287,7 @@ QMap<QString, quint32> basecalls = {
 
 QMap<quint32, QString> cqs = {
     {0, "CQ CQ CQ"}, {1, "CQ DX"}, {2, "CQ QRP"}, {3, "CQ CONTEST"},
-    {4, "CQ FIELD"}, {5, "CQ FD"}, {6, "CQ CQ"},  {7, "CQ"},
+    {4, "CQ FIELD"}, {5, "CQ FD"}, {6, "CQ CQ"},  {7, "HAIL"},
 };
 
 // status flags in HB messages are deprecated as of 2.2, later versions will
@@ -1377,7 +1378,7 @@ QString Varicode::packHeartbeatMessage(QString const &text,
     // 1      1   CQ
 
     auto type = parsedText.captured("type");
-    auto isAlt = type.startsWith("CQ");
+    auto isAlt = type.startsWith("CQ") || type == "HAIL";
 
     if (callsign.isEmpty()) {
         if (n)

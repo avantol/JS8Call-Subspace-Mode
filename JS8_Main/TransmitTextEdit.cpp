@@ -8,6 +8,7 @@
 #include "Varicode.h"
 
 #include <QLoggingCategory>
+#include <QMimeData>
 #include <QScrollBar>
 
 #include <iterator>
@@ -523,6 +524,14 @@ bool TransmitTextEdit::eventFilter(QObject * /*o*/, QEvent *e) {
     }
 
     return true;
+}
+
+void TransmitTextEdit::insertFromMimeData(const QMimeData *source) {
+    // Only accept plain text — prevents crash in Qt 6.4.x when
+    // clipboard contains rich text, images, or other MIME types
+    if (source && source->hasText()) {
+        insertPlainText(source->text().toUpper());
+    }
 }
 
 Q_LOGGING_CATEGORY(transmittextedit_js8, "transmittextedit.js8", QtWarningMsg)

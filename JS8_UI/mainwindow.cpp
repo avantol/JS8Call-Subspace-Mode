@@ -4364,7 +4364,8 @@ void UI_Constructor::on_actionModeAutoreply_toggled(bool) {
 bool UI_Constructor::canCurrentModeSendHeartbeat() const {
     return (m_nSubMode == Varicode::JS8CallFast ||
             m_nSubMode == Varicode::JS8CallNormal ||
-            m_nSubMode == Varicode::JS8CallSlow);
+            m_nSubMode == Varicode::JS8CallSlow ||
+            m_nSubMode == Varicode::JS8CallFT2);
 }
 
 void UI_Constructor::prepareMonitorControls() {
@@ -4437,9 +4438,21 @@ void UI_Constructor::setupJS8() {
         m_nSubMode = Varicode::JS8CallFT2;
 #endif
 
-    // Only enable heartbeat for modes that support it
+    // Only enable heartbeat/HAIL for modes that support it
     prepareHeartbeatMode(canCurrentModeSendHeartbeat() &&
                          ui->actionModeJS8HB->isChecked());
+
+    // Update menu label: HAIL in Subspace, HB in other modes
+    ui->actionModeJS8HB->setText(
+        m_nSubMode == Varicode::JS8CallFT2
+        ? "Enable HAIL Presence Beacon"
+        : "Enable Heartbeat Networking (HB)");
+    ui->actionHeartbeatAcknowledgements->setVisible(
+        m_nSubMode != Varicode::JS8CallFT2);
+    ui->actionHeartbeat->setText(
+        m_nSubMode == Varicode::JS8CallFT2
+        ? "Send Hailing Message..."
+        : "Send &Heartbeat...");
 
     updateModeButtonText();
 
@@ -4577,9 +4590,10 @@ void UI_Constructor::buildFrequencyMenu(QMenu *menu) {
 
 void UI_Constructor::buildHeartbeatMenu(QMenu *menu) {
     if (m_hbInterval > 0) {
+        bool isHailMode = (m_nSubMode == Varicode::JS8CallFT2);
         auto startStop = menu->addAction(ui->hbMacroButton->isChecked()
-                                             ? "Stop Heartbeat Timer"
-                                             : "Start Heartbeat Timer");
+                                             ? (isHailMode ? "Stop Hailing Timer" : "Stop Heartbeat Timer")
+                                             : (isHailMode ? "Start Hailing Timer" : "Start Heartbeat Timer"));
         connect(startStop, &QAction::triggered, this,
                 [this]() { ui->hbMacroButton->toggle(); });
         menu->addSeparator();
@@ -4588,7 +4602,8 @@ void UI_Constructor::buildHeartbeatMenu(QMenu *menu) {
     buildRepeatMenu(menu, ui->hbMacroButton, false, &m_hbInterval);
 
     menu->addSeparator();
-    auto now = menu->addAction("Send Heartbeat Now");
+    auto now = menu->addAction(
+        m_nSubMode == Varicode::JS8CallFT2 ? "Send Hailing Message Now" : "Send Heartbeat Now");
     connect(now, &QAction::triggered, this, &UI_Constructor::sendHB);
 }
 
@@ -4687,34 +4702,45 @@ void UI_Constructor::buildRepeatMenu(QMenu *menu, QPushButton *button,
 }
 
 void UI_Constructor::sendHB() {
-
     QString mycall = m_config.my_callsign();
     QString mygrid = m_config.my_grid().left(4);
 
     QStringList parts;
     parts.append(QString("%1:").arg(mycall));
 
-#if JS8_CUSTOMIZE_HB
-    auto hb = m_config.hb_message();
-#else
-    auto hb = QString{};
-#endif
-    if (hb.isEmpty()) {
-        parts.append("HEARTBEAT");
-        parts.append(mygrid);
+    bool isHail = (m_nSubMode == Varicode::JS8CallFT2);
+
+    if (isHail) {
+        // HAIL: @ALLCALL ACK — includes callsign, no response triggered
+        parts.clear();
+        parts.append(QString("%1: @ALLCALL ACK").arg(mycall));
     } else {
-        parts.append(hb);
+#if JS8_CUSTOMIZE_HB
+        auto hb = m_config.hb_message();
+#else
+        auto hb = QString{};
+#endif
+        if (hb.isEmpty()) {
+            parts.append("HEARTBEAT");
+            parts.append(mygrid);
+        } else {
+            parts.append(hb);
+        }
     }
 
     QString message = parts.join(" ").trimmed();
 
-    auto f = findFreeFreqOffset(500, 1000, 50);
+    auto f = isHail
+        ? findFreeFreqOffset(500, 850, 50)
+        : findFreeFreqOffset(500, 1000, 50);
 
     if (freq() <= 1000) {
         f = freq();
-    } else if (m_config.heartbeat_anywhere()) {
+    } else if (!isHail && m_config.heartbeat_anywhere()) {
         f = -1;
     }
+
+    qWarning() << "[" << (isHail ? "HAIL" : "HB") << "] sending:" << message << "freq=" << f;
 
     enqueueMessage(PriorityLow + 1, message, f, nullptr);
     processTxQueue();
@@ -6139,7 +6165,9 @@ void UI_Constructor::updateHBButtonDisplay() {
         QDateTime nextHeartbeat = m_hb_loop->nextActivity();
         long secs = std::lround(now.msecsTo(nextHeartbeat) / 1000.0);
 
-        QString hbBase = presentlyWantHBReplies() ? "HB + ACK" : "HB";
+        bool isHail = (m_nSubMode == Varicode::JS8CallFT2);
+        QString hbBase = isHail ? "HAIL"
+            : (presentlyWantHBReplies() ? "HB + ACK" : "HB");
 
         if (secs > 0) {
             ui->hbMacroButton->setText(
@@ -6148,7 +6176,9 @@ void UI_Constructor::updateHBButtonDisplay() {
             ui->hbMacroButton->setText(QString("%1 (now)").arg(hbBase));
         }
     } else {
-        if (presentlyWantHBReplies()) {
+        if (m_nSubMode == Varicode::JS8CallFT2) {
+            ui->hbMacroButton->setText("HAIL");
+        } else if (presentlyWantHBReplies()) {
             ui->hbMacroButton->setText("HB + ACK");
         } else {
             ui->hbMacroButton->setText("HB");
@@ -6157,6 +6187,11 @@ void UI_Constructor::updateHBButtonDisplay() {
     // Adjust minimum width to fit current text
     auto fm = ui->hbMacroButton->fontMetrics();
     ui->hbMacroButton->setMinimumWidth(fm.horizontalAdvance(ui->hbMacroButton->text()) + 12);
+
+    ui->hbMacroButton->setToolTip(
+        m_nSubMode == Varicode::JS8CallFT2
+        ? "Send presence beacon (1 frame, no reply)"
+        : "Send heartbeat with grid square");
 }
 
 void UI_Constructor::updateCQButtonDisplay() {
@@ -7171,9 +7206,11 @@ void UI_Constructor::processTxQueue() {
     // check to see if this is a high priority message, or if we have
     // autoreply enabled, or if this is a ping and the ping button is
     // enabled
+    bool isHail = message.message.endsWith(":") && !message.message.contains(" ");
     if (message.priority >= PriorityHigh ||
         message.message.contains(" HEARTBEAT ") ||
         message.message.contains(" HB ") || message.message.contains(" ACK ") ||
+        isHail ||
         ui->actionModeAutoreply->isChecked()) {
         // then try to set the frequency...
         setFreqOffsetForRestore(f, true);

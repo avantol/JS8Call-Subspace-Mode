@@ -53,6 +53,8 @@ void UI_Constructor::displayBandActivity() {
                 if (activityAging && item.utcTimestamp.secsTo(now) / 60 >= activityAging) continue;
                 if (!showHB) {
                     if (item.text.contains(" @HB ") || item.text.contains(" HEARTBEAT ")) continue;
+                    { QString s = item.text; s.remove(m_config.eot()).trimmed();
+                      if (s.endsWith(":") && !s.contains(" ")) continue; }
                     auto const &myCall = m_config.my_callsign();
                     if (item.text.contains(" ACK ") && !item.text.contains(myCall + " ACK")) continue;
                     static const QRegularExpression yesSnrRe(R"(\b\w+:\s+\w+\s+YES\s+[+-]\d{2}\b)");
@@ -195,6 +197,15 @@ void UI_Constructor::displayBandActivity() {
                             if (i > 0 && items[i - 1].shouldDisplay &&
                                 items[i - 1].text.endsWith(": ")) {
                                 items[i - 1].shouldDisplay = false;
+                            }
+                        }
+
+                        // hide HAIL beacons (bare "CALL:" with no content)
+                        {
+                            QString stripped = item.text;
+                            stripped.remove(m_config.eot()).trimmed();
+                            if (stripped.endsWith(":") && !stripped.contains(" ")) {
+                                shouldDisplay = false;
                             }
                         }
 

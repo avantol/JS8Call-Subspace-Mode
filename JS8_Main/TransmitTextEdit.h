@@ -61,6 +61,11 @@ class TransmitTextEdit : public QTextEdit {
 
     bool eventFilter(QObject * /*o*/, QEvent *e);
 
+  protected:
+    // Prevent crash in Qt's QWidgetTextControl::insertFromMimeData
+    // when clipboard contains non-text data (QTBUG in Qt 6.4.x)
+    void insertFromMimeData(const QMimeData *source) override;
+
   public slots:
     void on_selectionChanged();
     void on_textContentsChanged(int pos, int rem, int add);
