@@ -772,14 +772,14 @@
                   <item>
                    <widget class="QCheckBox" name="heartbeat_anywhere_check_box">
                     <property name="text">
-                     <string>Allow heartbeat transmissions outside of heartbeat sub-channel (500Hz - 1000Hz)</string>
+                     <string>Allow heartbeat / hailing transmissions outside of the sub-channel (500Hz - 1000Hz)</string>
                     </property>
                    </widget>
                   </item>
                   <item>
                    <widget class="QCheckBox" name="heartbeat_qso_pause_check_box">
                     <property name="text">
-                     <string>Pause heartbeat transmissions while in a QSO (i.e., callsign is selected)</string>
+                     <string>Pause heartbeat / hailing transmissions while in a QSO (i.e., callsign is selected)</string>
                     </property>
                    </widget>
                   </item>

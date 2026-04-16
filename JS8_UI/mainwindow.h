@@ -922,6 +922,7 @@ class UI_Constructor : public QMainWindow {
     std::atomic<int> m_l2RingPos{0};              // write position (atomic: audio thread writes, main thread reads)
     bool m_l2Decoding = false;                  // decode in progress
     bool m_l2Enabled = false;                   // L2 decode active
+    qint64 m_l2DecodeFinishedMs = 0;            // timestamp when decode thread finished
     void l2DecodeDone();                        // called when async decode finishes
     void l2TryDecode(char const *source);       // attempt to start an L2 decode
 

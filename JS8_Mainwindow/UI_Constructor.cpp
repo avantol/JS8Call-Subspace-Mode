@@ -236,6 +236,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             &Modulator::stop);
     connect(this, &UI_Constructor::tune, m_modulator, &Modulator::tune);
     connect(this, &UI_Constructor::sendMessage, m_modulator, &Modulator::start);
+    connect(m_modulator, &Modulator::ft2WaveformDone, this, [this]() {
+        qWarning() << "[FT2-TX] waveform complete: triggering stopTx()";
+        stopTx();
+    }, Qt::QueuedConnection);
     connect(&m_audioThread, &QThread::finished, m_modulator,
             &QObject::deleteLater);
 

@@ -65,6 +65,10 @@ class Modulator final : public AudioDevice {
     Q_SLOT void stop(bool quick = false);
     Q_SLOT void tune(bool state = true);
 
+  signals:
+    /// Emitted when FT2 waveform finishes playing (transitions to KeepAlive).
+    void ft2WaveformDone();
+
   protected:
     // QIODevice protocol
 

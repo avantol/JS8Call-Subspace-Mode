@@ -2857,9 +2857,50 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 
     // TODO: stop
     if (!m_btxok && m_btxok0 && m_iptt == 1) {
-        if (m_nSubMode == Varicode::JS8CallFT2)
-            qWarning() << "[FT2-TX] btxok edge: triggering stopTx()";
+        if (m_nSubMode == Varicode::JS8CallFT2) {
+            // FT2 is async — don't kill the waveform based on period math.
+            // The Modulator will emit ft2WaveformDone() when the waveform
+            // finishes playing, which triggers stopTx() cleanly.
+            // Safety: force stop if waveform hasn't completed in 5 seconds.
+            if (m_modulator->isFT2WaveformDone()) {
+                qWarning() << "[FT2-TX] btxok edge: waveform already done,"
+                            << "triggering stopTx()";
+                stopTx();
+            } else {
+                qWarning() << "[FT2-TX] btxok edge: SKIPPED for FT2"
+                            << "(waiting for waveform completion)";
+            }
+        } else {
+            stopTx();
+        }
+    }
+
+    // FT2: poll for waveform completion every guiUpdate tick.
+    // The btxok edge check above is a one-shot — if the waveform wasn't
+    // done at that instant, this continuous check catches it.
+    if (m_nSubMode == Varicode::JS8CallFT2 && m_transmitting && m_iptt == 1
+        && !m_tune && !m_btxok && m_modulator->isFT2WaveformDone()) {
+        qWarning() << "[FT2-TX] waveform poll: done, triggering stopTx()";
         stopTx();
+    }
+
+    // FT2 safety: force stop if TX has been running too long (stuck Modulator)
+    if (m_nSubMode == Varicode::JS8CallFT2 && m_transmitting && m_iptt == 1
+        && !m_tune) {
+        static qint64 ft2TxStartMs = 0;
+        if (m_btxok && !m_btxok0) {
+            ft2TxStartMs = DriftingDateTime::currentMSecsSinceEpoch();
+        }
+        if (ft2TxStartMs > 0) {
+            qint64 elapsed = DriftingDateTime::currentMSecsSinceEpoch()
+                             - ft2TxStartMs;
+            if (elapsed > 5000) {
+                qWarning() << "[FT2-TX] SAFETY: TX exceeded 5s, forcing stopTx()"
+                            << "elapsed=" << elapsed << "ms";
+                ft2TxStartMs = 0;
+                stopTx();
+            }
+        }
     }
 }
 
@@ -4739,7 +4780,7 @@ void UI_Constructor::sendHB() {
 
     if (freq() <= 1000) {
         f = freq();
-    } else if (!isHail && m_config.heartbeat_anywhere()) {
+    } else if (m_config.heartbeat_anywhere()) {
         f = -1;
     }
 
@@ -7666,6 +7707,10 @@ QByteArray UI_Constructor::wisdomFileName() const {
 
 #ifdef JS8_ENABLE_FT2
 void UI_Constructor::l2DecodeDone() {
+    auto now = QDateTime::currentMSecsSinceEpoch();
+    auto delay = m_l2DecodeFinishedMs > 0 ? now - m_l2DecodeFinishedMs : -1;
+    if (delay > 500)
+        qWarning() << "[FT2-L2] signal delivery delay:" << delay << "ms";
     m_l2Decoding = false;
     // Immediately start next decode — no waiting for timer.
     l2TryDecode("chain");
@@ -7773,10 +7818,11 @@ void UI_Constructor::l2TryDecode(char const *source) {
             useNfqsoOnly, &decodedFreq,
             syncBest);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        qCDebug(mainwindow_js8) << "[FT2-L2] decode took" << elapsed << "ms"
+        qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
                    << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
                    << "sync=" << syncBest;
+        m_l2DecodeFinishedMs = QDateTime::currentMSecsSinceEpoch();
         if (elapsed > 3000) {
             qWarning() << "[FT2-L2] WARNING: decode cycle approaching buffer limit (7500ms)";
         }

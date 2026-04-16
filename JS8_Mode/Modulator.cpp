@@ -347,6 +347,8 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         if (m_amp == 0.0) {
             m_state.store(State::KeepAlive);
             m_phi = 0.0;
+            if (m_ft2Mode)
+                emit ft2WaveformDone();
             return framesGenerated * bytesPerFrame();
         }
         } // end JS8 else block
