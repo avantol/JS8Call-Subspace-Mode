@@ -103,28 +103,34 @@ void Modulator::start(double const frequency, int const submode,
         if (inTxDelayBeforePeriodStart) {
             unsigned const additionalMSNeededForTxDelay =
                 periodMS - periodOffsetMS;
-            qCDebug(modulator_js8) << "Sending" << additionalMSNeededForTxDelay
-                                   << "ms silence for TX delay.";
             m_silentFrames = (startDelayMS + additionalMSNeededForTxDelay) *
                              FRAME_RATE / MS_PER_SEC;
+            qWarning() << "[FT2-TX] Modulator timing: TX-DELAY path"
+                        << "periodOffsetMS=" << periodOffsetMS
+                        << "additionalMS=" << additionalMSNeededForTxDelay
+                        << "silentFrames=" << m_silentFrames
+                        << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
         } else if (startDelayMS > periodOffsetMS) {
-            qCDebug(modulator_js8)
-                << "Starting" << periodOffsetMS
-                << "ms late into transmission, skipping some of the"
-                << startDelayMS << "ms start delay";
             m_silentFrames =
                 (startDelayMS - periodOffsetMS) * FRAME_RATE / MS_PER_SEC;
+            qWarning() << "[FT2-TX] Modulator timing: EARLY-START path"
+                        << "periodOffsetMS=" << periodOffsetMS
+                        << "startDelayMS=" << startDelayMS
+                        << "silentFrames=" << m_silentFrames
+                        << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
         } else {
             // Too late in the current period to start cleanly.
             // Wait for the next period boundary + startDelay instead of
             // cutting away initial symbols (which breaks GFSK sync).
             unsigned const msToNextBoundary = periodMS - periodOffsetMS;
-            qCDebug(modulator_js8)
-                << "Too late by" << (periodOffsetMS - startDelayMS)
-                << "ms into period, waiting" << msToNextBoundary
-                << "ms for next period boundary.";
             m_silentFrames = (msToNextBoundary + startDelayMS) *
                              FRAME_RATE / MS_PER_SEC;
+            qWarning() << "[FT2-TX] Modulator timing: WAIT-NEXT-PERIOD path"
+                        << "periodOffsetMS=" << periodOffsetMS
+                        << "startDelayMS=" << startDelayMS
+                        << "msToNextBoundary=" << msToNextBoundary
+                        << "silentFrames=" << m_silentFrames
+                        << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
         }
     } else {
         qCDebug(modulator_js8) << "Modulator finds it is tuning.";
@@ -272,6 +278,9 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
             } while (--m_silentFrames && samples != samplesEnd);
 
             if (!m_silentFrames) {
+                qWarning() << "[FT2-TX] Modulator: Synchronizing→Active"
+                            << "cycle#" << m_txCycleCount
+                            << "ft2Mode=" << m_ft2Mode;
                 m_state.store(State::Active);
             }
         }

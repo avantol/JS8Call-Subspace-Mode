@@ -32,6 +32,9 @@ QVariantList BandActivityMessageDelegate::getGroups(const QModelIndex &index) {
 void BandActivityMessageDelegate::paint(QPainter *painter,
                                         const QStyleOptionViewItem &option,
                                         const QModelIndex &index) const {
+    if (!painter || !index.isValid())
+        return;
+
     auto groups = getGroups(index);
 
     // Single group or no groups: render with bold callsigns but no dividers
@@ -190,8 +193,10 @@ bool BandActivityMessageDelegate::helpEvent(QHelpEvent *event,
     if (groups.size() <= 1) {
         QString text = index.data(Qt::DisplayRole).toString();
         if (!text.isEmpty()) {
-            QFontMetrics fm(option.font);
-            int cellWidth = option.rect.width();
+            QStyleOptionViewItem opt = option;
+            initStyleOption(&opt, index);
+            QFontMetrics fm(opt.font);
+            int cellWidth = opt.rect.width();
             if (fm.horizontalAdvance(text) > cellWidth) {
                 QToolTip::showText(event->globalPos(), boldCallsigns(text), view);
                 return true;
