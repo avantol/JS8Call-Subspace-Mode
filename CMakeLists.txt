@@ -249,6 +249,7 @@ target_sources(
   JS8_Main/TxLoop.cpp
   JS8_Main/WF.cpp
   JS8_Main/fileutils.cpp
+  JS8_Main/CrashHandler.cpp
   JS8_Main/main.cpp
   JS8_Main/Modes.cpp
   JS8_Main/ProcessThread.cpp
@@ -321,6 +322,11 @@ target_link_libraries(
   Qt::SerialPort
   Qt::Widgets
 )
+
+# Windows: link dbghelp for crash handler mini-dump support
+if(WIN32)
+  target_link_libraries(${TARGET} PRIVATE dbghelp)
+endif()
 
 #------------------------------------------------------------------------------#
 # FT2 Mode Support (C++ port — Fortran removed)

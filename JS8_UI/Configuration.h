@@ -152,6 +152,7 @@ class Configuration final : public QObject {
     void set_avoid_forced_identify(bool avoid);
     bool avoid_allcall() const;
     void set_avoid_allcall(bool avoid);
+    bool hail_single_frame() const;
     bool spellcheck() const;
     int heartbeat() const;
     int watchdog() const;

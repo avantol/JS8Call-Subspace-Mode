@@ -648,6 +648,7 @@ class Configuration::impl final : public QDialog {
     bool hold_ptt_;
     bool avoid_forced_identify_;
     bool avoid_allcall_;
+    bool hail_single_frame_;
     bool spellcheck_;
     int heartbeat_;
     int watchdog_;
@@ -888,6 +889,7 @@ void Configuration::set_avoid_allcall(bool avoid) {
         m_->write_settings();
     }
 }
+bool Configuration::hail_single_frame() const { return m_->hail_single_frame_; }
 bool Configuration::spellcheck() const { return m_->spellcheck_; }
 int Configuration::heartbeat() const { return m_->heartbeat_; }
 int Configuration::watchdog() const { return m_->watchdog_; }
@@ -1771,6 +1773,8 @@ void Configuration::impl::initialize_models() {
     ui_->hold_ptt_check_box->setChecked(hold_ptt_);
     ui_->avoid_forced_identify_check_box->setChecked(avoid_forced_identify_);
     ui_->avoid_allcall_check_box->setChecked(avoid_allcall_);
+    ui_->hail_single_frame_radio->setChecked(hail_single_frame_);
+    ui_->hail_two_frame_radio->setChecked(!hail_single_frame_);
     ui_->spellcheck_check_box->setChecked(spellcheck_);
     ui_->heartbeat_spin_box->setValue(heartbeat_);
     ui_->tx_watchdog_spin_box->setValue(watchdog_);
@@ -2257,6 +2261,7 @@ void Configuration::impl::read_settings() {
     avoid_forced_identify_ =
         settings_->value("AvoidForcedIdentify", false).toBool();
     avoid_allcall_ = settings_->value("AvoidAllcall", false).toBool();
+    hail_single_frame_ = settings_->value("HailSingleFrame", true).toBool();
     spellcheck_ = settings_->value("Spellcheck", true).toBool();
     heartbeat_ = settings_->value("TxBeacon", 30).toInt();
     watchdog_ = settings_->value("TxIdleWatchdog", 60).toInt();
@@ -2489,6 +2494,7 @@ void Configuration::impl::write_settings() {
     settings_->setValue("HoldPTT", hold_ptt_);
     settings_->setValue("AvoidForcedIdentify", avoid_forced_identify_);
     settings_->setValue("AvoidAllcall", avoid_allcall_);
+    settings_->setValue("HailSingleFrame", hail_single_frame_);
     settings_->setValue("Spellcheck", spellcheck_);
     settings_->setValue("TxBeacon", heartbeat_);
     settings_->setValue("TxIdleWatchdog", watchdog_);
@@ -3123,6 +3129,7 @@ void Configuration::impl::accept() {
     hold_ptt_ = ui_->hold_ptt_check_box->isChecked();
     avoid_forced_identify_ = ui_->avoid_forced_identify_check_box->isChecked();
     avoid_allcall_ = ui_->avoid_allcall_check_box->isChecked();
+    hail_single_frame_ = ui_->hail_single_frame_radio->isChecked();
     spellcheck_ = ui_->spellcheck_check_box->isChecked();
     heartbeat_ = ui_->heartbeat_spin_box->value();
     watchdog_ = ui_->tx_watchdog_spin_box->value();

@@ -3127,20 +3127,13 @@ void UI_Constructor::stopTx() {
                 << "m_transmitting=" << m_transmitting
                 << "submode=" << m_nSubMode
                 << "m_TRperiod=" << m_TRperiod;
-    Q_EMIT endTransmitMessage();
 
     auto dt = DecodedText(m_currentMessage.trimmed(), m_currentMessageBits,
                           m_nSubMode);
     last_tx_label.setText("Last Tx: " +
                           dt.message()); // m_currentMessage.trimmed());
 
-    // TODO: uncomment if we want to mark after the frame is sent.
-    //// // start message marker
-    //// // - keep track of the total message sent so far, and mark it having
-    /// been sent / m_totalTxMessage.append(dt.message()); /
-    /// ui->extFreeTextMsgEdit->setCharsSent(m_totalTxMessage.length()); /
-    /// qCDebug(mainwindow_js8) << "total sent:\n" << m_totalTxMessage; / // end
-    /// message marker
+    Q_EMIT endTransmitMessage();
 
     m_btxok = false;
     m_transmitting = false;
@@ -4755,9 +4748,16 @@ void UI_Constructor::sendHB() {
     bool isHail = (m_nSubMode == Varicode::JS8CallFT2);
 
     if (isHail) {
-        // HAIL: @ALLCALL ACK — includes callsign, no response triggered
         parts.clear();
-        parts.append(QString("%1: @ALLCALL ACK").arg(mycall));
+        if (m_config.hail_single_frame()) {
+            // Single-frame HAIL: @ALLCALL ACK — 1 directed frame.
+            // Faster (3.75s). Relies on sync normalization for decode.
+            parts.append(QString("%1: @ALLCALL ACK").arg(mycall));
+        } else {
+            // Two-frame HAIL: @ALLCALL + grid — directed + data frame.
+            // Slower (7.5s) but includes grid and decodes more reliably.
+            parts.append(QString("%1: @ALLCALL %2").arg(mycall).arg(mygrid));
+        }
     } else {
 #if JS8_CUSTOMIZE_HB
         auto hb = m_config.hb_message();
@@ -4786,7 +4786,7 @@ void UI_Constructor::sendHB() {
 
     qWarning() << "[" << (isHail ? "HAIL" : "HB") << "] sending:" << message << "freq=" << f;
 
-    enqueueMessage(PriorityLow + 1, message, f, nullptr);
+    enqueueMessage(isHail ? PriorityHigh : (PriorityLow + 1), message, f, nullptr);
     processTxQueue();
 }
 
@@ -7256,11 +7256,9 @@ void UI_Constructor::processTxQueue() {
     // check to see if this is a high priority message, or if we have
     // autoreply enabled, or if this is a ping and the ping button is
     // enabled
-    bool isHail = message.message.endsWith(":") && !message.message.contains(" ");
-    if (message.priority >= PriorityHigh ||
-        message.message.contains(" HEARTBEAT ") ||
-        message.message.contains(" HB ") || message.message.contains(" ACK ") ||
-        isHail ||
+    bool isHB = message.message.contains(" HEARTBEAT ") ||
+                message.message.contains(" HB ");
+    if (message.priority >= PriorityHigh || isHB ||
         ui->actionModeAutoreply->isChecked()) {
         // then try to set the frequency...
         setFreqOffsetForRestore(f, true);
@@ -7818,7 +7816,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
             useNfqsoOnly, &decodedFreq,
             syncBest);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        qWarning() << "[FT2-L2] decode took" << elapsed << "ms"
+        qCDebug(mainwindow_js8) << "[FT2-L2] decode took" << elapsed << "ms"
                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
                    << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
                    << "sync=" << syncBest;

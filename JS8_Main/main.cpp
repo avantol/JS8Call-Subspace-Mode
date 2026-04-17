@@ -3,6 +3,7 @@
  * @brief Implementation of the MessageTimeStamper class
  */
 
+#include "CrashHandler.h"
 #include "DriftingDateTime.h"
 #include "FrequencyList.h"
 #include "JS8MessageBox.h"
@@ -72,6 +73,10 @@ QStack<QtMessageHandler> MessageTimestamper::prior_handlers_;
 } // namespace
 
 int main(int argc, char *argv[]) {
+    // Install crash handler before anything else — catches unhandled
+    // exceptions and writes a mini-dump for analysis.
+    installCrashHandler();
+
     // Add timestamps to all debug messages
     MessageTimestamper message_timestamper;
 

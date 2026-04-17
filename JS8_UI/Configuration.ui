@@ -794,6 +794,23 @@
                    </widget>
                   </item>
                   <item>
+                   <widget class="QRadioButton" name="hail_single_frame_radio">
+                    <property name="text">
+                     <string>Single-frame hailing (faster)</string>
+                    </property>
+                    <property name="checked">
+                     <bool>true</bool>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QRadioButton" name="hail_two_frame_radio">
+                    <property name="text">
+                     <string>Two-frame hailing (shows grid)</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
                    <layout class="QFormLayout" name="formLayout_16">
                     <property name="fieldGrowthPolicy">
                      <enum>QFormLayout::FieldGrowthPolicy::ExpandingFieldsGrow</enum>

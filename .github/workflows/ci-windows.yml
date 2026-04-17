@@ -70,6 +70,14 @@ jobs:
       shell: msys2 {0}
       run: cmake --build build -j$(nproc)
 
+    - name: Save Debug Symbols
+      shell: msys2 {0}
+      run: |
+        # Save unstripped binary with DWARF debug info for crash analysis.
+        # Use objcopy to extract debug symbols, then strip the release binary.
+        cp build/JS8Call.exe build/JS8Call-debug.exe
+        strip build/JS8Call.exe
+
     - name: Package
       shell: msys2 {0}
       run: |
@@ -105,3 +113,9 @@ jobs:
       with:
         name: "JS8Call-Subspace-Setup_${{ steps.version.outputs.APP_VERSION }}_win64"
         path: ./installer/Output/JS8Call-Subspace-Setup_${{ steps.version.outputs.APP_VERSION }}_win64.exe
+
+    - name: Upload Debug Symbols
+      uses: actions/upload-artifact@v5
+      with:
+        name: "JS8Call-Subspace-Debug_${{ steps.version.outputs.APP_VERSION }}_win64"
+        path: ./build/JS8Call-debug.exe

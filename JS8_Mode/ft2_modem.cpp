@@ -1093,16 +1093,19 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
         candidate[0][0] = (float)nfqso;
         candidate[0][1] = std::max(sync_score, 0.f);
     } else {
-        // Lower candidate threshold when no known frames in buffer —
-        // single-frame messages (HAIL) have less Costas energy in the
-        // 90K-sample buffer, producing weaker sync peaks.
-        float cand_syncmin = (nknown == 0) ? 0.40f : 0.60f;
+        // Single frame in 90K buffer: signal occupies ~103 of 308 FFT
+        // windows (NHSYM/NN ≈ 3x dilution). Lower getCandidates threshold
+        // to compensate, and normalize sync2d scores below.
+        // CRC14 prevents false decodes from the lower threshold.
+        constexpr float singleFrameBoost = (float)NHSYM / (float)NN;  // ~2.99
+        float cand_syncmin = (nknown == 0) ? (0.60f / singleFrameBoost) : 0.60f;
         getCandidates(dd, (float)nfa, (float)nfb, cand_syncmin, nfqso, MAXCAND,
                       savg, candidate, ncand, sbase);
     }
 
-    float syncmin_scan = (nknown == 0) ? 0.35f
-                       : (ndepth0 >= 3) ? 0.50f : 0.60f;
+    // Sync2d threshold — standard values, sync scores will be boosted
+    // for single-frame below.
+    float syncmin_scan = (ndepth0 >= 3) ? 0.50f : 0.60f;
     bool dobigfft = true;
 
     for (int icand = 0; icand < ncand && nhits < MAXHITS; icand++) {
@@ -1132,7 +1135,17 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
             }
         }
 
-        if (smax_c >= syncmin_scan) {
+        // For single-frame (nknown==0): the normalization at sum2/=NP
+        // dilutes the sync score because the frame occupies only NN*NSS
+        // of NP samples. Boost smax_c by sqrt(NP/(NN*NSS)) ≈ sqrt(9.7) ≈ 3.1
+        // to compensate. This makes single-frame sync scores comparable
+        // to multi-frame scores without changing the detector math.
+        float smax_adj = smax_c;
+        if (nknown == 0) {
+            static const float normBoost = sqrtf((float)NP / (float)(NN * NSS));
+            smax_adj *= normBoost;
+        }
+        if (smax_adj >= syncmin_scan) {
             hit_freq[nhits]  = f0;
             hit_ibest[nhits] = ibest_c;
             hit_idf[nhits]   = idfbest_c;

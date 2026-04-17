@@ -105,7 +105,7 @@ void Modulator::start(double const frequency, int const submode,
                 periodMS - periodOffsetMS;
             m_silentFrames = (startDelayMS + additionalMSNeededForTxDelay) *
                              FRAME_RATE / MS_PER_SEC;
-            qWarning() << "[FT2-TX] Modulator timing: TX-DELAY path"
+            qCDebug(modulator_js8) << "[FT2-TX] Modulator timing: TX-DELAY path"
                         << "periodOffsetMS=" << periodOffsetMS
                         << "additionalMS=" << additionalMSNeededForTxDelay
                         << "silentFrames=" << m_silentFrames
@@ -113,7 +113,7 @@ void Modulator::start(double const frequency, int const submode,
         } else if (startDelayMS > periodOffsetMS) {
             m_silentFrames =
                 (startDelayMS - periodOffsetMS) * FRAME_RATE / MS_PER_SEC;
-            qWarning() << "[FT2-TX] Modulator timing: EARLY-START path"
+            qCDebug(modulator_js8) << "[FT2-TX] Modulator timing: EARLY-START path"
                         << "periodOffsetMS=" << periodOffsetMS
                         << "startDelayMS=" << startDelayMS
                         << "silentFrames=" << m_silentFrames
@@ -125,7 +125,7 @@ void Modulator::start(double const frequency, int const submode,
             unsigned const msToNextBoundary = periodMS - periodOffsetMS;
             m_silentFrames = (msToNextBoundary + startDelayMS) *
                              FRAME_RATE / MS_PER_SEC;
-            qWarning() << "[FT2-TX] Modulator timing: WAIT-NEXT-PERIOD path"
+            qCDebug(modulator_js8) << "[FT2-TX] Modulator timing: WAIT-NEXT-PERIOD path"
                         << "periodOffsetMS=" << periodOffsetMS
                         << "startDelayMS=" << startDelayMS
                         << "msToNextBoundary=" << msToNextBoundary
@@ -137,11 +137,13 @@ void Modulator::start(double const frequency, int const submode,
     }
 
 
-#ifndef Q_OS_WIN
     if (current_state == State::KeepAlive && m_stream && isOpen()
         && m_stream->isStreaming()) {
-        // Warm restart (Linux/macOS): stream is still running and pulling.
+        // Warm restart: stream is still running and pulling.
         // Just switch state — readData() will produce waveform on next call.
+        // Safe on all platforms when the stream is actively pulling data.
+        // Avoids QAudioSink restart which crashes Qt6Multimedia on Windows
+        // after rapid stop/start cycles (WASAPI ACCESS_VIOLATION).
         if (0 < m_silentFrames) {
             m_state.store(State::Synchronizing);
         } else {
@@ -152,14 +154,9 @@ void Modulator::start(double const frequency, int const submode,
                     << "cycle#" << m_txCycleCount
                     << "ft2Mode=" << m_ft2Mode
                     << "state=" << (int)m_state.load();
-    } else
-#endif
-    {
-        // Cold start (always on Windows, fallback on Linux/macOS).
-        // On Windows, warm restart is unreliable — the FFmpeg/WASAPI
-        // backend can silently stop pulling after Idle→Stopped transitions.
-        // Cold restart via m_stream->restart() is cheap (~20ms) because
-        // SoundOutput reuses the existing QAudioSink on Windows.
+    } else {
+        // Cold start: fallback when stream is not actively pulling.
+        // Uses m_stream->restart() which reinitializes the QAudioSink.
         if (current_state == State::KeepAlive) {
             qWarning() << "[FT2-TX] Modulator::start() cold restart from KeepAlive"
                         << "cycle#" << m_txCycleCount
@@ -278,7 +275,7 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
             } while (--m_silentFrames && samples != samplesEnd);
 
             if (!m_silentFrames) {
-                qWarning() << "[FT2-TX] Modulator: Synchronizing→Active"
+                qCDebug(modulator_js8) << "[FT2-TX] Modulator: Synchronizing→Active"
                             << "cycle#" << m_txCycleCount
                             << "ft2Mode=" << m_ft2Mode;
                 m_state.store(State::Active);
@@ -292,7 +289,7 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         if (m_ft2Mode && m_ft2Wave && m_ft2WaveLen > 0) {
             // FT2: play back pre-generated GFSK waveform
             if (m_ic == 0)
-                qWarning() << "[FT2-TX] readData: starting waveform, cycle#"
+                qCDebug(modulator_js8) << "[FT2-TX] readData: starting waveform, cycle#"
                            << m_txCycleCount << "len="
                            << m_ft2WaveLen << "first sample="
                            << m_ft2Wave[0] << m_ft2Wave[1] << m_ft2Wave[2]
@@ -307,7 +304,7 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
                 ++framesGenerated;
                 ++m_ic;
                 if (m_ic == 2000)
-                    qWarning() << "[FT2-TX] readData: mid-waveform sample[2000]"
+                    qCDebug(modulator_js8) << "[FT2-TX] readData: mid-waveform sample[2000]"
                                << "float=" << m_ft2Wave[2000]
                                << "qint16=" << sample;
             }
