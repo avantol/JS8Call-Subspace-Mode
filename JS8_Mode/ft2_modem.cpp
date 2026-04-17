@@ -1093,11 +1093,16 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
         candidate[0][0] = (float)nfqso;
         candidate[0][1] = std::max(sync_score, 0.f);
     } else {
-        getCandidates(dd, (float)nfa, (float)nfb, 0.60f, nfqso, MAXCAND,
+        // Lower candidate threshold when no known frames in buffer —
+        // single-frame messages (HAIL) have less Costas energy in the
+        // 90K-sample buffer, producing weaker sync peaks.
+        float cand_syncmin = (nknown == 0) ? 0.40f : 0.60f;
+        getCandidates(dd, (float)nfa, (float)nfb, cand_syncmin, nfqso, MAXCAND,
                       savg, candidate, ncand, sbase);
     }
 
-    float syncmin_scan = (ndepth0 >= 3) ? 0.50f : 0.60f;
+    float syncmin_scan = (nknown == 0) ? 0.35f
+                       : (ndepth0 >= 3) ? 0.50f : 0.60f;
     bool dobigfft = true;
 
     for (int icand = 0; icand < ncand && nhits < MAXHITS; icand++) {
