@@ -362,13 +362,30 @@ if(type == "STATION.SET_SPOT") {
 
             auto const d = activity.last();
 
-            offsets[QString("%1").arg(offset)] = QVariant(QVariantMap{
+            // Backward-compatible fields: latest entry at this offset
+            QVariantMap entry{
                 {"FREQ", QVariant(d.dial + d.offset)},
                 {"DIAL", QVariant(d.dial)},
                 {"OFFSET", QVariant(d.offset)},
                 {"TEXT", QVariant(d.text)},
                 {"SNR", QVariant(d.snr)},
-                {"UTC", QVariant(d.utcTimestamp.toMSecsSinceEpoch())}});
+                {"UTC", QVariant(d.utcTimestamp.toMSecsSinceEpoch())}};
+
+            // Add a HISTORY array containing *all* recent decodes at this
+            // offset, not just the last one. Fixes API/UI divergence where
+            // the UI walks the full list but the API used to drop earlier
+            // callsigns that landed on the same offset within the
+            // 10-deep ring buffer.
+            QVariantList history;
+            for (auto const &h : activity) {
+                history.append(QVariant(QVariantMap{
+                    {"TEXT", QVariant(h.text)},
+                    {"SNR", QVariant(h.snr)},
+                    {"UTC", QVariant(h.utcTimestamp.toMSecsSinceEpoch())}}));
+            }
+            entry["HISTORY"] = history;
+
+            offsets[QString("%1").arg(offset)] = QVariant(entry);
         }
 
         sendNetworkMessage("RX.BAND_ACTIVITY", "", offsets);
@@ -379,6 +396,26 @@ if(type == "STATION.SET_SPOT") {
         sendNetworkMessage("RX.TEXT", ui->textEditRX->toPlainText().right(1024),
                            {
                                {"_ID", id},
+                           });
+        return;
+    }
+    /** @brief RX.CLEAR_OFFSET: Purge band-activity history for a specific
+     * offset. Useful for automation to drop a stale or unwanted entry without
+     * clearing the whole band pane. Param OFFSET (int, Hz). */
+    if (type == "RX.CLEAR_OFFSET") {
+        auto ok = false;
+        int off = message.params().value("OFFSET", -1).toInt(&ok);
+        bool cleared = false;
+        if (ok && m_bandActivity.contains(off)) {
+            m_bandActivity.remove(off);
+            displayBandActivity();
+            cleared = true;
+        }
+        sendNetworkMessage("RX.CLEAR_OFFSET", "",
+                           {
+                               {"_ID", id},
+                               {"OFFSET", off},
+                               {"CLEARED", cleared},
                            });
         return;
     }
@@ -414,11 +451,18 @@ if(type == "STATION.SET_SPOT") {
                            });
         return;
     }
-    /** @brief TX.SEND_MESSAGE: Enqueues a message for transmission. */
+    /** @brief TX.SEND_MESSAGE: Enqueues a message for transmission.
+     * Optional param PRIORITY: "HIGH" (default), "NORMAL", or "LOW".
+     */
     if (type == "TX.SEND_MESSAGE") {
         auto text = message.value();
         if (!text.isEmpty()) {
-            enqueueMessage(PriorityHigh, text, -1, nullptr);
+            auto priStr = message.params().value("PRIORITY", "HIGH")
+                              .toString().toUpper();
+            int pri = (priStr == "LOW") ? PriorityLow
+                    : (priStr == "NORMAL") ? PriorityNormal
+                    : PriorityHigh;
+            enqueueMessage(pri, text, -1, nullptr);
             processTxQueue();
             return;
         }
@@ -439,7 +483,103 @@ if(type == "STATION.SET_SPOT") {
 	});
       return;
     }
+    /** @brief TX.SEND_DIRECTED: Build and enqueue a properly-formatted
+     * directed message. Agent supplies TO, CMD, optional EXTRA; server
+     * composes `<MYCALL>: <TO> <CMD> <EXTRA>` and validates the TO
+     * callsign. Prevents the classic FROM/TO reversal mistake.
+     *
+     * Params:
+     *   TO       — destination callsign or @GROUP (required)
+     *   CMD      — directive/body word like "SNR", "SNR?", "STATUS?", "DN61"
+     *   EXTRA    — optional trailing token (e.g. "-13" for SNR report)
+     *   PRIORITY — "HIGH" (default), "NORMAL", "LOW"
+     */
+    if (type == "TX.SEND_DIRECTED") {
+        auto to = message.params().value("TO").toString().trimmed();
+        auto cmd = message.params().value("CMD").toString().trimmed();
+        auto extra = message.params().value("EXTRA").toString().trimmed();
+        auto priStr = message.params().value("PRIORITY", "HIGH")
+                          .toString().toUpper();
+
+        // Minimal validation: TO must be a plausible callsign or @GROUP.
+        static const QRegularExpression callRe(
+            R"(^(@[A-Z0-9]+|[A-Z0-9/]{3,15})$)");
+        bool okCall = callRe.match(to.toUpper()).hasMatch();
+
+        QString built;
+        QString err;
+        if (!okCall || to.isEmpty()) {
+            err = QString("invalid TO '%1'").arg(to);
+        } else if (cmd.isEmpty() && extra.isEmpty()) {
+            err = "empty CMD and EXTRA";
+        } else {
+            built = QString("%1: %2 %3").arg(m_config.my_callsign())
+                        .arg(to.toUpper()).arg(cmd);
+            if (!extra.isEmpty()) built += " " + extra;
+            built = built.trimmed();
+
+            int pri = (priStr == "LOW") ? PriorityLow
+                    : (priStr == "NORMAL") ? PriorityNormal
+                    : PriorityHigh;
+            enqueueMessage(pri, built, -1, nullptr);
+            processTxQueue();
+        }
+
+        sendNetworkMessage("TX.SEND_DIRECTED", built,
+                           {
+                               {"_ID", id},
+                               {"OK", err.isEmpty()},
+                               {"ERROR", err},
+                               {"COMPOSED", built},
+                           });
+        return;
+    }
     /** @} */ // End TX Commands
+
+    /**
+     * @name QSO Commands
+     * Convenience queries that bundle frequently-needed state for
+     * automation clients — reduces round-trips and keeps the agent's
+     * world-view coherent.
+     */
+    /** @{ */
+    /** @brief QSO.GET_CONTEXT: One-shot structured snapshot of current QSO
+     * state. Replaces a handful of separate polls (STATION.*, MODE.*,
+     * RIG.*, TX.*) with a single response. Useful for LLM agents that
+     * need a cheap "what's the current picture?" call. */
+    if (type == "QSO.GET_CONTEXT") {
+        int depth = m_txMessageQueue.size();
+        if (m_transmitting && depth == 0) depth = 1;
+
+        auto now = DriftingDateTime::currentDateTimeUtc();
+        int recentDecodes = 0;
+        for (auto const &list : m_bandActivity) {
+            for (auto const &item : list) {
+                if (item.utcTimestamp.secsTo(now) < 120) {
+                    recentDecodes++;
+                    break;
+                }
+            }
+        }
+
+        sendNetworkMessage("QSO.CONTEXT", "",
+            {
+                {"_ID", id},
+                {"CALLSIGN", m_config.my_callsign()},
+                {"GRID", m_config.my_grid()},
+                {"SUBMODE", m_nSubMode},
+                {"SUBMODE_NAME", JS8::Submode::name(m_nSubMode)},
+                {"DIAL", QVariant((quint64)dialFrequency())},
+                {"OFFSET", QVariant((quint64)freq())},
+                {"PTT", QVariant(m_transmitting)},
+                {"TX_QUEUE_DEPTH", depth},
+                {"CALL_SELECTED", callsignSelected()},
+                {"ACTIVE_OFFSETS_2MIN", recentDecodes},
+                {"UTC", QVariant(now.toMSecsSinceEpoch())},
+            });
+        return;
+    }
+    /** @} */ // End QSO Commands
 
     // MODE.GET_SPEED
     // MODE.SET_SPEED
@@ -473,6 +613,8 @@ if(type == "STATION.SET_SPOT") {
                 ui->actionModeJS8Slow->setChecked(true);
             else if (speed == Varicode::JS8CallUltra)
                 ui->actionModeJS8Ultra->setChecked(true);
+            else if (speed == Varicode::JS8CallFT2)
+                ui->actionModeFT2->setChecked(true);
             setupJS8();
         }
         sendNetworkMessage("MODE.SET_SPEED", "",
@@ -482,7 +624,39 @@ if(type == "STATION.SET_SPOT") {
                            });
         return;
     }
+    /** @brief MODE.GET_SUBMODE_NAME: Returns human-readable name for the
+     * current submode (e.g. "Normal", "Fast", "Turbo", "Slow", "Ultra",
+     * "Subspace"). Avoids clients needing to maintain the speed-int mapping. */
+    if (type == "MODE.GET_SUBMODE_NAME") {
+        sendNetworkMessage("MODE.SUBMODE_NAME", "",
+                           {
+                               {"_ID", id},
+                               {"SPEED", m_nSubMode},
+                               {"NAME", JS8::Submode::name(m_nSubMode)},
+                           });
+        return;
+    }
     /** @} */ // End MODE Commands
+
+    /**
+     * @name EVENTS Commands
+     * Lightweight connection management for persistent API clients.
+     */
+    /** @{ */
+    /** @brief EVENTS.KEEPALIVE: Round-trip ping. A persistent client can send
+     * this periodically to verify the TCP socket and event stream are alive
+     * without touching any state. */
+    if (type == "EVENTS.KEEPALIVE") {
+        sendNetworkMessage("EVENTS.PONG", "",
+                           {
+                               {"_ID", id},
+                               {"UTC", QVariant(
+                                   DriftingDateTime::currentDateTimeUtc()
+                                       .toMSecsSinceEpoch())},
+                           });
+        return;
+    }
+    /** @} */ // End EVENTS Commands
 
     // INBOX.GET_MESSAGES
     // INBOX.STORE_MESSAGE

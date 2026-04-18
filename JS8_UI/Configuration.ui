@@ -794,21 +794,25 @@
                    </widget>
                   </item>
                   <item>
-                   <widget class="QRadioButton" name="hail_single_frame_radio">
-                    <property name="text">
-                     <string>Single-frame hailing (faster)</string>
-                    </property>
-                    <property name="checked">
-                     <bool>true</bool>
-                    </property>
-                   </widget>
-                  </item>
-                  <item>
-                   <widget class="QRadioButton" name="hail_two_frame_radio">
-                    <property name="text">
-                     <string>Two-frame hailing (shows grid)</string>
-                    </property>
-                   </widget>
+                   <layout class="QHBoxLayout" name="hail_frame_layout">
+                    <item>
+                     <widget class="QRadioButton" name="hail_single_frame_radio">
+                      <property name="text">
+                       <string>Single-frame hailing (faster)</string>
+                      </property>
+                      <property name="checked">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
+                     <widget class="QRadioButton" name="hail_two_frame_radio">
+                      <property name="text">
+                       <string>Two-frame hailing (shows grid)</string>
+                      </property>
+                     </widget>
+                    </item>
+                   </layout>
                   </item>
                   <item>
                    <layout class="QFormLayout" name="formLayout_16">

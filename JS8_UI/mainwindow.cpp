@@ -3166,6 +3166,14 @@ void UI_Constructor::stopTx() {
         on_stopTxButton_clicked();
         m_stopTxButtonIsLongterm = previous_stopTxButtonIsLongterm;
         tryRestoreFreqOffset();
+
+        // Notify API clients that the queued transmission block finished.
+        sendNetworkMessage("TX.COMPLETE", dt.message(),
+                           {{"_ID", QVariant(-1)},
+                            {"SUBMODE", m_nSubMode},
+                            {"UTC", QVariant(
+                                DriftingDateTime::currentDateTimeUtc()
+                                    .toMSecsSinceEpoch())}});
     }
 
     pttReleaseTimer.start(
@@ -5576,6 +5584,7 @@ void UI_Constructor::on_tableWidgetCalls_cellDoubleClicked(int row, int col) {
     on_tableWidgetCalls_cellClicked(row, col);
 
     auto call = callsignSelected();
+    ui->extFreeTextMsgEdit->clear();
     addMessageText(call);
 
 #if SHOW_MESSAGE_HISTORY_ON_DOUBLECLICK
@@ -6239,7 +6248,7 @@ void UI_Constructor::updateHBButtonDisplay() {
 
     ui->hbMacroButton->setToolTip(
         m_nSubMode == Varicode::JS8CallFT2
-        ? "Send presence beacon (1 frame, no reply)"
+        ? "Send hailing message (1 or 2 frames, configurable, no reply)"
         : "Send heartbeat with grid square");
 }
 

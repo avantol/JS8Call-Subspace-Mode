@@ -500,9 +500,14 @@ void WideGraph::dataSink(WF::SPlot const &s, float const df3) {
         auto sit = m_splot.begin() +
                    static_cast<int>(ui->widePlot->startFreq() / df3 + 0.5f);
         auto it = m_swide.begin();
+        // Clamp so each iteration's [sit, sit+bpp) stays within m_splot.
+        auto const srcIters = (sit < m_splot.end() && bpp > 0)
+            ? static_cast<std::size_t>((m_splot.end() - sit) / bpp)
+            : static_cast<std::size_t>(0);
         auto const end =
-            it + std::min(m_swide.size(),
-                          static_cast<std::size_t>(5000.0f / (bpp * df3)));
+            it + std::min({m_swide.size(),
+                           static_cast<std::size_t>(5000.0f / (bpp * df3)),
+                           srcIters});
         auto const avg = [runs = m_waterfallNow](auto const value) {
             return value / runs;
         };

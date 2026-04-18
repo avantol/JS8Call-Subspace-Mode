@@ -6,6 +6,7 @@
 #include "MessageServer.h"
 
 #include <QLoggingCategory>
+#include <QThread>
 
 #include <stdexcept>
 
@@ -105,6 +106,17 @@ void MessageServer::pruneConnections() {
 }
 
 void MessageServer::send(const Message &message) {
+    // Callers live on the GUI thread but MessageServer/Client/QTcpSocket
+    // all live on m_networkThread. Writing to a socket from the wrong
+    // thread races with the socket's own network-thread teardown and
+    // causes heap-use-after-free in QRingBuffer. Marshal the work onto
+    // our own thread.
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this,
+            [this, message]() { send(message); },
+            Qt::QueuedConnection);
+        return;
+    }
     foreach (auto client, m_clients) {
         if (!client->awaitingResponse(message.id())) {
             continue;
