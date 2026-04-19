@@ -4528,7 +4528,7 @@ void UI_Constructor::setupJS8() {
 
     Q_ASSERT(JS8_NTMAX == 60);
     m_wideGraph->setPeriod(JS8::Submode::periodMS(m_nSubMode));
-    m_detector->setTRPeriod(JS8_NTMAX); // TODO - not thread safe
+    m_detector->setTRPeriod(JS8_NTMAX); // safe: m_period is atomic
 
     // Update mode switch buttons and status bar label
     // Block signals to prevent setChecked() from re-triggering setSubmode()

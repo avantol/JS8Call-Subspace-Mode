@@ -116,7 +116,7 @@ void Detector::resetBufferPosition() {
 
     // set index to roughly where we are in time (1ms resolution)
     qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
-    unsigned const msInPeriod = (now % 86400000LL) % (m_period * 1000);
+    unsigned const msInPeriod = (now % 86400000LL) % (period() * 1000);
     int const prevKin = dec_data.params.kin;
 
     dec_data.params.kin = qMin(
@@ -247,7 +247,7 @@ unsigned Detector::secondInPeriod() const {
     // delivering it to us (not true but close enough for us)
     qint64 now(DriftingDateTime::currentMSecsSinceEpoch());
     unsigned secondInToday((now % 86400000LL) / 1000);
-    return secondInToday % m_period;
+    return secondInToday % period();
 }
 
 /******************************************************************************/

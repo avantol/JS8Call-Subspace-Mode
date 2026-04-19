@@ -79,12 +79,15 @@ class Detector : public AudioDevice {
 
     // Inline accessors
 
-    unsigned period() const { return m_period; }
+    unsigned period() const { return m_period.load(std::memory_order_relaxed); }
 
     // Inline manipulators
 
     QMutex *getMutex() { return &m_lock; }
-    void setTRPeriod(unsigned p) { m_period = p; }
+    // Thread-safe: m_period is std::atomic so the GUI thread's
+    // setTRPeriod and the audio thread's secondInPeriod read can't
+    // tear. Relaxed ordering is fine — m_period is independent state.
+    void setTRPeriod(unsigned p) { m_period.store(p, std::memory_order_relaxed); }
     void setL2RingBuffer(std::int16_t *buf, int size, std::atomic<int> *pos) {
         m_l2RingBuf = buf; m_l2RingSize = size; m_l2RingPos = pos;
     }
@@ -115,7 +118,7 @@ class Detector : public AudioDevice {
     // Data members
 
     unsigned m_frameRate;
-    unsigned m_period;
+    std::atomic<unsigned> m_period;
     QMutex m_lock;
     Filter m_filter;
     Buffer m_buffer;
