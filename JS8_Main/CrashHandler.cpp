@@ -11,9 +11,10 @@
  *   - SetUnhandledExceptionFilter (SEH)         — access violations etc.
  *   - signal(SIGABRT)                            — abort(), assert(), Qt qFatal,
  *                                                  glibc/CRT malloc detector
- *   - signal(SIGSEGV)                            — fallback for cases SEH misses
  *   - set_terminate                              — uncaught C++ exceptions
  *   - _set_purecall_handler                      — pure virtual calls
+ *
+ * SIGSEGV is NOT hooked on purpose; see installCrashHandler() for why.
  *
  * Dump path resolution:
  *   The handler recomputes the dump folder on EVERY crash rather than
@@ -228,12 +229,6 @@ static void abortHandler(int) {
     raise(SIGABRT);
 }
 
-static void segvHandler(int) {
-    writeDump(nullptr, L"segmentation fault");
-    signal(SIGSEGV, SIG_DFL);
-    raise(SIGSEGV);
-}
-
 static void terminateHandler() {
     writeDump(nullptr, L"unhandled C++ exception");
     abort();
@@ -259,7 +254,13 @@ void installCrashHandler() {
 
     SetUnhandledExceptionFilter(sehHandler);
     signal(SIGABRT, abortHandler);
-    signal(SIGSEGV, segvHandler);
+    // Deliberately NOT installing signal(SIGSEGV) on Windows: MinGW's CRT
+    // signal(SIGSEGV) intercepts Win32 access violations BEFORE
+    // SetUnhandledExceptionFilter sees them, which means we lose the real
+    // EXCEPTION_RECORD (code, faulting address) and have to synthesize a
+    // less-useful one from RtlCaptureContext at the dump-write site.
+    // Letting SEH own AVs gives the dump the actual fault instruction
+    // pointer and the real EXCEPTION_ACCESS_VIOLATION code.
     std::set_terminate(terminateHandler);
     _set_purecall_handler(purecallHandler);
 }
