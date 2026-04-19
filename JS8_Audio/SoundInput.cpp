@@ -67,9 +67,23 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
                        AudioDevice *sink, AudioDevice::Channel channel) {
     Q_ASSERT(sink);
 
+    // Idempotent guard: if we're already streaming the same device/channel
+    // into the same sink and the stream is healthy, do nothing. Prevents
+    // the destroy-and-rebuild churn that happens when the GUI emits
+    // startAudioInputStream more than once during init or settings reload.
+    if (m_stream && m_sink == sink && m_lastDevice == device &&
+        m_lastChannel == channel) {
+        auto const s = m_stream->state();
+        if (s == QAudio::ActiveState || s == QAudio::IdleState) {
+            return;
+        }
+    }
+
     stop();
 
     m_sink = sink;
+    m_lastDevice = device;
+    m_lastChannel = channel;
 
     QAudioFormat format(device.preferredFormat());
     //  qCDebug (soundin_js8) << "Preferred audio input format:" << format;
@@ -127,6 +141,15 @@ void SoundInput::resume() {
     }
 
     if (m_stream) {
+        // Skip if the stream is already running. Prevents the
+        // "QAudioSource::start() called while already started" warning
+        // (and the Windows audio backend instability that warning
+        // sometimes correlates with) when monitor(true) fires shortly
+        // after a fresh start() that is already streaming.
+        auto const s = m_stream->state();
+        if (s == QAudio::ActiveState || s == QAudio::IdleState) {
+            return;
+        }
         // Restart instead of resume — more reliable on Linux and macOS
         m_stream->start(m_sink);
         audioError();

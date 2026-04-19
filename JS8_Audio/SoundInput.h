@@ -41,6 +41,8 @@ class SoundInput : public QObject {
 
     QScopedPointer<QAudioSource> m_stream;
     QPointer<AudioDevice> m_sink;
+    QAudioDevice m_lastDevice;
+    AudioDevice::Channel m_lastChannel{AudioDevice::Mono};
 };
 
 #endif
