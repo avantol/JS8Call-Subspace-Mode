@@ -267,22 +267,34 @@ void installCrashHandler() {
 // Test entry point: deliberately crash via the requested mechanism so we
 // can verify each hook fires and writes a dump. Called from main() after
 // installCrashHandler() if --crash-test was passed on the command line.
+//
+// MessageBeep before each crash gives an audible confirmation that the
+// test code actually ran (so a silent exit means the argv parser missed
+// the flag, not that the crash was elided).
 void crashTest(char const *kind) {
     if (!kind) return;
+
+    MessageBoxW(nullptr,
+                L"crash-test: about to crash. Click OK to continue.\n\n"
+                L"After OK you should see a second dialog from the crash "
+                L"handler. If not, the handler did not fire.",
+                L"JS8Call crash-test", MB_OK | MB_ICONINFORMATION);
+    MessageBeep(MB_ICONERROR);
+
     if (strcmp(kind, "abort") == 0) {
         abort();
     } else if (strcmp(kind, "segv") == 0) {
-        volatile int *p = nullptr;
-        *p = 0;  // SIGSEGV / EXCEPTION_ACCESS_VIOLATION
+        // RaiseException is impossible for the optimizer to elide,
+        // unlike a volatile null deref. Generates a textbook SEH AV.
+        RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
     } else if (strcmp(kind, "throw") == 0) {
         throw std::runtime_error("crash-test: uncaught C++ exception");
     } else if (strcmp(kind, "purecall") == 0) {
-        // GCC's runtime equivalent of MSVC's _purecall (which MinGW
-        // doesn't expose as a directly-callable symbol). Declared at
-        // file scope above. Triggers std::terminate -> our hook.
         __cxa_pure_virtual();
     } else {
-        qWarning() << "[CrashHandler] unknown crash-test kind:" << kind;
+        MessageBoxW(nullptr, L"Unknown --crash-test kind. Use one of: "
+                             L"abort, segv, throw, purecall.",
+                    L"JS8Call crash-test", MB_OK | MB_ICONWARNING);
     }
 }
 
