@@ -109,10 +109,12 @@ void TraceFile::impl::message_handler(QtMsgType type,
             << context.line /* << ", " << context.function */ << ')' << severity
             << ": " << msg.trimmed() << Qt::endl;
         // Belt-and-suspenders flush: Qt::endl flushes the QTextStream into
-        // the QFile, but also force the QFile's own buffer + the OS file
-        // buffer down to disk so a subsequent crash can't lose the line.
-        if (auto *dev = current_stream_->device()) {
-            dev->flush();
+        // the QFile, but also force the QFile's own buffer down to disk so
+        // a subsequent crash can't lose the line. flush() lives on
+        // QFileDevice, not QIODevice, so cast.
+        if (auto *fdev =
+                qobject_cast<QFileDevice *>(current_stream_->device())) {
+            fdev->flush();
         }
     }
 
