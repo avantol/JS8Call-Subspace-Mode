@@ -4411,6 +4411,18 @@ bool UI_Constructor::canCurrentModeSendHeartbeat() const {
             m_nSubMode == Varicode::JS8CallFT2);
 }
 
+// HB-ACK is the auto-reply that fires when we *hear* someone else's HB.
+// It is intentionally narrower than canCurrentModeSendHeartbeat:
+//   - Turbo: doesn't send HB at all, so it never has anything to ack.
+//   - FT2/Subspace: HBs are HAILs — presence beacons that don't want
+//     a swarm of SNR-report chatter; the user's HB-ACK preference is
+//     preserved for when they switch back to Slow/Normal/Fast.
+bool UI_Constructor::canCurrentModeAckHeartbeat() const {
+    return (m_nSubMode == Varicode::JS8CallFast ||
+            m_nSubMode == Varicode::JS8CallNormal ||
+            m_nSubMode == Varicode::JS8CallSlow);
+}
+
 void UI_Constructor::prepareMonitorControls() {
     // on_monitorButton_toggled(!m_config.monitor_off_at_startup());
     ui->monitorTxButton->setChecked(!m_config.transmit_off_at_startup());
@@ -6118,7 +6130,8 @@ void UI_Constructor::displayTransmit() {
 }
 
 bool UI_Constructor::presentlyWantHBReplies() {
-    return ui->actionModeAutoreply->isChecked() &&
+    return canCurrentModeAckHeartbeat() &&
+           ui->actionModeAutoreply->isChecked() &&
            ui->actionHeartbeatAcknowledgements->isChecked() &&
            m_messageBuffer.isEmpty() &&
            (!m_config.heartbeat_qso_pause() ||

@@ -634,7 +634,7 @@ void UI_Constructor::processCommandActivity() {
         // enabled and no callsign is selected</del> update: if we're in HB
         // mode, doesn't matter if a callsign is selected.
         else if ((d.cmd == " HB" || d.cmd == " HEARTBEAT") &&
-                 canCurrentModeSendHeartbeat() &&
+                 canCurrentModeAckHeartbeat() &&
                  ui->actionModeJS8HB->isChecked() &&
                  ui->actionModeAutoreply->isChecked() &&
                  ui->actionHeartbeatAcknowledgements->isChecked()) {

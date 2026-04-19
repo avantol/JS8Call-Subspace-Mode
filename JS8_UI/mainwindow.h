@@ -368,6 +368,7 @@ class UI_Constructor : public QMainWindow {
     void on_actionModeMultiDecoder_toggled(bool checked);
     void on_actionModeAutoreply_toggled(bool checked);
     bool canCurrentModeSendHeartbeat() const;
+    bool canCurrentModeAckHeartbeat() const;
     void prepareMonitorControls();
     void prepareHeartbeatMode(bool enabled);
     void f11f12(int n);
