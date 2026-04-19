@@ -35,6 +35,13 @@ LogQSO::LogQSO(QString const &programTitle, QSettings *settings,
     setWindowTitle(programTitle + " - Log QSO");
     ui->grid->setValidator(new Maidenhead::StandardValidator{this});
 
+    // ADIF requires UTC for QSO_DATE / TIME_ON / QSO_DATE_OFF / TIME_OFF.
+    // Tell the QDateTimeEdit widgets to display *and return* UTC so the
+    // user sees the same time the log will record, and so the value
+    // round-trips correctly through .dateTime() at Accept.
+    ui->start_date_time->setTimeSpec(Qt::UTC);
+    ui->end_date_time->setTimeSpec(Qt::UTC);
+
     auto b = ui->buttonBox->button(QDialogButtonBox::Save);
     if (b) {
         b->setText("Add to Log");
