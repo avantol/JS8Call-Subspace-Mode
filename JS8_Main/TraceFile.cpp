@@ -53,9 +53,13 @@ TraceFile::~TraceFile() {}
 TraceFile::impl::impl(QString const &trace_file_path)
     : file_{trace_file_path}, original_stream_{current_stream_},
       original_handler_{nullptr} {
-    // if the log file is writeable; initialise diagnostic logging to it
-    // for append and hook up the Qt global message handler
-    if (file_.open(QFile::WriteOnly | QFile::Append | QFile::Text)) {
+    // Open with QFile::Unbuffered so writes go straight to the OS without
+    // sitting in QFile's internal buffer. Combined with explicit flush()
+    // after each message (in the handler) this means a hard crash leaves a
+    // log that's accurate up to the last instruction we executed, rather
+    // than truncated at whatever was last flushed.
+    if (file_.open(QFile::WriteOnly | QFile::Append | QFile::Text |
+                   QFile::Unbuffered)) {
         stream_.setDevice(&file_);
         current_stream_ = &stream_;
         original_handler_ = qInstallMessageHandler(message_handler);
@@ -104,6 +108,12 @@ void TraceFile::impl::message_handler(QtMsgType type,
             << '(' << context.file << ':'
             << context.line /* << ", " << context.function */ << ')' << severity
             << ": " << msg.trimmed() << Qt::endl;
+        // Belt-and-suspenders flush: Qt::endl flushes the QTextStream into
+        // the QFile, but also force the QFile's own buffer + the OS file
+        // buffer down to disk so a subsequent crash can't lose the line.
+        if (auto *dev = current_stream_->device()) {
+            dev->flush();
+        }
     }
 
     if (QtFatalMsg == type) {

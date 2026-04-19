@@ -4,6 +4,8 @@
  */
 
 #include "CrashHandler.h"
+
+#include <cstring>
 #include "DriftingDateTime.h"
 #include "FrequencyList.h"
 #include "JS8MessageBox.h"
@@ -76,6 +78,23 @@ int main(int argc, char *argv[]) {
     // Install crash handler before anything else — catches unhandled
     // exceptions and writes a mini-dump for analysis.
     installCrashHandler();
+
+    // --crash-test=<kind> deliberately crashes the process via the named
+    // mechanism so each handler hook can be verified end-to-end. Parsed
+    // here (before QApplication / QCommandLineParser) so the crash fires
+    // before any other init can mask it.
+    for (int i = 1; i < argc; ++i) {
+        char const *eq = nullptr;
+        if (strncmp(argv[i], "--crash-test=", 13) == 0) {
+            eq = argv[i] + 13;
+        } else if (strcmp(argv[i], "--crash-test") == 0 && i + 1 < argc) {
+            eq = argv[i + 1];
+        }
+        if (eq) {
+            crashTest(eq);
+            return 1;  // crashTest is supposed to terminate; if it didn't, bail
+        }
+    }
 
     // Add timestamps to all debug messages
     MessageTimestamper message_timestamper;
