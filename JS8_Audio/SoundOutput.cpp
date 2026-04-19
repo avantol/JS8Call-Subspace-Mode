@@ -122,6 +122,22 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
  * @param source The QIODevice to read audio data from.
  */
 void SoundOutput::restart(QIODevice *source) {
+    // Race guard: if we're already streaming the same source and the sink
+    // is healthy, ignore re-entrant restart() calls. Multiple GUI-thread
+    // emits of sendMessage can land back-to-back on the audio thread queue
+    // and trigger restart() much more often than there are real TX cycles
+    // (WD4KAV captured 13 restarts in ~12 seconds — JS8 should produce
+    // 3-4 in that window). Each redundant restart destroys-and-rebuilds
+    // (or stop+starts) the QAudioSink, eventually corrupting the Windows
+    // audio backend and aborting the process.
+    if (m_stream && m_source == source &&
+        (m_stream->state() == QAudio::ActiveState ||
+         m_stream->state() == QAudio::IdleState)) {
+        qWarning() << "[FT2-TX] SoundOutput::restart() skipped (already streaming"
+                   << "same source, state=" << (int)m_stream->state() << ")";
+        return;
+    }
+
     qWarning() << "[FT2-TX] SoundOutput::restart() source=" << source
                << "isOpen=" << (source ? source->isOpen() : false)
                << "hasStream=" << (m_stream != nullptr);
