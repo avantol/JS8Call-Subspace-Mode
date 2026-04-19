@@ -272,10 +272,12 @@ void crashTest(char const *kind) {
     } else if (strcmp(kind, "throw") == 0) {
         throw std::runtime_error("crash-test: uncaught C++ exception");
     } else if (strcmp(kind, "purecall") == 0) {
-        // Construct then immediately destruct a derived object, then
-        // invoke a pure-virtual through a dangling vtable. Compiler may
-        // diagnose this; falling back to direct purecall handler call.
-        _purecall();
+        // _purecall isn't exposed as a directly-callable symbol on MinGW
+        // (MSVC CRT internal). GCC's runtime entry point for the same
+        // condition is __cxa_pure_virtual, which is exported; calling it
+        // directly triggers terminate -> our terminate hook -> writeDump.
+        extern "C" void __cxa_pure_virtual();
+        __cxa_pure_virtual();
     } else {
         qWarning() << "[CrashHandler] unknown crash-test kind:" << kind;
     }
