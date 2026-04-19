@@ -46,6 +46,11 @@
 
 #pragma comment(lib, "dbghelp.lib")
 
+// GCC C++ runtime entry point used to terminate when a pure virtual is
+// called. Declared at file scope (extern "C" in a function body is not
+// legal C++). Exported by libstdc++ on MinGW. Used only by crashTest.
+extern "C" void __cxa_pure_virtual();
+
 static volatile LONG s_dumpInProgress = 0;
 
 // Resolve a candidate dump folder. Returns true and fills out_buf on
@@ -272,11 +277,9 @@ void crashTest(char const *kind) {
     } else if (strcmp(kind, "throw") == 0) {
         throw std::runtime_error("crash-test: uncaught C++ exception");
     } else if (strcmp(kind, "purecall") == 0) {
-        // _purecall isn't exposed as a directly-callable symbol on MinGW
-        // (MSVC CRT internal). GCC's runtime entry point for the same
-        // condition is __cxa_pure_virtual, which is exported; calling it
-        // directly triggers terminate -> our terminate hook -> writeDump.
-        extern "C" void __cxa_pure_virtual();
+        // GCC's runtime equivalent of MSVC's _purecall (which MinGW
+        // doesn't expose as a directly-callable symbol). Declared at
+        // file scope above. Triggers std::terminate -> our hook.
         __cxa_pure_virtual();
     } else {
         qWarning() << "[CrashHandler] unknown crash-test kind:" << kind;
