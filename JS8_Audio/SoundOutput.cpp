@@ -94,6 +94,17 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
         return;
     }
 
+    // Race guard: if device/format/buffer are unchanged and we already
+    // have a healthy sink, skip the destroy-and-rebuild. NotificationAudio
+    // calls this on every play, and rapid plays (e.g. user mashing the
+    // test button in Configuration > Notifications) destroy a still-active
+    // QAudioSink mid-stream, crashing Qt6Multimedia at offset 0xea4f.
+    bool sameParams = (m_device == device && m_format == format &&
+                       m_msBuffered == msBuffered && m_stream);
+    if (sameParams) {
+        return;
+    }
+
     m_device = device;
     m_format = format;
     m_msBuffered = msBuffered;

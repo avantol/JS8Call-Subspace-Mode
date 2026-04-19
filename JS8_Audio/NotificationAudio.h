@@ -8,6 +8,8 @@
 #include <QPair>
 #include <QScopedPointer>
 
+#include <atomic>
+
 class SoundOutput;
 
 class NotificationAudio : public QObject {
@@ -37,6 +39,7 @@ class NotificationAudio : public QObject {
     QAudioDevice m_device;
     QBuffer m_buffer;
     unsigned m_msBuffer;
+    std::atomic<bool> m_playing{false};
 };
 
 #endif // NOTIFICATIONAUDIO_H

@@ -36,8 +36,10 @@ NotificationAudio::~NotificationAudio() { stop(); }
  * @param message The status message.
  */
 void NotificationAudio::status(QString const message) {
-    if (message == "Idle")
+    if (message == "Idle") {
         stop();
+        m_playing.store(false);
+    }
 }
 
 /**
@@ -64,7 +66,25 @@ void NotificationAudio::setDevice(QAudioDevice const &device,
  * @param filePath The path to the audio file.
  */
 void NotificationAudio::play(QString const &filePath) {
+    // Race guard: if a previous notification is still playing, drop this
+    // request. Rapid plays (e.g. user mashing the test button in
+    // Configuration > Notifications) destroy a still-active QAudioSink
+    // mid-stream via setDeviceFormat, crashing Qt6Multimedia at offset
+    // 0xea4f. Cleared from status() when sink reports Idle.
+    if (m_playing.exchange(true)) {
+        return;
+    }
+
+    // RAII: if we exit play() without successfully starting playback,
+    // clear m_playing so the next call isn't blocked forever.
+    struct Guard {
+        std::atomic<bool> &flag;
+        bool armed = true;
+        ~Guard() { if (armed) flag.store(false); }
+    } guard{m_playing};
+
     if (auto const it = m_cache.constFind(filePath); it != m_cache.constEnd()) {
+        guard.armed = false;  // playback handed off to playEntry
         playEntry(it);
         return;
     }
@@ -102,6 +122,7 @@ void NotificationAudio::play(QString const &filePath) {
         return;
     }
 
+    guard.armed = false;  // playback handed off to playEntry
     playEntry(m_cache.emplace(filePath, fmt, data));
 }
 
