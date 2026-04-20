@@ -6116,13 +6116,19 @@ void UI_Constructor::tryNotify(QString const &key, int submode) {
     // never play from the test button. Treat submode=-1 as "not a
     // real-decode event" and bypass the filter so the test button always
     // previews the sound regardless of the checkbox.
-    if (submode != -1 && m_config.notification_requires_subspace(key) &&
-        submode != Varicode::JS8CallFT2) {
+    auto const path = m_config.notification_path(key);
+    auto const reqSub = m_config.notification_requires_subspace(key);
+    qWarning() << "[tryNotify] key=" << key << "submode=" << submode
+               << "requiresSub=" << reqSub << "path=" << path;
+    if (submode != -1 && reqSub && submode != Varicode::JS8CallFT2) {
+        qWarning() << "[tryNotify] DROPPED: subspace filter";
         return;
     }
-    if (auto const path = m_config.notification_path(key); !path.isEmpty()) {
-        emit playNotification(path);
+    if (path.isEmpty()) {
+        qWarning() << "[tryNotify] DROPPED: empty path";
+        return;
     }
+    emit playNotification(path);
 }
 
 void UI_Constructor::displayTransmit() {

@@ -1990,6 +1990,8 @@ void Configuration::impl::initialize_models() {
 
         connect(testPushButton, &QPushButton::pressed, this,
                 [this, key, pathLabel]() {
+                    qWarning() << "[NotifTest] button clicked key=" << key
+                               << "path=" << pathLabel->text();
                     // hack for testing...
                     notifications_enabled_[key] = true;
                     notifications_paths_[key] = pathLabel->text();
