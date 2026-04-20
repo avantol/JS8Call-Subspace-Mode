@@ -88,10 +88,14 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
         Q_EMIT error(tr("Requested output audio format is not valid."));
         return;
     }
+    // Note: isFormatSupported is conservative in Qt6 and rejects formats
+    // that the platform actually resamples and plays fine (notably 8-bit,
+    // 8 kHz, mono). Warn but don't bail -- let QAudioSink attempt the
+    // format; if it really can't handle it, QAudioSink::error() will
+    // surface the failure.
     if (!device.isFormatSupported(format)) {
-        Q_EMIT error(
-            tr("Requested output audio format is not supported on device."));
-        return;
+        qWarning() << "[SoundOutput] isFormatSupported=false, trying anyway:"
+                   << format;
     }
 
     // Race guard: if device/format/buffer are unchanged and we already
@@ -124,7 +128,11 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
         m_error = false;
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
                 &SoundOutput::handleStateChanged);
-        qWarning() << "[FT2-TX] SoundOutput: pre-initializing audio sink";
+        qWarning() << "[FT2-TX] SoundOutput: pre-initializing audio sink"
+                   << "device=" << m_device.description();
+    } else {
+        qWarning() << "[FT2-TX] SoundOutput::setDeviceFormat: device is NULL,"
+                   << "skipping sink creation";
     }
 }
 

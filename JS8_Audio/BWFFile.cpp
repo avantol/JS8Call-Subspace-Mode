@@ -927,6 +927,17 @@ bool BWFFile::seek(qint64 pos) {
 }
 
 qint64 BWFFile::readData(char *data, qint64 max_size) {
+    // Bound the read by the data chunk size so we don't return any
+    // trailing chunks (LIST/INFO/DISP/bext/etc.) as if they were PCM.
+    // Without this, Echo.wav (LIST chunk) and DingDing.wav (DISP chunk)
+    // crash Qt6Multimedia at the end-of-stream boundary because the
+    // returned buffer isn't an integer number of audio frames.
+    if (m_->data_size_ >= 0 && m_->header_length_ >= 0) {
+        qint64 const consumed = m_->file_.pos() - m_->header_length_;
+        qint64 const remaining = m_->data_size_ - consumed;
+        if (remaining <= 0) return 0;
+        if (max_size > remaining) max_size = remaining;
+    }
     return m_->file_.read(data, max_size);
 }
 

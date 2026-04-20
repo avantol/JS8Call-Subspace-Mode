@@ -7,6 +7,7 @@
 #include "SoundOutput.h"
 
 #include <QLoggingCategory>
+#include <QMediaDevices>
 
 Q_DECLARE_LOGGING_CATEGORY(notificationaudio_js8)
 
@@ -37,8 +38,17 @@ NotificationAudio::~NotificationAudio() { stop(); }
  */
 void NotificationAudio::status(QString const message) {
     if (message == "Idle") {
-        stop();
-        m_playing.store(false);
+        // Qt6's IdleState fires both on "source fully consumed" AND on
+        // transient mid-play underruns when the sink's internal buffer
+        // drains briefly. Only stop if the source QBuffer is actually
+        // empty -- otherwise we'd cut off playback whenever the sink
+        // momentarily outpaces the buffer feed (which is most of the
+        // time for short clips, producing the "random play time, often
+        // cut off" symptom).
+        if (m_buffer.bytesAvailable() <= 0) {
+            stop();
+            m_playing.store(false);
+        }
     }
 }
 
@@ -57,7 +67,16 @@ void NotificationAudio::error(QString const message) {
  */
 void NotificationAudio::setDevice(QAudioDevice const &device,
                                   unsigned const msBuffer) {
-    m_device = device;
+    if (device.isNull()) {
+        m_device = QMediaDevices::defaultAudioOutput();
+        qWarning() << "[NotificationAudio] setDevice: null given,"
+                   << "fallback=" << m_device.description()
+                   << "nullAfter=" << m_device.isNull();
+    } else {
+        m_device = device;
+        qWarning() << "[NotificationAudio] setDevice:"
+                   << m_device.description();
+    }
     m_msBuffer = msBuffer;
 }
 
@@ -66,12 +85,26 @@ void NotificationAudio::setDevice(QAudioDevice const &device,
  * @param filePath The path to the audio file.
  */
 void NotificationAudio::play(QString const &filePath) {
+    qWarning() << "[NotificationAudio] play() called:" << filePath;
+
+    // Startup race: setDevice arrives as a queued event on this thread, and
+    // can be delivered *after* the first play() if whoever emitted play()
+    // (e.g. startup sound) got queued before setDevice did. Without a
+    // device, there's nothing to do -- drop silently so m_playing doesn't
+    // latch on a failed sink creation.
+    if (m_device.isNull()) {
+        qWarning() << "[NotificationAudio] play() dropped (no device yet):"
+                   << filePath;
+        return;
+    }
+
     // Race guard: if a previous notification is still playing, drop this
     // request. Rapid plays (e.g. user mashing the test button in
     // Configuration > Notifications) destroy a still-active QAudioSink
     // mid-stream via setDeviceFormat, crashing Qt6Multimedia at offset
     // 0xea4f. Cleared from status() when sink reports Idle.
     if (m_playing.exchange(true)) {
+        qWarning() << "[NotificationAudio] play() dropped (already playing)";
         return;
     }
 
@@ -84,31 +117,63 @@ void NotificationAudio::play(QString const &filePath) {
     } guard{m_playing};
 
     if (auto const it = m_cache.constFind(filePath); it != m_cache.constEnd()) {
+        qWarning() << "[NotificationAudio] play() cache HIT:" << filePath;
         guard.armed = false;  // playback handed off to playEntry
         playEntry(it);
         return;
     }
 
     BWFFile file(QAudioFormat{}, filePath);
-    if (!file.open(QIODevice::ReadOnly))
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning() << "[NotificationAudio] open failed:" << filePath
+                   << "err=" << file.errorString();
         return;
+    }
 
     QByteArray data = file.readAll();
-    if (data.isEmpty())
+    if (data.isEmpty()) {
+        qWarning() << "[NotificationAudio] file has no data:" << filePath;
         return;
+    }
 
     QAudioFormat fmt = file.format();
+    qWarning() << "[NotificationAudio] loaded:" << filePath
+               << "bytes=" << data.size()
+               << "sampleFormat=" << (int)fmt.sampleFormat()
+               << "channels=" << fmt.channelCount()
+               << "rate=" << fmt.sampleRate()
+               << "bps=" << file.bitsPerSample();
 
+    // Note: we deliberately do NOT bail on isFormatSupported(fmt) returning
+    // false. Qt6's isFormatSupported is conservative and rejects formats
+    // (notably 8-bit mono, low sample rates) that the underlying platform
+    // actually resamples and plays fine. Let the QAudioSink try; if it
+    // genuinely can't handle it, it'll emit an error via our error signal.
     if (!m_device.isFormatSupported(fmt)) {
-        error("Requested output audio format is not supported on device.");
-        return;
+        qWarning() << "[NotificationAudio] isFormatSupported=false, trying"
+                   << "anyway:" << fmt;
+    }
+
+    // If source is 8-bit PCM, widen to 16-bit signed -- many devices
+    // drop UInt8 support but accept Int16 and the conversion is trivial.
+    if (fmt.sampleFormat() == QAudioFormat::UInt8) {
+        QByteArray widened(data.size() * 2, Qt::Uninitialized);
+        auto const *src = reinterpret_cast<quint8 const *>(data.constData());
+        auto *dst = reinterpret_cast<qint16 *>(widened.data());
+        for (int i = 0; i < data.size(); ++i) {
+            // UInt8 is unsigned 0..255 centered at 128; Int16 is signed
+            // -32768..32767 centered at 0. Offset + scale by 256.
+            dst[i] = static_cast<qint16>((int(src[i]) - 128) * 256);
+        }
+        data = std::move(widened);
+        fmt.setSampleFormat(QAudioFormat::Int16);
     }
 
     // If source is 24-bit packed PCM, repack to Int32
     if (file.bitsPerSample() == 24) {
         QByteArray converted = pcm24le_to_int32le(data);
         if (converted.isEmpty()) {
-            error("Bad 24-bit PCM size");
+            qWarning() << "[NotificationAudio] 24-bit conversion failed";
             return;
         }
         data = std::move(converted);
@@ -118,9 +183,12 @@ void NotificationAudio::play(QString const &filePath) {
 
     // Mono -> stereo so mono files play through both speakers
     if (!upmixMonoToStereoInPlace(fmt, data)) {
-        error("Unsupported mono upmix format");
+        qWarning() << "[NotificationAudio] mono upmix failed, fmt=" << fmt;
         return;
     }
+
+    qWarning() << "[NotificationAudio] final fmt=" << fmt
+               << "bytes=" << data.size();
 
     guard.armed = false;  // playback handed off to playEntry
     playEntry(m_cache.emplace(filePath, fmt, data));
@@ -146,6 +214,19 @@ void NotificationAudio::playEntry(Cache::const_iterator const it) {
     if (m_buffer.open(QIODevice::ReadOnly)) {
         m_stream->setDeviceFormat(m_device, format, m_msBuffer);
         m_stream->restart(&m_buffer);
+        // If the sink never came up (null device, format rejected, etc.),
+        // SoundOutput won't emit status(Idle) on completion -- which means
+        // m_playing would latch true forever and kill every subsequent
+        // play(). Clear it here so the next play can try again.
+        if (!m_stream->isStreaming()) {
+            qWarning() << "[NotificationAudio] sink failed to start;"
+                       << "clearing m_playing";
+            m_playing.store(false);
+        }
+    } else {
+        qWarning() << "[NotificationAudio] m_buffer.open failed;"
+                   << "clearing m_playing";
+        m_playing.store(false);
     }
 }
 

@@ -6113,7 +6113,14 @@ void UI_Constructor::postDecode(bool is_new, QString const &) {
 }
 
 void UI_Constructor::tryNotify(QString const &key, int submode) {
-    if (m_config.notification_requires_subspace(key) &&
+    // The subspace-only checkbox filters *real decodes* by mode: when it's
+    // set, we only play for FT2 submode. The test button in
+    // Configuration > Notifications invokes tryNotify(key) with the default
+    // submode=-1 ("no specific mode"), which previously made checked rows
+    // never play from the test button. Treat submode=-1 as "not a
+    // real-decode event" and bypass the filter so the test button always
+    // previews the sound regardless of the checkbox.
+    if (submode != -1 && m_config.notification_requires_subspace(key) &&
         submode != Varicode::JS8CallFT2) {
         return;
     }
