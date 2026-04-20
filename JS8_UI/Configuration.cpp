@@ -1989,13 +1989,13 @@ void Configuration::impl::initialize_models() {
         buttonLayout->addWidget(testPushButton);
 
         connect(testPushButton, &QPushButton::pressed, this,
-                [this, key, pathLabel]() {
-                    qWarning() << "[NotifTest] button clicked key=" << key
-                               << "path=" << pathLabel->text();
-                    // hack for testing...
-                    notifications_enabled_[key] = true;
-                    notifications_paths_[key] = pathLabel->text();
-                    emit this->self_->test_notify(key);
+                [this, pathLabel]() {
+                    // Test previews the selected .wav regardless of the
+                    // master Enable-notifications toggle or any per-row
+                    // gating. The path is handed over directly so the
+                    // preview is immune to unapplied dialog edits (the
+                    // bug that made Test silent until Apply was clicked).
+                    emit this->self_->test_play(pathLabel->text());
                 });
 
         QPushButton *clearPushButton = new QPushButton("Clear", this);

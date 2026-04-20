@@ -224,6 +224,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             m_notification, &NotificationAudio::setDevice);
     connect(&m_config, &Configuration::test_notify, this,
             [this](QString const &key) { tryNotify(key); });
+    // Dialog Test button: play the .wav directly, bypassing
+    // notification_path()'s enable-notifications/per-row/stored-path gates.
+    // Fixes the "Test silent until Apply" bug where unapplied dialog edits
+    // leave enable_notifications_ stored as false.
+    connect(&m_config, &Configuration::test_play, m_notification,
+            &NotificationAudio::play);
     connect(this, &UI_Constructor::playNotification, m_notification,
             &NotificationAudio::play);
     connect(&m_notificationAudioThread, &QThread::finished, m_notification,

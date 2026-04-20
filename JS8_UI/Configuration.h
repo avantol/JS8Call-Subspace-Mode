@@ -89,6 +89,13 @@ class Configuration final : public QObject {
     bool notification_requires_subspace(const QString &key) const;
     Q_SIGNAL void test_notify(const QString &key);
 
+    // Emitted when the Notifications dialog's Test button is clicked. Carries
+    // the .wav path directly so the preview plays regardless of the master
+    // "Enable notifications" toggle or any per-row enabled/path gating in
+    // notification_path() -- those gates are only for real-decode
+    // notifications, not for the dialog preview.
+    Q_SIGNAL void test_play(QString const &path);
+
     // These query methods should be used after a call to exec() to
     // determine if either the audio input or audio output stream
     // parameters have changed. The respective streams should be
