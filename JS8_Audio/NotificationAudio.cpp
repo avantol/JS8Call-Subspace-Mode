@@ -20,7 +20,7 @@ Q_DECLARE_LOGGING_CATEGORY(notificationaudio_js8)
  * @return None.
  */
 NotificationAudio::NotificationAudio(QObject *parent)
-    : QObject{parent}, m_stream{new SoundOutput} {
+    : QObject{parent}, m_stream{new SoundOutput("AUDIO-NOTIF")} {
     connect(m_stream.data(), &SoundOutput::status, this,
             &NotificationAudio::status);
     connect(m_stream.data(), &SoundOutput::error, this,
@@ -47,8 +47,15 @@ void NotificationAudio::status(QString const message) {
         // cut off" symptom).
         if (m_buffer.bytesAvailable() <= 0) {
             stop();
-            m_playing.store(false);
+            // Deliberately do NOT clear m_playing here. Qt's sink hasn't
+            // finished tearing down yet -- if we clear now, a new play()
+            // can race in and destroy/rebuild the QAudioSink while Qt is
+            // mid-transition, which crashes Qt6Multimedia.dll+0xea4f
+            // (null-read in its state machine). Wait for "Stopped".
         }
+    } else if (message == "Stopped" || message == "Error") {
+        // Sink has fully torn down; safe to accept another play().
+        m_playing.store(false);
     }
 }
 

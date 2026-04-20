@@ -14,7 +14,11 @@ class SoundOutput : public QObject {
     Q_OBJECT;
 
   public:
-    SoundOutput() = default;
+    // `tag` is used as the log prefix for all qWarning lines so TX audio
+    // and notification-audio instances are distinguishable in diag logs.
+    // Default matches the historical "[FT2-TX]" for source compatibility.
+    explicit SoundOutput(QString const &tag = QStringLiteral("FT2-TX"))
+        : m_tag("[" + tag + "]") {}
 
     qreal attenuation() const;
     QAudioFormat format() const;
@@ -44,6 +48,7 @@ class SoundOutput : public QObject {
     void handleStateChanged(QAudio::State) const;
 
   private:
+    QString m_tag;
     QAudioDevice m_device;
     QScopedPointer<QAudioSink> m_stream;
     QIODevice *m_source = nullptr;  // current pull-mode source device

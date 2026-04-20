@@ -128,10 +128,10 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
         m_error = false;
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
                 &SoundOutput::handleStateChanged);
-        qWarning() << "[FT2-TX] SoundOutput: pre-initializing audio sink"
+        qWarning() << m_tag << "SoundOutput: pre-initializing audio sink"
                    << "device=" << m_device.description();
     } else {
-        qWarning() << "[FT2-TX] SoundOutput::setDeviceFormat: device is NULL,"
+        qWarning() << m_tag << "SoundOutput::setDeviceFormat: device is NULL,"
                    << "skipping sink creation";
     }
 }
@@ -152,12 +152,12 @@ void SoundOutput::restart(QIODevice *source) {
     if (m_stream && m_source == source &&
         (m_stream->state() == QAudio::ActiveState ||
          m_stream->state() == QAudio::IdleState)) {
-        qWarning() << "[FT2-TX] SoundOutput::restart() skipped (already streaming"
+        qWarning() << m_tag << "SoundOutput::restart() skipped (already streaming"
                    << "same source, state=" << (int)m_stream->state() << ")";
         return;
     }
 
-    qWarning() << "[FT2-TX] SoundOutput::restart() source=" << source
+    qWarning() << m_tag << "SoundOutput::restart() source=" << source
                << "isOpen=" << (source ? source->isOpen() : false)
                << "hasStream=" << (m_stream != nullptr);
 
@@ -319,11 +319,11 @@ void SoundOutput::handleStateChanged(QAudio::State newState) const {
     case QAudio::SuspendedState: stateName = "Suspended"; break;
     case QAudio::StoppedState:   stateName = "Stopped";   break;
     }
-    qWarning() << "[FT2-TX] SoundOutput state:" << stateName;
+    qWarning() << m_tag << "SoundOutput state:" << stateName;
     if (m_stream) {
         auto err = m_stream->error();
         if (err != QAudio::NoError)
-            qWarning() << "[FT2-TX] SoundOutput error:" << (int)err;
+            qWarning() << m_tag << "SoundOutput error:" << (int)err;
     }
 
     switch (newState) {

@@ -41,7 +41,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
       m_detector{new Detector{JS8_RX_SAMPLE_RATE, JS8_NTMAX}},
       m_FFTSize{6912 / 2}, // conservative value to avoid buffer overruns
       m_soundInput{new SoundInput}, m_modulator{new Modulator},
-      m_soundOutput{new SoundOutput}, m_notification{new NotificationAudio},
+      m_soundOutput{new SoundOutput("AUDIO-TX")}, m_notification{new NotificationAudio},
       m_cq_loop{new TxLoop{"CQ calls"}}, m_hb_loop{new TxLoop{"HB calls"}},
       m_decoder{this}, m_secBandChanged{0}, m_freqNominal{0},
       m_freqTxNominal{0}, m_XIT{0}, m_sec0{-1},
