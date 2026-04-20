@@ -34,6 +34,11 @@ class SoundOutput : public QObject {
     void resume();
     void reset();
     void stop();
+    // Destroy the underlying QAudioSink so the next setDeviceFormat/restart
+    // creates a fresh one. Used by NotificationAudio after Stopped/Error to
+    // avoid reusing a cached sink that Windows may have invalidated during
+    // a long quiet gap (theory-under-test for Build 107).
+    void destroyStream();
     void setAttenuation(qreal); /* unsigned */
     void resetAttenuation();    /* to zero */
 
@@ -56,6 +61,7 @@ class SoundOutput : public QObject {
     unsigned m_msBuffered = 0u;
     qreal m_volume = 1.0;
     bool m_error = false;
+    qint64 m_lastRestartMs = 0;  // monotonic ms at previous restart() entry
 };
 
 #endif

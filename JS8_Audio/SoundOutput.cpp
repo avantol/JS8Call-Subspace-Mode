@@ -157,9 +157,19 @@ void SoundOutput::restart(QIODevice *source) {
         return;
     }
 
+    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+    qint64 const gapMs = m_lastRestartMs ? (nowMs - m_lastRestartMs) : -1;
+    QAudio::State const preState =
+        m_stream ? m_stream->state() : QAudio::StoppedState;
+    QAudio::Error const preErr =
+        m_stream ? m_stream->error() : QAudio::NoError;
+    m_lastRestartMs = nowMs;
     qWarning() << m_tag << "SoundOutput::restart() source=" << source
                << "isOpen=" << (source ? source->isOpen() : false)
-               << "hasStream=" << (m_stream != nullptr);
+               << "hasStream=" << (m_stream != nullptr)
+               << "preState=" << (int)preState
+               << "preError=" << (int)preErr
+               << "gapSinceLastRestartMs=" << gapMs;
 
     if (!m_device.isNull()) {
 #ifdef Q_OS_WIN
@@ -263,6 +273,23 @@ void SoundOutput::stop() {
     // m_stream.reset ();  // XXX in WSJTX, seems like a bug
     // On Windows, the sink is intentionally kept alive (not destroyed)
     // to avoid WASAPI re-initialization on the next start().
+}
+
+/**
+ * @brief Destroys the underlying QAudioSink so the next restart creates
+ * a fresh one. Used by NotificationAudio after Stopped/Error to avoid
+ * reusing a cached sink that Windows may invalidate during long quiet
+ * gaps (theory-under-test for Build 107's 0xea4f crash).
+ */
+void SoundOutput::destroyStream() {
+    if (m_stream) {
+        qWarning() << m_tag << "SoundOutput::destroyStream()";
+        m_stream->disconnect(this);
+        m_stream->reset();
+        m_stream->stop();
+        m_stream.reset();
+        m_source = nullptr;
+    }
 }
 
 /**

@@ -55,6 +55,13 @@ void NotificationAudio::status(QString const message) {
         }
     } else if (message == "Stopped" || message == "Error") {
         // Sink has fully torn down; safe to accept another play().
+        // Also destroy the underlying QAudioSink so the next play() gets
+        // a fresh one -- theory-under-test for the Build 106 Windows
+        // 0xea4f crash where a notification play 11 minutes after the
+        // previous one reused a sink whose IAudioClient had apparently
+        // been invalidated by the OS during the idle gap. First-chunk
+        // re-init latency is irrelevant for short notification clips.
+        m_stream->destroyStream();
         m_playing.store(false);
     }
 }
