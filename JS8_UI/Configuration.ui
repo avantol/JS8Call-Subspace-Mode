@@ -466,6 +466,19 @@
                      </widget>
                     </item>
                     <item>
+                     <widget class="QToolButton" name="subdivisions_info_button">
+                      <property name="toolTip">
+                       <string>More info about Band Activity subdivisions</string>
+                      </property>
+                      <property name="text">
+                       <string>&#9432;</string>
+                      </property>
+                      <property name="autoRaise">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
                      <spacer>
                       <property name="orientation">
                        <enum>Qt::Orientation::Horizontal</enum>
@@ -766,7 +779,7 @@
                <item>
                 <widget class="QGroupBox" name="groupBox_13">
                  <property name="title">
-                  <string>Heartbeat Network</string>
+                  <string>Heartbeat / Hailing Network</string>
                  </property>
                  <layout class="QVBoxLayout" name="verticalLayout_34">
                   <item>
@@ -806,11 +819,37 @@
                      </widget>
                     </item>
                     <item>
+                     <widget class="QToolButton" name="hail_info_button">
+                      <property name="toolTip">
+                       <string>More info about Hailing</string>
+                      </property>
+                      <property name="text">
+                       <string>&#9432;</string>
+                      </property>
+                      <property name="autoRaise">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
                      <widget class="QRadioButton" name="hail_two_frame_radio">
                       <property name="text">
                        <string>Two-frame hailing (shows grid)</string>
                       </property>
                      </widget>
+                    </item>
+                    <item>
+                     <spacer name="hail_frame_trailing_spacer">
+                      <property name="orientation">
+                       <enum>Qt::Orientation::Horizontal</enum>
+                      </property>
+                      <property name="sizeHint" stdset="0">
+                       <size>
+                        <width>40</width>
+                        <height>0</height>
+                       </size>
+                      </property>
+                     </spacer>
                     </item>
                    </layout>
                   </item>
@@ -3267,7 +3306,7 @@ Click, SHIFT+Click and, CRTL+Click to select items</string>
                <string>⚡</string>
               </property>
               <property name="toolTip">
-               <string>Subspace mode</string>
+               <string>Notify for Subspace messages only</string>
               </property>
              </column>
              <column>

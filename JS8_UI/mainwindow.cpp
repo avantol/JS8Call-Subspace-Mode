@@ -759,10 +759,6 @@ void UI_Constructor::on_menuControl_aboutToShow() {
     ui->actionEnable_Tuning_Tone_TUNE->setChecked(ui->tuneButton->isChecked());
 }
 
-void UI_Constructor::on_actionCheck_for_Updates_triggered() {
-    checkVersion(true);
-}
-
 void UI_Constructor::on_actionUser_Guide_triggered() {
     QDesktopServices::openUrl(
         QUrl("https://js8call-improved.com/downloads/JS8Call_User_Guide.pdf"));

@@ -304,7 +304,6 @@ class UI_Constructor : public QMainWindow {
     void initialize_fonts();
     void on_menuModeJS8_aboutToShow();
     void on_menuControl_aboutToShow();
-    void on_actionCheck_for_Updates_triggered();
     void on_actionEnable_Monitor_RX_toggled(bool checked);
     void on_actionEnable_Transmitter_TX_toggled(bool checked);
     void on_actionEnable_Reporting_SPOT_toggled(bool checked);

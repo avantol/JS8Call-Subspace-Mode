@@ -2002,7 +2002,6 @@ background-color: #22ff22;
     </property>
     <addaction name="actionCopyright_Notice"/>
     <addaction name="separator"/>
-    <addaction name="actionCheck_for_Updates"/>
     <addaction name="actionAbout"/>
     <addaction name="separator"/>
     <addaction name="actionUser_Guide"/>
@@ -2330,11 +2329,6 @@ background-color: #22ff22;
   <action name="actionShow_Message_Inbox">
    <property name="text">
     <string>Show Message &amp;Inbox...</string>
-   </property>
-  </action>
-  <action name="actionCheck_for_Updates">
-   <property name="text">
-    <string>Check for &amp;Updates</string>
    </property>
   </action>
   <action name="actionFocus_Message_Reply_Area">

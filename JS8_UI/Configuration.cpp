@@ -171,6 +171,7 @@
 #include <QList>
 #include <QLoggingCategory>
 #include <QMediaDevices>
+#include <QMessageBox>
 #include <QMetaType>
 #include <QNetworkInterface>
 #include <QProcess>
@@ -1577,6 +1578,51 @@ Configuration::impl::impl(Configuration *self, QDir const &temp_directory,
                                            Qt::AscendingOrder);
     connect(ui_->auto_switch_bands_check_box, &QCheckBox::clicked,
             ui_->stations_table_view, &QTableView::setEnabled);
+
+    // Info button next to the Heartbeat / Hailing Network group label.
+    // Pops a modeless explainer describing what Hailing is and why it
+    // matters in Subspace mode. Text is intentionally in-app (not a URL)
+    // so hams operating offline still get the context.
+    connect(ui_->hail_info_button, &QToolButton::clicked, this, [this]() {
+        QMessageBox::information(
+            this, tr("Heartbeat / Hailing Network"),
+            tr("\"Hailing\" is a new \"no-reply\" message in Subspace mode "
+               "for \"presence beaconing\" that radically conserves bandwidth "
+               "compared to the legacy \"heartbeats\".\n\n"
+               "A normal-mode heartbeat message requires 15 seconds to "
+               "transmit, and typically triggers many 15-second replies.\n\n"
+               "A hailing message takes either 3.75 seconds or 7.5 seconds "
+               "to transmit, and does not trigger any replies.\n\n"
+               "If only one station replies to a heartbeat, a short hailing "
+               "message is an 87%% reduction in traffic (by air time).\n\n"
+               "Receiving either hail message makes an entry in the callsign "
+               "(right) window with callsign, time, audio offset, and mode.\n\n"
+               "The short hailing message lets you simply announce your "
+               "availability on Subspace mode, while the longer hailing "
+               "message adds SNR and grid information, if you want."));
+    });
+
+    connect(ui_->subdivisions_info_button, &QToolButton::clicked, this,
+            [this]() {
+        QMessageBox::information(
+            this, tr("Band Activity message subdivisions"),
+            tr("The \"Band Activity\" (left) window can show you groups of "
+               "current messages from each callsign (on a specific audio "
+               "offset), by subdividing the \"Messages\" column.\n\n"
+               "Select the number of subdivisions you want to see in the "
+               "Messages column.\n\n"
+               "This option is highly recommended so you don't have to scan "
+               "the entire line to see who is on that audio offset "
+               "(frequency). It's organized so you can instantly see the "
+               "most-recent callsigns.\n\n"
+               "To see the messages received for a specific callsign, hover "
+               "the mouse pointer over the subdivision for that callsign.\n\n"
+               "If you want to see the entire line, hover the mouse pointer "
+               "over the first column.\n\n"
+               "Single and double mouse clicks on a subdivision work as "
+               "expected, with no confusion on which callsign is being "
+               "selected."));
+    });
 
     // Immediately emit the auto switch band change signal to kick the scheduler
     // without having to potentially save twice
