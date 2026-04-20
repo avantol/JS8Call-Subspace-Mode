@@ -276,23 +276,6 @@ void SoundOutput::stop() {
 }
 
 /**
- * @brief Destroys the underlying QAudioSink so the next restart creates
- * a fresh one. Used by NotificationAudio after Stopped/Error to avoid
- * reusing a cached sink that Windows may invalidate during long quiet
- * gaps (theory-under-test for Build 107's 0xea4f crash).
- */
-void SoundOutput::destroyStream() {
-    if (m_stream) {
-        qWarning() << m_tag << "SoundOutput::destroyStream()";
-        m_stream->disconnect(this);
-        m_stream->reset();
-        m_stream->stop();
-        m_stream.reset();
-        m_source = nullptr;
-    }
-}
-
-/**
  * @brief Gets the current attenuation in decibels.
  * @return The attenuation value.
  */

@@ -2,16 +2,22 @@
 #define NOTIFICATIONAUDIO_H
 
 #include <QAudioDevice>
-#include <QBuffer>
-#include <QByteArray>
-#include <QHash>
-#include <QPair>
-#include <QScopedPointer>
+#include <QMap>
+#include <QObject>
+#include <QString>
 
-#include <atomic>
+class QSoundEffect;
 
-class SoundOutput;
-
+// Plays short notification .wav files.
+//
+// Build 108 switched this class from a hand-managed QAudioSink (via
+// SoundOutput) to QSoundEffect, which is Qt's purpose-built class for
+// low-latency UI chimes. The QAudioSink approach produced repeated
+// Qt6Multimedia.dll+0xea4f access violations on Windows, always on the
+// second+ play in a session -- no gap length, no sink reuse state, and
+// no preError indication made the difference. QSoundEffect internally
+// manages its own WASAPI lifecycle across repeated plays and is Qt's
+// recommended path for this use case.
 class NotificationAudio : public QObject {
     Q_OBJECT
 
@@ -20,26 +26,13 @@ class NotificationAudio : public QObject {
     ~NotificationAudio();
 
   public slots:
-    void status(QString message);
-    void error(QString message);
-    void setDevice(const QAudioDevice &device, unsigned msBuffer = 0);
-    void play(const QString &filePath);
+    void setDevice(QAudioDevice const &device, unsigned msBuffer = 0);
+    void play(QString const &filePath);
     void stop();
 
   private:
-    using Entry = QPair<QAudioFormat, QByteArray>;
-    using Cache = QHash<QString, Entry>;
-
-    void playEntry(Cache::const_iterator);
-    static QByteArray pcm24le_to_int32le(const QByteArray &in);
-    static bool upmixMonoToStereoInPlace(QAudioFormat &fmt, QByteArray &data);
-
-    QScopedPointer<SoundOutput> m_stream;
-    Cache m_cache;
     QAudioDevice m_device;
-    QBuffer m_buffer;
-    unsigned m_msBuffer;
-    std::atomic<bool> m_playing{false};
+    QMap<QString, QSoundEffect *> m_effects;
 };
 
 #endif // NOTIFICATIONAUDIO_H
