@@ -42,15 +42,13 @@ void UI_Constructor::processCommandActivity() {
             continue;
         }
 
-        // we're only processing a subset of queries at this point
-        if (!Varicode::isCommandAllowed(d.cmd)) {
-            continue;
-        }
-
         // is this to me? Exact match only — WM8Q/P is a different station than WM8Q
         bool toMe = d.to == m_config.my_callsign().trimmed();
 
-        // log call activity...
+        // log call activity BEFORE the command-allowed gate so even
+        // unrecognized directed commands refresh the sender's SNR in the
+        // callsign list. Gating was rejecting valid SNR updates for
+        // any directed message whose cmd wasn't in the known-commands set.
         CallDetail cd = {};
         cd.call = d.from;
         cd.grid = d.grid;
@@ -65,6 +63,11 @@ void UI_Constructor::processCommandActivity() {
         cd.submode = d.submode;
         logCallActivity(cd, true);
         logHeardGraph(d.from, d.to);
+
+        // we're only processing a subset of queries at this point
+        if (!Varicode::isCommandAllowed(d.cmd)) {
+            continue;
+        }
 
         // Placeholder for callbacks to be passed to confirmThenEnqueueMessage
         // and enqueueMessage

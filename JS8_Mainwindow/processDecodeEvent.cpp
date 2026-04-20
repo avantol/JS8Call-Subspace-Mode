@@ -255,6 +255,32 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             << "buffering data" << d.dial << d.offset << d.text;
                         d.isBuffered = true;
                         m_messageBuffer[d.offset].msgs.append(d);
+
+                        // Update the originating call's SNR in the callsign
+                        // list on every data frame of a buffered directed
+                        // message. The header frame's SNR was stamped when
+                        // the buffer was opened; data-body frames often
+                        // decode at meaningfully different SNR, so refresh
+                        // to the latest value. Attribution comes from
+                        // m_messageBuffer[offset].cmd.from, which the header
+                        // parse stashed in processCommandActivity's buffered
+                        // branch. Grid/ACK/CQ timestamps stay untouched
+                        // thanks to the preserve-if-empty logic in
+                        // logCallActivity.
+                        auto const &bufCmd = m_messageBuffer[d.offset].cmd;
+                        if (!bufCmd.from.isEmpty() &&
+                            bufCmd.from != "<....>") {
+                            CallDetail cd{};
+                            cd.call = bufCmd.from;
+                            cd.dial = d.dial;
+                            cd.offset = d.offset;
+                            cd.snr = d.snr;
+                            cd.bits = d.bits;
+                            cd.utcTimestamp = d.utcTimestamp;
+                            cd.tdrift = d.tdrift;
+                            cd.submode = d.submode;
+                            logCallActivity(cd, false);
+                        }
                         // TODO: incremental display if it's "to" me.
                     }
 

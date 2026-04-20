@@ -2395,6 +2395,19 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
         if (!d.cqTimestamp.isValid() && old.cqTimestamp.isValid()) {
             d.cqTimestamp = old.cqTimestamp;
         }
+        // Sub-band-aware offset preservation: a frame in the HB/hailing
+        // sub-band (500-1000 Hz) is presence-only traffic, not QSO content.
+        // If the stored offset is outside the sub-band, keep it as the
+        // last-known QSO operating frequency rather than overwriting with
+        // the sub-band number. Non-sub-band updates always win; same-sub-
+        // band updates replace normally.
+        constexpr int subbandLow = 500;
+        constexpr int subbandHigh = 1000;
+        bool newInSub = (d.offset >= subbandLow && d.offset <= subbandHigh);
+        bool oldOutOfSub = (old.offset < subbandLow || old.offset > subbandHigh);
+        if (newInSub && oldOutOfSub) {
+            d.offset = old.offset;
+        }
         m_callActivity[d.call] = d;
     } else {
         // create
