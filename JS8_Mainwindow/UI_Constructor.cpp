@@ -101,8 +101,19 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 #endif
     m_detector->moveToThread(&m_audioThread);
 
-    // notification audio operates in its own thread at a lower priority
-    m_notification->moveToThread(&m_notificationAudioThread);
+    // NotificationAudio stays on the main thread so QSoundEffect is
+    // constructed and loaded there. Build 108 switched notification
+    // playback from QAudioSink (which needed a worker thread to keep the
+    // UI responsive) to QSoundEffect (which is non-blocking and manages
+    // its own audio thread internally). On macOS, QSoundEffect's first
+    // file access triggers a TCC permission prompt for protected folders
+    // like ~/Documents; that prompt is a main-thread UI event, and if the
+    // QSoundEffect instance was owned by a worker thread the post-grant
+    // loading path could deadlock against the main thread (user reported
+    // frozen app with spinning cursor after granting Documents access).
+    // With NotificationAudio on the main thread, setSource runs inline
+    // with the event loop, the prompt is handled cleanly, and loading
+    // continues without cross-thread handoff.
 
     // Move the aprs client message server, psk reporter, and spot client
     // to the network thread at a lower priority.
