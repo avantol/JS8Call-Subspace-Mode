@@ -88,8 +88,11 @@ class Detector : public AudioDevice {
     // setTRPeriod and the audio thread's secondInPeriod read can't
     // tear. Relaxed ordering is fine — m_period is independent state.
     void setTRPeriod(unsigned p) { m_period.store(p, std::memory_order_relaxed); }
-    void setL2RingBuffer(std::int16_t *buf, int size, std::atomic<int> *pos) {
-        m_l2RingBuf = buf; m_l2RingSize = size; m_l2RingPos = pos;
+    void setL2RingBuffer(std::int16_t *buf, int size,
+                         std::atomic<std::int64_t> *pos) {
+        m_l2RingBuf = buf;
+        m_l2RingSize = size;
+        m_l2RingPos = pos;
     }
 
     // Accessors
@@ -126,10 +129,13 @@ class Detector : public AudioDevice {
     std::size_t m_samplesPerFFT = MaxBufferSize;
     qint32 m_ns = 999;
 
-    // L2 ring buffer (owned by UI_Constructor, written here on audio thread)
+    // L2 ring buffer (owned by UI_Constructor, written here on audio thread).
+    // m_l2RingPos is a monotonic 64-bit sample counter; the buffer is
+    // indexed via (pos % m_l2RingSize). Any expiration / age math on the
+    // reader side is simple subtraction, no wrap adjustments needed.
     std::int16_t *m_l2RingBuf = nullptr;
     int m_l2RingSize = 0;
-    std::atomic<int> *m_l2RingPos = nullptr;
+    std::atomic<std::int64_t> *m_l2RingPos = nullptr;
 };
 
 #endif

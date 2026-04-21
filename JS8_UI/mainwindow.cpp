@@ -6129,19 +6129,13 @@ void UI_Constructor::tryNotify(QString const &key, int submode) {
     // never play from the test button. Treat submode=-1 as "not a
     // real-decode event" and bypass the filter so the test button always
     // previews the sound regardless of the checkbox.
-    auto const path = m_config.notification_path(key);
-    auto const reqSub = m_config.notification_requires_subspace(key);
-    qWarning() << "[tryNotify] key=" << key << "submode=" << submode
-               << "requiresSub=" << reqSub << "path=" << path;
-    if (submode != -1 && reqSub && submode != Varicode::JS8CallFT2) {
-        qWarning() << "[tryNotify] DROPPED: subspace filter";
+    if (submode != -1 && m_config.notification_requires_subspace(key) &&
+        submode != Varicode::JS8CallFT2) {
         return;
     }
-    if (path.isEmpty()) {
-        qWarning() << "[tryNotify] DROPPED: empty path";
-        return;
+    if (auto const path = m_config.notification_path(key); !path.isEmpty()) {
+        emit playNotification(path);
     }
-    emit playNotification(path);
 }
 
 void UI_Constructor::displayTransmit() {
@@ -7762,7 +7756,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
     if (!m_l2Enabled || m_l2Decoding || m_transmitting)
         return;
 
-    int pos = m_l2RingPos.load(std::memory_order_acquire);
+    std::int64_t pos = m_l2RingPos.load(std::memory_order_acquire);
     if (pos < FT2_NMAX)
         return;  // ring buffer not yet full
 
@@ -7771,10 +7765,14 @@ void UI_Constructor::l2TryDecode(char const *source) {
     if (!JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true))
         return;  // standard FT2 has the lock — will retry on next trigger
 
-    // Linearize the ring buffer into a contiguous array
-    int validSamples = std::min(pos, FT2_L2_RINGSIZE);
+    // Linearize the ring buffer into a contiguous array. pos is a
+    // monotonic 64-bit sample counter, so (pos - validSamples) is the
+    // write index of the oldest sample still in the buffer; modulo the
+    // ring size gives its physical offset.
+    int validSamples =
+        (pos < FT2_L2_RINGSIZE) ? static_cast<int>(pos) : FT2_L2_RINGSIZE;
     auto linear = std::make_shared<std::array<std::int16_t, FT2_L2_RINGSIZE>>();
-    int ringStart = ((pos - validSamples) % FT2_L2_RINGSIZE + FT2_L2_RINGSIZE) % FT2_L2_RINGSIZE;
+    std::int64_t ringStart = (pos - validSamples) % FT2_L2_RINGSIZE;
     for (int i = 0; i < validSamples; ++i)
         (*linear)[i] = m_l2RingBuf[(ringStart + i) % FT2_L2_RINGSIZE];
 
@@ -7869,12 +7867,18 @@ void UI_Constructor::l2TryDecode(char const *source) {
             qWarning() << "[FT2-L2] WARNING: decode cycle approaching buffer limit (7500ms)";
         }
 
-        // Expire known frames older than one full buffer (90K samples)
-        int curPos = m_l2RingPos.load(std::memory_order_relaxed);
+        // Expire known frames older than one full buffer (90K samples).
+        // m_l2RingPos is now a monotonic 64-bit counter, so the age is
+        // just (curPos - knownPos), no wrap adjustments. Prior impl
+        // wrapped ringPos at 180000 back to 90000 and the expiration
+        // logic only caught half-cycle wraps; entries whose knownPos
+        // landed near a wrap boundary could persist indefinitely, which
+        // is why WM8Q/P's repeating beacon would go undecodable for
+        // minutes at a time under the old code.
+        std::int64_t curPos = m_l2RingPos.load(std::memory_order_relaxed);
         int i = 0;
         while (i < m_l2NKnown) {
-            int age = curPos - m_l2KnownPos[i];
-            if (age < 0) age += FT2_L2_RINGSIZE * 2;
+            std::int64_t age = curPos - m_l2KnownPos[i];
             if (age > FT2_L2_RINGSIZE) {
                 // This known frame is old enough to have left the buffer
                 qWarning() << "[FT2-L2] expiring known frame" << i

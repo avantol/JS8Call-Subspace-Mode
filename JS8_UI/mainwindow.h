@@ -919,7 +919,15 @@ class UI_Constructor : public QMainWindow {
     QTimer m_l2DecodeTimer;                     // fires every 750ms
     QFutureWatcher<void> m_l2DecodeWatcher;     // monitors async decode
     std::int16_t m_l2RingBuf[FT2_L2_RINGSIZE] = {};  // 7.5s ring buffer (90000 samples, 2 periods)
-    std::atomic<int> m_l2RingPos{0};              // write position (atomic: audio thread writes, main thread reads)
+    // Write position as a monotonic 64-bit sample counter. Indexing into
+    // the ring uses (pos % FT2_L2_RINGSIZE). Prior impl wrapped at 180000
+    // back to 90000, which made known-frame expiration unreliable: if the
+    // wrap happened between two expiration checks (every ~380 ms), the
+    // next check saw a small positive delta and concluded the entry was
+    // fresh -- losing track of how many full cycles had elapsed. A
+    // monotonic counter makes subtraction unambiguous and expiration
+    // correct at any sampling cadence.
+    std::atomic<std::int64_t> m_l2RingPos{0};   // monotonic sample count (audio thread writes, main thread reads)
     bool m_l2Decoding = false;                  // decode in progress
     bool m_l2Enabled = false;                   // L2 decode active
     qint64 m_l2DecodeFinishedMs = 0;            // timestamp when decode thread finished
@@ -927,9 +935,9 @@ class UI_Constructor : public QMainWindow {
     void l2TryDecode(char const *source);       // attempt to start an L2 decode
 
     // L2 known-frame suppression: pass last decoded frame's raw bits to
-    // Fortran so it skips the stale sync instead of re-decoding it
+    // the decoder so it skips re-decoding the same content
     std::int8_t m_l2KnownBits[77 * 20] = {};   // known frames' raw bits
-    int m_l2KnownPos[20] = {};                  // ringPos when each frame was added
+    std::int64_t m_l2KnownPos[20] = {};         // monotonic pos when each frame was added
     int m_l2NKnown = 0;                         // number of known frames
     int m_l2SignalFreq = 0;                     // last decoded signal freq (Hz), 0=unknown
     QMap<int, int> m_ft2StdSnr;                  // standard decoder SNR cache: freq/10 → SNR
