@@ -2640,23 +2640,26 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 
     double const fraction_of_tx_slot = seconds_into_the_period / period;
 
-    // 15.0 - 12.6
-    double const ratio = JS8::Submode::computeRatio(m_nSubMode, m_TRperiod);
-
-    // the late threshold is the dead air time minus the tx delay time
-    float lateThreshold = ratio - (m_config.txDelay() / m_TRperiod);
-    if (m_nSubMode == Varicode::JS8CallFast) {
-        // for the faster mode, only allow 3/4 late threshold
-        lateThreshold *= 0.75;
-    } else if (m_nSubMode == Varicode::JS8CallTurbo ||
-               m_nSubMode == Varicode::JS8CallUltra) {
-        // for the turbo and ultra mode, only allow 1/2 late threshold
-        lateThreshold *= 0.5;
-    } else if (m_nSubMode == Varicode::JS8CallFT2) {
-        // FT2/Subspace has a very short 3.75s period — don't try to
-        // start mid-period, only trigger in the TX delay window
-        lateThreshold = 0.0;
-    };
+    // Period-aligned TX only: lateThreshold = 0 for every mode, so the
+    // start branch below fires only when time_is_in_tx_delay is true
+    // (i.e. within the tx_delay window just before the next period
+    // boundary). Legacy behavior permitted mid-period TX starts with
+    // large lateThreshold values (~0.83 for Normal mode) -- that was
+    // always an alignment hazard for synchronous decode, and since
+    // Build 88b's WAIT-NEXT-PERIOD silent-frames injection in
+    // Modulator::start it became a hard failure: prepareSending would
+    // start the TX mid-period, Modulator would queue silence until the
+    // next boundary, prepareSending would kill the TX when
+    // seconds_into_the_period exceeded tx_duration of the CURRENT
+    // period, and the real audio never got a chance to play. SV1UY's
+    // 2026-04-21 17:42Z log captured this end-to-end (11.5 s of
+    // silent on-air "TX"). Forcing period-aligned start eliminates
+    // both the old alignment hazard and the post-88b silence-TX bug.
+    // The unused JS8::Submode::computeRatio / ratio value remains
+    // available if future logic wants to distinguish modes, but no
+    // mode currently needs a non-zero lateThreshold.
+    float lateThreshold = 0.0f;
+    (void)JS8::Submode::computeRatio(m_nSubMode, m_TRperiod);
 
     // FT2 per-period diagnostic: log once per period at the TX delay window
     if (m_nSubMode == Varicode::JS8CallFT2 && time_is_in_tx_delay &&
