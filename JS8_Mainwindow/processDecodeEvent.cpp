@@ -267,11 +267,27 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                         // branch. Grid/ACK/CQ timestamps stay untouched
                         // thanks to the preserve-if-empty logic in
                         // logCallActivity.
-                        auto const &bufCmd = m_messageBuffer[d.offset].cmd;
-                        if (!bufCmd.from.isEmpty() &&
-                            bufCmd.from != "<....>") {
+                        //
+                        // Compound-call fallback: if the directed header's
+                        // FROM is still the unresolved "<....>" placeholder
+                        // but a FrameCompound arrived earlier at this
+                        // offset (e.g. WM8Q/P), borrow that compound call
+                        // for attribution. Without this fallback, body
+                        // frames of a compound-prefixed message update
+                        // nothing — the list entry would only refresh at
+                        // message end after processBufferedCompoundMessages
+                        // resolves the pair.
+                        auto const &buf = m_messageBuffer[d.offset];
+                        QString attribFrom = buf.cmd.from;
+                        if ((attribFrom.isEmpty() ||
+                             attribFrom == "<....>") &&
+                            !buf.compound.isEmpty()) {
+                            attribFrom = buf.compound.last().call;
+                        }
+                        if (!attribFrom.isEmpty() &&
+                            attribFrom != "<....>") {
                             CallDetail cd{};
-                            cd.call = bufCmd.from;
+                            cd.call = attribFrom;
                             cd.dial = d.dial;
                             cd.offset = d.offset;
                             cd.snr = d.snr;

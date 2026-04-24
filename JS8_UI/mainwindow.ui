@@ -2430,7 +2430,7 @@ background-color: #22ff22;
     <bool>false</bool>
    </property>
    <property name="text">
-    <string>Enable Simultaneous Decoding of All Speeds (&amp;MULTI)</string>
+    <string>Enable Simultaneous Decoding of S/N/F/T Speeds (&amp;MULTI)</string>
    </property>
   </action>
   <action name="actionModeAutoreply">

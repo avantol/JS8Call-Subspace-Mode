@@ -3052,6 +3052,15 @@ void UI_Constructor::guiUpdate() {
             updateButtonDisplay();
             updateTextDisplay();
         }
+
+        // Refresh the callsign list (right pane) every second regardless
+        // of forceDirty / transmit state. displayActivity's forceDirty
+        // gate was starving the right pane of redraws — Age/SNR stayed
+        // frozen between decodes and during our own TX even though
+        // m_callActivity was being updated per-frame. The left pane
+        // (band activity) stays on the gated displayActivity path since
+        // it's heavier and doesn't need a per-second tick.
+        displayCallActivity();
     } // end of stuff we do once per second.
 
     displayTransmit();
@@ -6242,7 +6251,12 @@ void UI_Constructor::updateButtonDisplay() {
     if (ui->queryButton->text() != directedText) {
         ui->queryButton->setText(directedText);
         auto fmDir = ui->queryButton->fontMetrics();
-        ui->queryButton->setMinimumWidth(fmDir.horizontalAdvance(directedText) + 12);
+        // Extra "m" of padding: the button has a dropdown arrow on the
+        // right side whose pixel width isn't counted in
+        // horizontalAdvance(text). Without this the arrow gets clipped
+        // when in directed mode with a selected callsign.
+        ui->queryButton->setMinimumWidth(fmDir.horizontalAdvance(directedText)
+                                        + fmDir.horizontalAdvance("m") + 12);
     }
 
     // update mode button text
