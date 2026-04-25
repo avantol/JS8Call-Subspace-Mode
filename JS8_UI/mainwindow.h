@@ -767,6 +767,14 @@ class UI_Constructor : public QMainWindow {
     bool m_bandActivityWasVisible;
     bool m_rxDirty;
     bool m_rxDisplayDirty = false;
+    // Counter bumped in logCallActivity on every insert/update. The
+    // once-per-second tick compares against m_callActivityRenderedVersion
+    // and only does a full displayCallActivity rebuild when they differ —
+    // otherwise it just rewrites the Age column in place. Keeps the
+    // right pane ticking without burning Windows CPU on a full sort +
+    // QTableWidget repopulate every second.
+    int m_callActivityVersion = 0;
+    int m_callActivityRenderedVersion = 0;
     int m_txFrameCountEstimate = 0;
     int m_txFrameCount = 0;
     int m_txFrameCountSent = 0;
@@ -1085,6 +1093,11 @@ class UI_Constructor : public QMainWindow {
     void displayActivity(bool force = false);
     void displayBandActivity();
     void displayCallActivity();
+    // Cheap per-second Age-only refresh of the callsign list. Walks
+    // existing rows and rewrites the Age cell in place — no sort, no
+    // allocations, no table rebuild. Used when m_callActivityVersion
+    // has NOT advanced since the last full render.
+    void refreshCallActivityAgeOnly();
     void enable_DXCC_entity(bool on);
     void setRig(Frequency = 0); // zero frequency means no change
     QDateTime nextTransmitCycle();

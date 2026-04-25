@@ -512,4 +512,41 @@ void UI_Constructor::displayCallActivity() {
         ui->tableWidgetCalls->verticalScrollBar()->setValue(currentScrollPos);
     }
     ui->tableWidgetCalls->setUpdatesEnabled(true);
+
+    // The full rebuild now reflects the current model version. Record
+    // it so the once-per-second tick can skip the rebuild on subsequent
+    // ticks until logCallActivity bumps the version again.
+    m_callActivityRenderedVersion = m_callActivityVersion;
+}
+
+// Cheap per-second Age-only refresh. Walks existing rows and rewrites
+// the Age cell from the live m_callActivity timestamp. No sort, no
+// allocations, no table rebuild, no aging filter re-check.
+//
+// Column indices match the full-rebuild layout in displayCallActivity
+// above: [0]=icon, [1]=displayCall (UserRole stores the callsign key),
+// [2]=tdrift, [3]=age, [4]=snr, ...
+//
+// Called from guiUpdate's once-per-second tick when the model version
+// hasn't advanced since the last full render. If the user scrolled or
+// selected a row, selection/scroll state is preserved because we don't
+// touch the row count or order.
+void UI_Constructor::refreshCallActivityAgeOnly() {
+    constexpr int kCallsignCol = 1;
+    constexpr int kAgeCol      = 3;
+
+    int const rows = ui->tableWidgetCalls->rowCount();
+    for (int r = 0; r < rows; ++r) {
+        auto *callCell = ui->tableWidgetCalls->item(r, kCallsignCol);
+        auto *ageCell  = ui->tableWidgetCalls->item(r, kAgeCol);
+        if (!callCell || !ageCell) continue;
+
+        QString const call = callCell->data(Qt::UserRole).toString();
+        if (call.isEmpty()) continue;
+
+        auto it = m_callActivity.constFind(call);
+        if (it == m_callActivity.constEnd()) continue;
+
+        ageCell->setText(since(it->utcTimestamp));
+    }
 }

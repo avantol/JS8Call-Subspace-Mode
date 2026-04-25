@@ -2425,6 +2425,12 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
     if (spot) {
         m_rxCallQueue.append(d);
     }
+
+    // Mark the call-list model dirty so the next once-per-second tick
+    // does a full rebuild. Cheap — plain int increment; wrapping is
+    // harmless since we only compare for equality against the last
+    // rendered version.
+    ++m_callActivityVersion;
 }
 
 void UI_Constructor::logHeardGraph(QString from, QString to) {
@@ -3060,7 +3066,24 @@ void UI_Constructor::guiUpdate() {
         // m_callActivity was being updated per-frame. The left pane
         // (band activity) stays on the gated displayActivity path since
         // it's heavier and doesn't need a per-second tick.
-        displayCallActivity();
+        //
+        // Build 121: split the refresh into a cheap Age-only tick and a
+        // full rebuild. logCallActivity bumps m_callActivityVersion on
+        // insert/update; if nothing has changed since the last full
+        // render we just walk existing rows and rewrite the Age cell
+        // (O(V) setText calls, no sort, no allocations). Any model
+        // change falls back to a full displayCallActivity rebuild,
+        // which syncs m_callActivityRenderedVersion at the end.
+        // Windows users were seeing 4-40% CPU from the unconditional
+        // once-per-second rebuild — especially with large callsign
+        // lists, where Qt's QTableWidget mutations are meaningfully
+        // heavier than on Linux (GDI font metrics, UIA accessibility
+        // events, per-insert widget-style polish).
+        if (m_callActivityVersion != m_callActivityRenderedVersion) {
+            displayCallActivity();
+        } else {
+            refreshCallActivityAgeOnly();
+        }
     } // end of stuff we do once per second.
 
     displayTransmit();

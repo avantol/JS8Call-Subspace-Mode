@@ -95,7 +95,7 @@ jobs:
       shell: msys2 {0}
       run: |
         ver=$(grep WSJTX_VERSION_PATCH Versions.cmake | grep -oP '[0-9]+\.[0-9]+')
-        echo "APP_VERSION=2.6.${ver}" >> $GITHUB_OUTPUT
+        echo "APP_VERSION=4.0.${ver}" >> $GITHUB_OUTPUT
 
     - name: Create Installer
       run: |
