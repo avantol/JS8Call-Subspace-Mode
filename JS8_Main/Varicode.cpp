@@ -462,6 +462,16 @@ bool Varicode::startsWithCQ(QString text) {
 }
 
 bool Varicode::startsWithHB(QString text) {
+    // The hbs map only contains the short "HB" form. sendHB() emits the
+    // long form "HEARTBEAT" in Normal mode, which must also gate
+    // AUTO_PREPEND_DIRECTED in buildMessageFrames -- otherwise a queued
+    // HB picked up at TX time injects the currently-selected callsign and
+    // goes out as "MYCALL: SELECTED HEARTBEAT GRID". Exclude "HEARTBEAT
+    // SNR" -- that's a directed ACK command, not a beacon (mirrors the
+    // negative lookahead in heartbeat_re).
+    if (text.startsWith("HEARTBEAT")) {
+        return !text.startsWith("HEARTBEAT SNR");
+    }
     foreach (auto hb, hbs.values()) {
         if (text.startsWith(hb)) {
             return true;
