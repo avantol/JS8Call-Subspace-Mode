@@ -186,6 +186,17 @@ void UI_Constructor::initialize_fonts() {
 }
 
 void UI_Constructor::on_the_minute() {
+    // Build 122 instrumentation: measure how long this top-of-minute
+    // handler actually takes. Reports of a ~1s waterfall stall at top-
+    // of-minute; static trace ruled out CAT-on-GUI as obvious cause but
+    // couldn't conclusively pin the culprit. If on_the_minute itself is
+    // routinely > 50ms we'll see it here; if it stays fast the stall
+    // lives elsewhere (e.g. coincident guiUpdate work in the same
+    // event-loop iteration) and the next instrumentation step is to
+    // wrap guiUpdate filtered to the top-of-minute window.
+    QElapsedTimer minuteWork;
+    minuteWork.start();
+
     if (minuteTimer.isSingleShot()) {
         minuteTimer.setSingleShot(false);
         minuteTimer.start(60 * 1000); // run free
@@ -203,6 +214,10 @@ void UI_Constructor::on_the_minute() {
     } else {
         tx_watchdog(false);
     }
+
+    auto const ms = minuteWork.elapsed();
+    if (ms > 50)
+        qWarning() << "[MINUTE-TIMER] on_the_minute took" << ms << "ms";
 }
 
 void UI_Constructor::tryBandHop() {
@@ -4803,6 +4818,15 @@ void UI_Constructor::buildRepeatMenu(QMenu *menu, QPushButton *button,
 }
 
 void UI_Constructor::sendHB() {
+    // Build 122: live-state guard for "Pause HAIL when in a QSO".
+    // The cancel-on-select path at selectCallsign() can race a queued
+    // TxLoop tick — onLoopCancel() doesn't dequeue an already-queued
+    // signal, so one HB/HAIL can still fire after the user selects a
+    // callsign. Check the current selection here so the guard is the
+    // source of truth even when the cancel arrived too late.
+    if (m_config.heartbeat_qso_pause() && !callsignSelected().isEmpty())
+        return;
+
     QString mycall = m_config.my_callsign();
     QString mygrid = m_config.my_grid().left(4);
 
@@ -4923,6 +4947,9 @@ void UI_Constructor::on_hbMacroButton_toggled(bool checked) {
 void UI_Constructor::on_hbMacroButton_clicked() {}
 
 void UI_Constructor::sendCQ(bool repeat) {
+    // Build 122: same live-state guard as sendHB. Same queued-tick race.
+    if (m_config.heartbeat_qso_pause() && !callsignSelected().isEmpty())
+        return;
 
     if (!repeat && m_cq_loop->isActive()) {
         qCDebug(mainwindow_js8) << "Cancel CQ loop on single-shot CQ";
@@ -4949,7 +4976,13 @@ void UI_Constructor::sendCQ(bool repeat) {
 void UI_Constructor::on_cqMacroButton_toggled(bool checked) {
     qCDebug(mainwindow_js8) << "on_cqMacroButton_toggled(" << checked << ")";
     if (checked) {
-        clearCallsignSelected();
+        // Build 122: gate clear-on-enable on the heartbeat_qso_pause
+        // setting so CQ button matches HB button policy (HB does the
+        // same conditional clear at on_hbMacroButton_toggled). Prior
+        // CQ behavior was to clear unconditionally, inconsistent with
+        // the setting label.
+        if (m_config.heartbeat_qso_pause())
+            clearCallsignSelected();
 
         if (m_cqInterval) {
             qCDebug(mainwindow_js8)

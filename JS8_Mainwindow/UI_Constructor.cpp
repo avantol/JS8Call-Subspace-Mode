@@ -859,21 +859,34 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                                << "lineSubmode=" << lineSubmode;
                     selectCallsign(callsign, lineSubmode);
 
-                    // Select matching row in band activity and set frequency from the line text
+                    // Build 122: prefer the callsign list's live offset
+                    // (per-frame fresh + sub-band-aware preserved as of
+                    // Build 120) over the line's frozen offset. Fall back
+                    // to parsing the line's "(NNNN)" only if the callsign
+                    // isn't in m_callActivity (aged-out, or the user is
+                    // scrolled back into history of a station no longer
+                    // tracked). Inhibit either source if <= 1000 Hz
+                    // (noise band).
                     ui->tableWidgetRXAll->blockSignals(true);
                     ui->tableWidgetRXAll->clearSelection();
-                    int lineFreq = -1;
-                    int parenOpen = lineText.lastIndexOf('(');
-                    int parenClose = lineText.lastIndexOf(')');
-                    if (parenOpen >= 0 && parenClose > parenOpen)
-                        lineFreq = lineText.mid(parenOpen + 1, parenClose - parenOpen - 1).toInt();
-                    if (lineFreq > 1000) {
-                        // Set frequency from the line, not from m_callActivity
-                        // Inhibit if <= 1000 Hz (likely noise)
-                        setFreqOffsetForRestore(lineFreq, false);
+                    int targetFreq = -1;
+                    if (m_callActivity.contains(callsign))
+                        targetFreq = m_callActivity[callsign].offset;
+                    if (targetFreq <= 1000) {
+                        int parenOpen = lineText.lastIndexOf('(');
+                        int parenClose = lineText.lastIndexOf(')');
+                        if (parenOpen >= 0 && parenClose > parenOpen)
+                            targetFreq = lineText.mid(parenOpen + 1,
+                                                      parenClose - parenOpen - 1)
+                                             .toInt();
+                    }
+                    if (targetFreq > 1000) {
+                        setFreqOffsetForRestore(targetFreq, false);
+                        // Highlight the band-activity row matching the
+                        // LIVE tuned offset, not the line's frozen offset.
                         for (int r = 0; r < ui->tableWidgetRXAll->rowCount(); ++r) {
                             auto item = ui->tableWidgetRXAll->item(r, 0);
-                            if (item && item->data(Qt::UserRole).toInt() == lineFreq) {
+                            if (item && item->data(Qt::UserRole).toInt() == targetFreq) {
                                 ui->tableWidgetRXAll->selectRow(r);
                                 break;
                             }
