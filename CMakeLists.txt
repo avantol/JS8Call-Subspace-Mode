@@ -323,9 +323,10 @@ target_link_libraries(
   Qt::Widgets
 )
 
-# Windows: link dbghelp for crash handler mini-dump support
+# Windows: link dbghelp for crash handler mini-dump support and
+# winmm for PlaySound (notification audio, Build 123).
 if(WIN32)
-  target_link_libraries(${TARGET} PRIVATE dbghelp)
+  target_link_libraries(${TARGET} PRIVATE dbghelp winmm)
 endif()
 
 #------------------------------------------------------------------------------#

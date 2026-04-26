@@ -7,6 +7,7 @@
 #include <QString>
 
 class QSoundEffect;
+class QProcess;
 
 // Plays short notification .wav files.
 //
@@ -33,6 +34,13 @@ class NotificationAudio : public QObject {
   private:
     QAudioDevice m_device;
     QMap<QString, QSoundEffect *> m_effects;
+    // Build 123: per-file in-flight subprocess (paplay on Linux,
+    // afplay on macOS) so a new play() can kill the prior one for
+    // the same file (rapid-restart UX) without going through Qt
+    // multimedia. Bypasses QSoundEffect entirely on those platforms.
+    // Windows uses PlaySoundW() which handles rapid-restart natively
+    // and needs no per-file tracking. Empty / unused on Windows.
+    QMap<QString, QProcess *> m_nativeProcs;
 };
 
 #endif // NOTIFICATIONAUDIO_H
