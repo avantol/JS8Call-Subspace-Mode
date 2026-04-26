@@ -1,0 +1,62 @@
+permissions:
+  contents: read
+
+name: Linux amd64 Build (Subspace)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build_amd64:
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Get version
+      id: version
+      run: |
+        MAJOR=$(grep WSJTX_VERSION_MAJOR Versions.cmake | sed 's/[^0-9]//g')
+        MINOR=$(grep WSJTX_VERSION_MINOR Versions.cmake | sed 's/[^0-9]//g')
+        PATCH=$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
+        echo "ver=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake git pkg-config \
+          qt6-base-dev qt6-multimedia-dev qt6-serialport-dev \
+          libqt6svg6-dev \
+          libfftw3-dev libhamlib-dev libboost-all-dev \
+          libusb-1.0-0-dev libudev-dev
+
+    - name: Build
+      run: |
+        mkdir -p build && cd build
+        cmake -DCMAKE_BUILD_TYPE=Release ..
+        make -j$(nproc)
+
+    - name: Package .deb
+      run: |
+        VER=${{ steps.version.outputs.ver }}
+        mkdir -p deb-pkg/DEBIAN
+        mkdir -p deb-pkg/usr/bin
+        mkdir -p deb-pkg/usr/share/applications
+        mkdir -p deb-pkg/usr/share/icons/hicolor/256x256/apps
+        cp build/JS8Call deb-pkg/usr/bin/js8call-subspace
+        cp deb-staging/usr/share/applications/js8call-subspace.desktop \
+           deb-pkg/usr/share/applications/
+        cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png \
+           deb-pkg/usr/share/icons/hicolor/256x256/apps/
+        printf 'Package: js8call-subspace\nVersion: %s\nSection: hamradio\nPriority: optional\nArchitecture: amd64\nMaintainer: WM8Q <andy.vantol@gmail.com>\nDescription: JS8Call Subspace Edition\n JS8Call with FT2 Subspace mode - async L2 decoder for weak-signal messaging.\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6multimedia6, libqt6network6 | libqt6network6t64, libqt6serialport6 | libqt6serialport6t64, libfftw3-single3, libhamlib4 | libhamlib4t64\n' "${VER}" > deb-pkg/DEBIAN/control
+        dpkg-deb --build deb-pkg js8call-subspace_${VER}_amd64.deb
+        file deb-pkg/usr/bin/js8call-subspace
+        ls -la js8call-subspace_${VER}_amd64.deb
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v5
+      with:
+        name: "JS8Call-Subspace-${{ steps.version.outputs.ver }}-amd64.deb"
+        path: js8call-subspace_${{ steps.version.outputs.ver }}_amd64.deb
