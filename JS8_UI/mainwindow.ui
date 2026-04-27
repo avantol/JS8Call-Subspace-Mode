@@ -1203,7 +1203,7 @@ QPushButton:checked {
         <property name="handleWidth">
          <number>6</number>
         </property>
-        <widget class="QTextEdit" name="textEditRX">
+        <widget class="RxTextEdit" name="textEditRX">
          <property name="toolTip">
           <string>Double-click to select call sign</string>
          </property>
@@ -2524,6 +2524,11 @@ background-color: #22ff22;
    <class>TransmitTextEdit</class>
    <extends>QTextEdit</extends>
    <header>JS8_Main/TransmitTextEdit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>RxTextEdit</class>
+   <extends>QTextEdit</extends>
+   <header>JS8_Main/RxTextEdit.h</header>
   </customwidget>
   <customwidget>
    <class>AttenuationSlider</class>

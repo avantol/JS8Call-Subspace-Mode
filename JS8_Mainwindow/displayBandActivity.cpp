@@ -39,31 +39,103 @@ void UI_Constructor::displayBandActivity() {
         auto const sort = getSortByReverse("bandActivity", "offset");
         auto keys = m_bandActivity.keys();
 
-        // Pre-compute last visible item per offset for accurate sorting.
-        // The raw list may contain hidden items (aged, heartbeats) that
-        // shouldn't affect sort order.
+        // Compute shouldDisplay for every item per offset BEFORE sort, using
+        // the same rules the render loop will use. Sort keys then read from
+        // this filtered set so a row's position reflects only items the user
+        // will actually see -- preventing the row from being placed by a
+        // hidden HB / MSG ID / etc. while displaying a much older visible
+        // item's age. Render below reuses these pre-marked items directly.
         int activityAging = m_config.activity_aging();
         bool showHB = ui->actionShow_Band_Heartbeats_and_ACKs->isChecked();
+        auto const &myCall = m_config.my_callsign();
+        auto const &eot = m_config.eot();
+        QMap<int, QList<ActivityDetail>> filtered;
         QMap<int, ActivityDetail> lastVisible;
         for (int key : keys) {
-            auto const &items = m_bandActivity[key];
-            for (int i = items.size() - 1; i >= 0; --i) {
-                auto const &item = items[i];
-                if (item.text.isEmpty()) continue;
-                if (activityAging && item.utcTimestamp.secsTo(now) / 60 >= activityAging) continue;
-                if (!showHB) {
-                    if (item.text.contains(" @HB ") || item.text.contains(" HEARTBEAT ")) continue;
-                    { QString s = item.text; s.remove(m_config.eot()).trimmed();
-                      if (s.endsWith(":") && !s.contains(" ")) continue; }
-                    auto const &myCall = m_config.my_callsign();
-                    if (item.text.contains(" ACK ") && !item.text.contains(myCall + " ACK")) continue;
-                    static const QRegularExpression yesSnrRe(R"(\b\w+:\s+\w+\s+YES\s+[+-]\d{2}\b)");
-                    if (yesSnrRe.match(item.text).hasMatch() && !item.text.contains(myCall + " YES")) continue;
-                    static const QRegularExpression noRe(R"(\b\w+:\s+\w+\s+NO\s)");
-                    if (noRe.match(item.text).hasMatch() && !item.text.contains(myCall + " NO")) continue;
+            bool isOffsetSelected = (key == selectedOffset);
+            QList<ActivityDetail> items = m_bandActivity[key];
+
+            for (int i = 0; i < items.length(); ++i) {
+                auto &item = items[i];
+                bool shouldDisplay = true;
+
+                // hide aged items (selected offset bypasses aging)
+                if (!isOffsetSelected && activityAging &&
+                    item.utcTimestamp.secsTo(now) / 60 >= activityAging) {
+                    shouldDisplay = false;
                 }
-                lastVisible[key] = item;
-                break;
+
+                if (!showHB) {
+                    // hide heartbeats; also hide preceding bare "CALL:" prefix
+                    if (item.text.contains(" @HB ") ||
+                        item.text.contains(" HEARTBEAT ")) {
+                        shouldDisplay = false;
+                        if (i > 0 && items[i - 1].shouldDisplay &&
+                            items[i - 1].text.endsWith(": ")) {
+                            items[i - 1].shouldDisplay = false;
+                        }
+                    }
+
+                    // hide HAIL beacons (bare "CALL:" with no content)
+                    {
+                        QString stripped = item.text;
+                        stripped.remove(eot).trimmed();
+                        if (stripped.endsWith(":") &&
+                            !stripped.contains(" ")) {
+                            shouldDisplay = false;
+                        }
+                    }
+
+                    // hide ACK messages not directed to me
+                    if (item.text.contains(" ACK ") &&
+                        !item.text.contains(myCall + " ACK")) {
+                        shouldDisplay = false;
+                    }
+
+                    // hide "CALL: CALL NO" (exact) not directed to me
+                    {
+                        static const QRegularExpression noRe(
+                            R"(\b\w+:\s+\w+\s+NO\s*[^\w]*$)");
+                        if (noRe.match(item.text).hasMatch() &&
+                            !item.text.contains(myCall + " NO")) {
+                            shouldDisplay = false;
+                        }
+                    }
+
+                    // hide YES SNR replies not directed to me
+                    {
+                        static const QRegularExpression yesSnrRe(
+                            R"(\b\w+:\s+\w+\s+YES\s+[+-]\d{2}\b)");
+                        if (yesSnrRe.match(item.text).hasMatch() &&
+                            !item.text.contains(myCall + " YES")) {
+                            shouldDisplay = false;
+                        }
+                    }
+
+                    // cascade: hide MSG ID if previous was hidden (or this is first)
+                    if ((i == 0 ||
+                         (i > 0 && !items[i - 1].shouldDisplay)) &&
+                        (item.text.contains(" MSG ID "))) {
+                        shouldDisplay = false;
+                    }
+                }
+
+                // hide empty items
+                if (item.text.isEmpty()) {
+                    shouldDisplay = false;
+                }
+
+                items[i].shouldDisplay = shouldDisplay;
+            }
+
+            filtered[key] = items;
+
+            // last visible = newest item where shouldDisplay == true
+            for (int i = items.size() - 1; i >= 0; --i) {
+                if (items[i].shouldDisplay) {
+                    lastVisible[key] = items[i];
+                    break;
+                }
             }
         }
 
@@ -158,7 +230,7 @@ void UI_Constructor::displayBandActivity() {
         foreach (int offset, keys) {
             bool isOffsetSelected = (offset == selectedOffset);
 
-            QList<ActivityDetail> items = m_bandActivity[offset];
+            QList<ActivityDetail> items = filtered[offset];
             if (items.length() > 0) {
                 QDateTime timestamp;
                 QStringList text;
@@ -168,92 +240,8 @@ void UI_Constructor::displayBandActivity() {
                 float tdrift = 0;
                 int submode = -1;
 
-                int activityAging = m_config.activity_aging();
-
-                // hide items that shouldn't appear
-
-                for (int i = 0; i < items.length(); i++) {
-                    auto item = items[i];
-
-                    bool shouldDisplay = true;
-
-                    // hide aged items
-                    if (!isOffsetSelected && activityAging &&
-                        item.utcTimestamp.secsTo(now) / 60 >= activityAging) {
-                        shouldDisplay = false;
-                    }
-
-                    // hide heartbeat, ACK, and YES SNR items
-                    if (!ui->actionShow_Band_Heartbeats_and_ACKs->isChecked()) {
-                        auto const &myCall = m_config.my_callsign();
-
-                        // hide heartbeats
-                        if (item.text.contains(" @HB ") ||
-                            item.text.contains(" HEARTBEAT ")) {
-                            shouldDisplay = false;
-
-                            // hide the previous item if this it shouldn't be
-                            // displayed either...
-                            if (i > 0 && items[i - 1].shouldDisplay &&
-                                items[i - 1].text.endsWith(": ")) {
-                                items[i - 1].shouldDisplay = false;
-                            }
-                        }
-
-                        // hide HAIL beacons (bare "CALL:" with no content)
-                        {
-                            QString stripped = item.text;
-                            stripped.remove(m_config.eot()).trimmed();
-                            if (stripped.endsWith(":") && !stripped.contains(" ")) {
-                                shouldDisplay = false;
-                            }
-                        }
-
-                        // hide ACK messages not directed to me
-                        if (item.text.contains(" ACK ") &&
-                            !item.text.contains(myCall + " ACK")) {
-                            shouldDisplay = false;
-                        }
-
-                        // hide "CALL: CALL NO" (exact) not directed to me
-                        {
-                            static const QRegularExpression noRe(
-                                R"(\b\w+:\s+\w+\s+NO\s*[^\w]*$)");
-                            if (noRe.match(item.text).hasMatch() &&
-                                !item.text.contains(myCall + " NO")) {
-                                shouldDisplay = false;
-                            }
-                        }
-
-                        // hide YES SNR replies not directed to me
-                        // pattern: "CALL: CALL YES -XX" or "CALL: CALL YES +XX"
-                        {
-                            static const QRegularExpression yesSnrRe(
-                                R"(\b\w+:\s+\w+\s+YES\s+[+-]\d{2}\b)");
-                            if (yesSnrRe.match(item.text).hasMatch() &&
-                                !item.text.contains(myCall + " YES")) {
-                                shouldDisplay = false;
-                            }
-                        }
-
-                        // if our previous item should not be displayed (or this
-                        // is the first frame) and we have a MSG ID, then don't
-                        // display it either.
-                        if ((i == 0 ||
-                             (i > 0 && !items[i - 1].shouldDisplay)) &&
-                            (item.text.contains(" MSG ID "))) {
-                            shouldDisplay = false;
-                        }
-                    }
-
-                    // hide empty items
-                    if (item.text.isEmpty()) {
-                        shouldDisplay = false;
-                    }
-
-                    // set the visibility of the item
-                    items[i].shouldDisplay = shouldDisplay;
-                }
+                // shouldDisplay was computed in the pre-sort filter pass above;
+                // render directly from items[i].shouldDisplay here.
 
                 // show the items that should appear, grouped by callsign
                 // Each group: {callsign, accumulated text}

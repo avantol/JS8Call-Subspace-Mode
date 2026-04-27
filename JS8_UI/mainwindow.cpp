@@ -2951,6 +2951,14 @@ void UI_Constructor::updateClockUI(const QDateTime &now) {
 
 //------------------------------------------------------------- //guiUpdate()
 void UI_Constructor::guiUpdate() {
+    // Build 125 instrumentation: measure guiUpdate body, filtered to
+    // top-of-minute seconds (epoch%60 < 2). Build 122 confirmed
+    // on_the_minute() runs in <50ms (no [MINUTE-TIMER] entries
+    // collected across multiple sessions); the next suspect for the
+    // ~1s top-of-minute waterfall stall is coincident guiUpdate work
+    // in the same event-loop iteration.
+    QElapsedTimer guiUpdateWork;
+    guiUpdateWork.start();
 
     unsigned period = JS8::Submode::period(m_nSubMode);
 
@@ -3123,6 +3131,14 @@ void UI_Constructor::guiUpdate() {
     qint64 time_into_poll_slot = now_at_end_ms % UI_POLL_INTERVAL_MS;
     qint64 until_start_of_next_poll_slot =
         UI_POLL_INTERVAL_MS - time_into_poll_slot;
+
+    auto const guiUpdateMs = guiUpdateWork.elapsed();
+    auto const secInMinute = (now_at_end_ms / 1000) % 60;
+    if (guiUpdateMs > 50 && secInMinute < 2) {
+        qWarning() << "[GUIUPDATE-TIMER] guiUpdate took" << guiUpdateMs
+                   << "ms at sec" << secInMinute;
+    }
+
     m_guiTimer.start(until_start_of_next_poll_slot);
 } // End of guiUpdate
 

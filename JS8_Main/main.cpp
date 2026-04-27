@@ -31,6 +31,7 @@
 #include <QStandardPaths>
 #include <QStringList>
 #include <QSysInfo>
+#include <QSysInfo>
 #include <fftw3.h>
 #include <locale.h>
 
@@ -180,6 +181,10 @@ int main(int argc, char *argv[]) {
         }
 
         qWarning() << "[DIAG] Build:" << program_title();
+        qWarning() << "[DIAG] OS:" << QSysInfo::prettyProductName()
+                   << "kernel:" << QSysInfo::kernelType()
+                   << QSysInfo::kernelVersion()
+                   << "arch:" << QSysInfo::currentCpuArchitecture();
 
         QStandardPaths::setTestModeEnabled(parser.isSet(test_option));
 
