@@ -28,13 +28,30 @@ Subspace mode is only ~150 Hz wide, compared to the JS8Call-Improved JS8-60 mode
 
 An accurate time source is not strictly necessary for Subspace Mode. The typical NTP server has good enough accuracy, as it helps with the standard (slower) modes.
 
-Experiment with "Subspace" mode and please report back how it works for you, Contact me at the [JS8Call Subspace Edition discussion group](https://groups.io/g/JS8Call-Subspace/topics) .
-
-To make finding Subspace messages easy:
-- Enable "Mode speed" in the left band activity list (set priority to "Mode speed, fastest first").
-- Enable "Mode speed" in the right call sign list.
-- Set audio notifications to announce Subspace-only messages.
-
 See the [JS8Call Subspace Edition discussion group](https://groups.io/g/JS8Call-Subspace/topics) for full details, and to comment, ask questions, or to suggest something. We look forward to hearing from you!
 
 _I also want to keep JS8Call itself properly maintained aside from adding Subspace mode, things happen all the time that need attention, use "Check for updates" in JS8Call Subspace Edition often._
+
+# Privacy Policy for JS8Call Subspace Edition (Microsoft Store Version)
+Effective Date: April 2024
+
+Developer: avantol apps
+
+This application is provided as-is for the Amateur Radio community. 
+
+Privacy is a priority, and this policy describes how the application handles data.
+
+1. Personal Information Collection
+This application does not collect, store, or transmit any personal user information, names, email addresses, or location data.
+
+2. Use of Device Capabilities
+To function as an Amateur Radio communication tool, the app requires the following permissions:
+Microphone (Audio Input): Used strictly for the local decoding of radio signals from your soundcard or radio interface. Audio is processed in real-time and is never recorded, saved, or transmitted over the internet.
+Serial Communication: Used to communicate with your radio hardware (CAT control) via COM ports. This data stays entirely local to your machine.
+Internet Access: Used solely for optional features such as time synchronization (NTP) or reporting station "spots" to community networks (e.g., PSKReporter), if enabled by the user.
+
+3. Third-Party Sharing
+No data is ever shared with the developer or any third-party entities.
+
+4. Data Storage
+All logs (ADIF files) and configuration settings are stored locally on your machine in the application's private data folder. These remain under the user's total control.
