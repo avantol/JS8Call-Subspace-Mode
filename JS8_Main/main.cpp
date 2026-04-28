@@ -105,6 +105,18 @@ int main(int argc, char *argv[]) {
     register_types();
 
     QApplication a(argc, argv);
+
+    // MSIX / Microsoft Store packaging: when the app is activated via
+    // appxmanifest entry point (Start Menu, etc.), the loader sets the
+    // process CWD to %WINDIR%\System32, not to the install dir. That
+    // breaks any relative-path lookup done by Qt plugin discovery,
+    // Hamlib config, FFTW wisdom cache, Boost::filesystem defaults, or
+    // any QFile/QSettings opened with a non-absolute path. Pin CWD to
+    // the executable's directory so those lookups behave as if launched
+    // directly from the install dir. Harmless on traditional installers
+    // (CWD was usually the install dir already) and on Linux/macOS.
+    QDir::setCurrent(QCoreApplication::applicationDirPath());
+
     try {
         setlocale(LC_NUMERIC, "C"); // ensure number forms are in
                                     // consistent format, do this after
