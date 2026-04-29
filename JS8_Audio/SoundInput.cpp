@@ -3,6 +3,7 @@
  * @brief Implementation of SoundInput class
  */
 #include "SoundInput.h"
+#include "AudioTeardown.h"
 #include "JS8_Main/DriftingDateTime.h"
 
 #include <QAudioFormat>
@@ -104,6 +105,16 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
     }
     //  qCDebug (soundin_js8) << "Selected audio input format:" << format;
 
+    // Build 127: synchronously tear down the existing source before
+    // QScopedPointer's reset() runs delete on it. Without this wait
+    // the Qt audio worker thread mid-callback inside the old source
+    // can read through a freed `this` and AV at
+    // Qt6Multimedia.dll+0x5c7f2. See AudioTeardown.h.
+    if (m_stream) {
+        m_stream->disconnect(this);
+        m_stream->stop();
+        waitForAudioStopped(m_stream.data(), "SoundInput::start");
+    }
     m_stream.reset(new QAudioSource{device, format});
     if (audioError()) {
         return;
@@ -192,7 +203,14 @@ void SoundInput::handleStateChanged(QAudio::State newState) const {
  */
 void SoundInput::stop() {
     if (m_stream) {
+        m_stream->disconnect(this);
         m_stream->stop();
+        // Build 127: wait for worker thread to drain its callback
+        // before QScopedPointer's reset() runs delete. Without this
+        // wait, app exit (~SoundInput → stop) can fault inside
+        // Qt6Multimedia.dll at offset 0x5c7f2 when the worker is
+        // still executing inside the source. See AudioTeardown.h.
+        waitForAudioStopped(m_stream.data(), "SoundInput::stop");
     }
     m_stream.reset();
 

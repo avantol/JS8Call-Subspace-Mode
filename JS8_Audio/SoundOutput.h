@@ -20,6 +20,8 @@ class SoundOutput : public QObject {
     explicit SoundOutput(QString const &tag = QStringLiteral("FT2-TX"))
         : m_tag("[" + tag + "]") {}
 
+    ~SoundOutput() override;
+
     qreal attenuation() const;
     QAudioFormat format() const;
     bool isStreaming() const;

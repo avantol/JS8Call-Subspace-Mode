@@ -6,6 +6,8 @@
 
 #include "SoundOutput.h"
 
+#include "AudioTeardown.h"
+
 #include <QAudioOutput>
 #include <QDateTime>
 #include <QLoggingCategory>
@@ -76,6 +78,22 @@ void SoundOutput::setFormat(QAudioDevice const &device, unsigned channels,
 }
 
 /**
+ * @brief Synchronously tear down the audio sink before QScopedPointer
+ *        destroys it. Without this, app exit can race the audio worker
+ *        thread mid-callback inside m_stream and AV at
+ *        Qt6Multimedia.dll+0xea4f. See AudioTeardown.h.
+ */
+SoundOutput::~SoundOutput() {
+    if (m_stream) {
+        m_stream->disconnect(this);
+        m_stream->reset();
+        m_stream->stop();
+        waitForAudioStopped(m_stream.data(), "SoundOutput::~SoundOutput");
+    }
+    // QScopedPointer auto-destroys m_stream after this returns.
+}
+
+/**
  * @brief Sets the audio device and format.
  * @param device The QAudioDevice to use.
  * @param format The QAudioFormat to set.
@@ -122,6 +140,13 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
             m_stream->disconnect(this);
             m_stream->reset();
             m_stream->stop();
+            // Build 127: synchronously wait for the worker thread to
+            // exit its callback before QScopedPointer's reset() runs
+            // delete on the old sink. Without this wait the worker
+            // can read through a freed `this` and AV at
+            // Qt6Multimedia.dll+0xea4f.
+            waitForAudioStopped(m_stream.data(),
+                                "SoundOutput::setDeviceFormat");
         }
         m_stream.reset(new QAudioSink(m_device, m_format));
         checkStream();
@@ -196,6 +221,9 @@ void SoundOutput::restart(QIODevice *source) {
             m_stream->disconnect(this);
             m_stream->reset();
             m_stream->stop();
+            // Build 127: wait for worker thread to drain before delete.
+            // See AudioTeardown.h for the bug class this guards against.
+            waitForAudioStopped(m_stream.data(), "SoundOutput::restart");
         }
         m_stream.reset(new QAudioSink(m_device, m_format));
         qCDebug(soundout_js8)
