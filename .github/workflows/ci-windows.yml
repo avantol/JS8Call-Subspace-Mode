@@ -36,18 +36,14 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        # Build 132: bump 6.10.3 -> 6.11.0 to pick up additional WASAPI
-        # fixes that landed after 6.10.3:
-        #   6143f2d1d "wrap access to AudioDeviceFormat into a future"
-        #   48cef8699 "WASAPI: error handling QWindowsAudioDevice::open failures"
-        #   94e373972 "WASAPI: fix filling initial host buffer"
-        # Build 131 (Qt 6.10.3) closed the worker-thread / shutdown bug
-        # class (no more Qt6Multimedia.dll+0x5c7f2 / +0xea4f), but exposed
-        # a different first-cycle device-init crash at +0xfd4f reading
-        # 0xffffffffffffffff (sentinel value). The three commits above
-        # all target the device-format / device-open / first-buffer
-        # init paths -- one of them likely covers our remaining crash.
-        version: '6.11.0'
+        # Build 132 (revised): aqt has no win64_mingw binary for Qt
+        # 6.11.0 yet ("Failed to locate XML data for Qt version '6.11.0'")
+        # so reverting to 6.10.3 (known good from Build 131). We still
+        # get the WASAPI shutdown-of-sink-streams + harden-worker-thread
+        # fixes from the 6.9 -> 6.10 jump. The additional 6.11.0 fixes
+        # (wrap AudioDeviceFormat into a future, etc.) will have to wait
+        # until MinGW binaries ship for 6.11.0 or later.
+        version: '6.10.3'
         target: 'desktop'
         arch: 'win64_mingw'
         modules: 'qtmultimedia qtserialport'
