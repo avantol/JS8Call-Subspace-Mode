@@ -106,15 +106,19 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
     }
     //  qCDebug (soundin_js8) << "Selected audio input format:" << format;
 
-    // Build 127: synchronously tear down the existing source before
-    // QScopedPointer's reset() runs delete on it. Without this wait
-    // the Qt audio worker thread mid-callback inside the old source
-    // can read through a freed `this` and AV at
-    // Qt6Multimedia.dll+0x5c7f2. See AudioTeardown.h.
     if (m_stream) {
         m_stream->disconnect(this);
         m_stream->stop();
         waitForAudioStopped(m_stream.data(), "SoundInput::start");
+        // Build 129: deleteLater() rather than in-line delete -- mirrors
+        // Qt's QSoundEffect AudioSinkDeleter pattern. Defers the
+        // destructor cascade past the next event-loop iteration so the
+        // worker-thread teardown completes safely. Avoids the
+        // Qt6Multimedia.dll+0x5c7f2 destructor-cascade fault.
+        QAudioSource *old = m_stream.take();
+        old->deleteLater();
+        qWarning() << "[AudioTeardown] SoundInput::start "
+                   << "deleteLater queued for previous source";
     }
     m_stream.reset(new QAudioSource{device, format});
     if (audioError()) {
@@ -206,14 +210,14 @@ void SoundInput::stop() {
     if (m_stream) {
         m_stream->disconnect(this);
         m_stream->stop();
-        // Build 127: wait for worker thread to drain its callback
-        // before QScopedPointer's reset() runs delete. Without this
-        // wait, app exit (~SoundInput → stop) can fault inside
-        // Qt6Multimedia.dll at offset 0x5c7f2 when the worker is
-        // still executing inside the source. See AudioTeardown.h.
         waitForAudioStopped(m_stream.data(), "SoundInput::stop");
+        // Build 129: deleteLater() rather than in-line delete (see
+        // SoundInput::start for rationale).
+        QAudioSource *old = m_stream.take();
+        old->deleteLater();
+        qWarning() << "[AudioTeardown] SoundInput::stop "
+                   << "deleteLater queued for source";
     }
-    m_stream.reset();
 
     if (m_sink) {
         m_sink->close();

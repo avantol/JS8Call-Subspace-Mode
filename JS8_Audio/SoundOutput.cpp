@@ -153,13 +153,22 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
             m_stream->disconnect(this);
             m_stream->reset();
             m_stream->stop();
-            // Build 127: synchronously wait for the worker thread to
-            // exit its callback before QScopedPointer's reset() runs
-            // delete on the old sink. Without this wait the worker
-            // can read through a freed `this` and AV at
-            // Qt6Multimedia.dll+0xea4f.
             waitForAudioStopped(m_stream.data(),
                                 "SoundOutput::setDeviceFormat");
+            // Build 129: hand the old sink to deleteLater() instead of
+            // running its destructor in-line. Mirrors Qt's own QSoundEffect
+            // AudioSinkDeleter pattern (qtmultimedia/.../qsoundeffect.cpp:30).
+            // Defers the destructor cascade past the next event-loop iteration
+            // so any pending Qt events on the old sink (state notifications,
+            // queued connections from the worker thread) are processed before
+            // the C++ destructor runs. Avoids the destructor-cascade race that
+            // caused Qt6Multimedia.dll+0x5c7f2 / +0xea4f even after our
+            // wait-for-Stopped completed cleanly.
+            QAudioSink *old = m_stream.take();
+            old->deleteLater();
+            qWarning() << m_tag << "[AudioTeardown] "
+                       << "SoundOutput::setDeviceFormat "
+                       << "deleteLater queued for previous sink";
         }
         m_stream.reset(new QAudioSink(m_device, m_format));
         checkStream();
@@ -168,6 +177,29 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
                 &SoundOutput::handleStateChanged);
         qWarning() << m_tag << "SoundOutput: pre-initializing audio sink"
                    << "device=" << m_device.description();
+
+        // Build 129: actually warm WASAPI by briefly starting the sink
+        // and immediately stopping. Without this, IAudioClient::Initialize
+        // is deferred to the first real start() (the first TX), which can
+        // drop the first audio chunk on cold hardware. Set volume to 0
+        // first so any incidental output during the brief start window is
+        // silent. Build 60/61's "pre-create" only constructed the C++
+        // object but never called start(), so it never actually warmed
+        // WASAPI -- this fixes that.
+        qreal const savedVolume = m_stream->volume();
+        m_stream->setVolume(0);
+        QIODevice *push = m_stream->start();
+        if (push) {
+            m_stream->stop();
+            m_stream->setVolume(savedVolume);
+            qWarning() << m_tag << "[AudioWarmup] "
+                       << "WASAPI primed via brief start/stop";
+        } else {
+            m_stream->setVolume(savedVolume);
+            qWarning() << m_tag << "[AudioWarmup] "
+                       << "start() returned null, WASAPI not primed "
+                       << "(non-fatal -- first TX will cold-start)";
+        }
     } else {
         qWarning() << m_tag << "SoundOutput::setDeviceFormat: device is NULL,"
                    << "skipping sink creation";
@@ -234,9 +266,13 @@ void SoundOutput::restart(QIODevice *source) {
             m_stream->disconnect(this);
             m_stream->reset();
             m_stream->stop();
-            // Build 127: wait for worker thread to drain before delete.
-            // See AudioTeardown.h for the bug class this guards against.
             waitForAudioStopped(m_stream.data(), "SoundOutput::restart");
+            // Build 129: deleteLater() instead of in-line delete (see
+            // setDeviceFormat for rationale).
+            QAudioSink *old = m_stream.take();
+            old->deleteLater();
+            qWarning() << m_tag << "[AudioTeardown] "
+                       << "SoundOutput::restart deleteLater queued";
         }
         m_stream.reset(new QAudioSink(m_device, m_format));
         qCDebug(soundout_js8)
