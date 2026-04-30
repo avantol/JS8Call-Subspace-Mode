@@ -162,6 +162,10 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
             qWarning() << m_tag << "[AudioTeardown] "
                        << "SoundOutput::setDeviceFormat "
                        << "deleteLater queued for previous sink";
+            // Build 133: drain the deferred-delete so old destructor
+            // completes before new construction. See SoundInput::start.
+            QCoreApplication::sendPostedEvents(nullptr,
+                                               QEvent::DeferredDelete);
         }
         m_stream.reset(new QAudioSink(m_device, m_format));
         checkStream();
@@ -266,6 +270,9 @@ void SoundOutput::restart(QIODevice *source) {
             old->deleteLater();
             qWarning() << m_tag << "[AudioTeardown] "
                        << "SoundOutput::restart deleteLater queued";
+            // Build 133: drain deferred-delete before new construction.
+            QCoreApplication::sendPostedEvents(nullptr,
+                                               QEvent::DeferredDelete);
         }
         m_stream.reset(new QAudioSink(m_device, m_format));
         qCDebug(soundout_js8)

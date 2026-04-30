@@ -115,6 +115,14 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
         old->deleteLater();
         qWarning() << "[AudioTeardown] SoundInput::start "
                    << "deleteLater queued for previous source";
+        // Build 133: synchronously drain the deferred-delete event so the
+        // OLD source's destructor runs BEFORE we construct the new one.
+        // Without this, new-construction can race old-destruction in Qt's
+        // internal audio state, faulting at Qt6Multimedia.dll+0xfd4f
+        // (READ at sentinel) or 0x0 (EXECUTE through null vtable). Only
+        // QEvent::DeferredDelete is processed -- not GUI input or paints
+        // -- so no re-entry risk.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
     m_stream.reset(new QAudioSource{device, format});
     if (audioError()) {
@@ -231,6 +239,9 @@ void SoundInput::stop() {
         old->deleteLater();
         qWarning() << "[AudioTeardown] SoundInput::stop "
                    << "deleteLater queued for source";
+        // Build 133: synchronously drain the deferred-delete event so the
+        // destructor runs now rather than at next event-loop iteration.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     }
 
     if (m_sink) {
