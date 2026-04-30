@@ -36,7 +36,17 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        version: '6.9.3'
+        # Build 131: bump from 6.9.3 -> 6.10.3 to pick up the upstream
+        # WASAPI shutdown fixes that never shipped in any 6.9.x release.
+        # Three relevant Qt commits merged after v6.9.3:
+        #   3e102eafa "WASAPI: fix shutdown of wasapi sink streams"
+        #   2fb1bb8d0 "WASAPI: harden worker thread termination" (QTBUG-141840)
+        #   431d55080 "wasapi: fix assertion failure" (QTBUG-142480)
+        # All three were picked to 6.10 but not 6.9. Our crash class
+        # (Qt6Multimedia.dll+0x5c7f2 / +0xea4f) maps to the bugs they fix.
+        # 6.10.3 is the latest 6.10.x patch; chosen over 6.11.0 to stay
+        # one minor version closer to our existing 6.9.3 baseline.
+        version: '6.10.3'
         target: 'desktop'
         arch: 'win64_mingw'
         modules: 'qtmultimedia qtserialport'
