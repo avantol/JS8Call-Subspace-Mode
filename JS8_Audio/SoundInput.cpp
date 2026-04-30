@@ -7,6 +7,7 @@
 #include "JS8_Main/DriftingDateTime.h"
 
 #include <QAudioFormat>
+#include <QCoreApplication>
 #include <QLoggingCategory>
 #include <QSysInfo>
 
@@ -221,7 +222,29 @@ void SoundInput::stop() {
 
 /**
  * @brief Destructs the SoundInput object.
+ *
+ * At process exit, intentionally leak the QAudioSource to bypass
+ * Qt6Multimedia's destructor cascade. See SoundOutput::~SoundOutput
+ * and AudioTeardown.h for the rationale -- two minidumps captured
+ * 2026-04-29/30 against Build 127 showed that even after
+ * state==Stopped (wait completed cleanly), the QAudioSource
+ * destructor itself can AV at Qt6Multimedia.dll+0x5c7f2. Process
+ * is exiting; OS reclaims memory. Runtime stop() (called via
+ * Configuration changes) keeps the destroy path.
  */
-SoundInput::~SoundInput() { stop(); }
+SoundInput::~SoundInput() {
+    if (QCoreApplication::closingDown() && m_stream) {
+        m_stream->disconnect(this);
+        m_stream->stop();
+        waitForAudioStopped(m_stream.data(), "SoundInput::~SoundInput");
+        qWarning() << "[AudioTeardown] SoundInput::~SoundInput "
+                   << "leaking QAudioSource at process exit "
+                   << "(bypasses Qt6Multimedia destructor cascade)";
+        Q_UNUSED(m_stream.take());
+        if (m_sink) m_sink->close();
+        return;
+    }
+    stop();
+}
 
 Q_LOGGING_CATEGORY(soundin_js8, "soundin.js8", QtWarningMsg)

@@ -9,6 +9,7 @@
 #include "AudioTeardown.h"
 
 #include <QAudioOutput>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QLoggingCategory>
 #include <QSysInfo>
@@ -79,9 +80,14 @@ void SoundOutput::setFormat(QAudioDevice const &device, unsigned channels,
 
 /**
  * @brief Synchronously tear down the audio sink before QScopedPointer
- *        destroys it. Without this, app exit can race the audio worker
- *        thread mid-callback inside m_stream and AV at
- *        Qt6Multimedia.dll+0xea4f. See AudioTeardown.h.
+ *        destroys it. At process exit, intentionally leak the
+ *        QAudioSink to bypass Qt6Multimedia's destructor cascade,
+ *        which has internal teardown races that AV at +0xea4f /
+ *        +0x5c7f2 even after state==Stopped (Build 127 minidump
+ *        2026-04-30 confirmed the wait completed cleanly but the
+ *        destructor still faulted). Process is exiting; OS reclaims
+ *        memory. Runtime teardowns (setDeviceFormat / restart) keep
+ *        the destroy path -- they need it.
  */
 SoundOutput::~SoundOutput() {
     if (m_stream) {
@@ -89,8 +95,15 @@ SoundOutput::~SoundOutput() {
         m_stream->reset();
         m_stream->stop();
         waitForAudioStopped(m_stream.data(), "SoundOutput::~SoundOutput");
+        if (QCoreApplication::closingDown()) {
+            qWarning() << "[AudioTeardown] SoundOutput::~SoundOutput "
+                       << "leaking QAudioSink at process exit "
+                       << "(bypasses Qt6Multimedia destructor cascade)";
+            Q_UNUSED(m_stream.take());
+            return;
+        }
     }
-    // QScopedPointer auto-destroys m_stream after this returns.
+    // Runtime path: QScopedPointer auto-destroys m_stream after this returns.
 }
 
 /**
