@@ -91,6 +91,7 @@ void SoundOutput::setFormat(QAudioDevice const &device, unsigned channels,
  */
 SoundOutput::~SoundOutput() {
     if (m_stream) {
+        m_tearingDown = true;  // Build 130: gate handleStateChanged
         m_stream->disconnect(this);
         m_stream->reset();
         m_stream->stop();
@@ -150,20 +151,12 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
     // initialization latency when the device is cold.
     if (!m_device.isNull()) {
         if (m_stream) {
+            m_tearingDown = true;  // Build 130: gate handleStateChanged
             m_stream->disconnect(this);
             m_stream->reset();
             m_stream->stop();
             waitForAudioStopped(m_stream.data(),
                                 "SoundOutput::setDeviceFormat");
-            // Build 129: hand the old sink to deleteLater() instead of
-            // running its destructor in-line. Mirrors Qt's own QSoundEffect
-            // AudioSinkDeleter pattern (qtmultimedia/.../qsoundeffect.cpp:30).
-            // Defers the destructor cascade past the next event-loop iteration
-            // so any pending Qt events on the old sink (state notifications,
-            // queued connections from the worker thread) are processed before
-            // the C++ destructor runs. Avoids the destructor-cascade race that
-            // caused Qt6Multimedia.dll+0x5c7f2 / +0xea4f even after our
-            // wait-for-Stopped completed cleanly.
             QAudioSink *old = m_stream.take();
             old->deleteLater();
             qWarning() << m_tag << "[AudioTeardown] "
@@ -175,6 +168,7 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
         m_error = false;
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
                 &SoundOutput::handleStateChanged);
+        m_tearingDown = false;  // Build 130: new sink wired, allow signals
         qWarning() << m_tag << "SoundOutput: pre-initializing audio sink"
                    << "device=" << m_device.description();
 
@@ -263,12 +257,11 @@ void SoundOutput::restart(QIODevice *source) {
         // stop()+start() causes Active→Idle oscillation on Qt 6.4 /
         // PipeWire after several cycles.
         if (m_stream) {
+            m_tearingDown = true;  // Build 130: gate handleStateChanged
             m_stream->disconnect(this);
             m_stream->reset();
             m_stream->stop();
             waitForAudioStopped(m_stream.data(), "SoundOutput::restart");
-            // Build 129: deleteLater() instead of in-line delete (see
-            // setDeviceFormat for rationale).
             QAudioSink *old = m_stream.take();
             old->deleteLater();
             qWarning() << m_tag << "[AudioTeardown] "
@@ -282,6 +275,7 @@ void SoundOutput::restart(QIODevice *source) {
         m_error = false;
         connect(m_stream.data(), &QAudioSink::stateChanged, this,
                 &SoundOutput::handleStateChanged);
+        m_tearingDown = false;  // Build 130: new sink wired
 #endif
     }
 
@@ -399,6 +393,18 @@ void SoundOutput::resetAttenuation() {
  * @param newState The new state of the audio output.
  */
 void SoundOutput::handleStateChanged(QAudio::State newState) const {
+    // Build 130: drop already-queued stateChanged signals from a prior
+    // QAudioSink that arrive after disconnect() during teardown but
+    // before the new sink is wired. Without this, m_stream->error()
+    // below could fault inside Qt6Multimedia at +0xea4f / +0x5c7f2 on
+    // a transient/dangling sink.
+    if (m_tearingDown) {
+        qWarning() << m_tag << "[AudioTeardown] "
+                   << "SoundOutput::handleStateChanged ignored newState="
+                   << static_cast<int>(newState) << " (tearingDown=true)";
+        return;
+    }
+
     const char *stateName = "Unknown";
     switch (newState) {
     case QAudio::IdleState:   stateName = "Idle";      break;

@@ -107,14 +107,10 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
     //  qCDebug (soundin_js8) << "Selected audio input format:" << format;
 
     if (m_stream) {
+        m_tearingDown = true;  // Build 130: drop in-flight queued signals
         m_stream->disconnect(this);
         m_stream->stop();
         waitForAudioStopped(m_stream.data(), "SoundInput::start");
-        // Build 129: deleteLater() rather than in-line delete -- mirrors
-        // Qt's QSoundEffect AudioSinkDeleter pattern. Defers the
-        // destructor cascade past the next event-loop iteration so the
-        // worker-thread teardown completes safely. Avoids the
-        // Qt6Multimedia.dll+0x5c7f2 destructor-cascade fault.
         QAudioSource *old = m_stream.take();
         old->deleteLater();
         qWarning() << "[AudioTeardown] SoundInput::start "
@@ -122,11 +118,18 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
     }
     m_stream.reset(new QAudioSource{device, format});
     if (audioError()) {
+        m_tearingDown = false;
         return;
     }
 
     connect(m_stream.data(), &QAudioSource::stateChanged, this,
             &SoundInput::handleStateChanged);
+
+    // Build 130: new source fully wired -- safe to allow handleStateChanged
+    // through again. Any queued events from the OLD source delivered after
+    // this point are still safe to drop, but we'd rather process events on
+    // the NEW source.
+    m_tearingDown = false;
 
     m_stream->setBufferSize(m_stream->format().bytesForFrames(framesPerBuffer));
     if (sink->initialize(QIODevice::WriteOnly, channel)) {
@@ -177,6 +180,18 @@ void SoundInput::resume() {
  * @param newState The new state of the audio input.
  */
 void SoundInput::handleStateChanged(QAudio::State newState) const {
+    // Build 130: drop already-queued stateChanged signals from the prior
+    // QAudioSource that arrive after disconnect() during teardown but
+    // before the new source is wired. audioError() below would otherwise
+    // call m_stream->error() on a transient/dangling source and fault
+    // inside Qt6Multimedia at +0x5c7f2 (Build 125/127/129 minidumps).
+    if (m_tearingDown) {
+        qWarning() << "[AudioTeardown] SoundInput::handleStateChanged "
+                   << "ignored newState=" << static_cast<int>(newState)
+                   << " (tearingDown=true)";
+        return;
+    }
+
     // qCDebug (soundin_js8) << "SoundInput::handleStateChanged: newState:" <<
     // newState;
 
@@ -208,11 +223,10 @@ void SoundInput::handleStateChanged(QAudio::State newState) const {
  */
 void SoundInput::stop() {
     if (m_stream) {
+        m_tearingDown = true;  // Build 130: gate handleStateChanged
         m_stream->disconnect(this);
         m_stream->stop();
         waitForAudioStopped(m_stream.data(), "SoundInput::stop");
-        // Build 129: deleteLater() rather than in-line delete (see
-        // SoundInput::start for rationale).
         QAudioSource *old = m_stream.take();
         old->deleteLater();
         qWarning() << "[AudioTeardown] SoundInput::stop "
@@ -222,6 +236,9 @@ void SoundInput::stop() {
     if (m_sink) {
         m_sink->close();
     }
+    // Note: m_tearingDown stays true after stop(). The next start() will
+    // clear it once the new source is wired. ~SoundInput leaves it true,
+    // which is correct (no more signals will be processed).
 }
 
 /**

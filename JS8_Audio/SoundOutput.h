@@ -59,6 +59,13 @@ class SoundOutput : public QObject {
     qreal m_volume = 1.0;
     bool m_error = false;
     qint64 m_lastRestartMs = 0;  // monotonic ms at previous restart() entry
+
+    // Build 130: gate handleStateChanged() during teardown / re-init so
+    // already-queued stateChanged signals from the prior QAudioSink that
+    // arrive after our disconnect() but before the new sink is wired
+    // don't fault inside Qt6Multimedia (calling m_stream->error() etc.
+    // on a transient/dangling sink). Same mechanism added to SoundInput.
+    bool m_tearingDown = false;
 };
 
 #endif
