@@ -36,17 +36,18 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        # Build 131: bump from 6.9.3 -> 6.10.3 to pick up the upstream
-        # WASAPI shutdown fixes that never shipped in any 6.9.x release.
-        # Three relevant Qt commits merged after v6.9.3:
-        #   3e102eafa "WASAPI: fix shutdown of wasapi sink streams"
-        #   2fb1bb8d0 "WASAPI: harden worker thread termination" (QTBUG-141840)
-        #   431d55080 "wasapi: fix assertion failure" (QTBUG-142480)
-        # All three were picked to 6.10 but not 6.9. Our crash class
-        # (Qt6Multimedia.dll+0x5c7f2 / +0xea4f) maps to the bugs they fix.
-        # 6.10.3 is the latest 6.10.x patch; chosen over 6.11.0 to stay
-        # one minor version closer to our existing 6.9.3 baseline.
-        version: '6.10.3'
+        # Build 132: bump 6.10.3 -> 6.11.0 to pick up additional WASAPI
+        # fixes that landed after 6.10.3:
+        #   6143f2d1d "wrap access to AudioDeviceFormat into a future"
+        #   48cef8699 "WASAPI: error handling QWindowsAudioDevice::open failures"
+        #   94e373972 "WASAPI: fix filling initial host buffer"
+        # Build 131 (Qt 6.10.3) closed the worker-thread / shutdown bug
+        # class (no more Qt6Multimedia.dll+0x5c7f2 / +0xea4f), but exposed
+        # a different first-cycle device-init crash at +0xfd4f reading
+        # 0xffffffffffffffff (sentinel value). The three commits above
+        # all target the device-format / device-open / first-buffer
+        # init paths -- one of them likely covers our remaining crash.
+        version: '6.11.0'
         target: 'desktop'
         arch: 'win64_mingw'
         modules: 'qtmultimedia qtserialport'
