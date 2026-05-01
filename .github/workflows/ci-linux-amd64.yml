@@ -27,7 +27,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential cmake git pkg-config \
-          qt6-base-dev qt6-multimedia-dev qt6-serialport-dev \
+          qt6-base-dev qt6-serialport-dev \
           libqt6svg6-dev \
           libfftw3-dev libhamlib-dev libboost-all-dev \
           libusb-1.0-0-dev libudev-dev
@@ -50,7 +50,7 @@ jobs:
            deb-pkg/usr/share/applications/
         cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png \
            deb-pkg/usr/share/icons/hicolor/256x256/apps/
-        printf 'Package: js8call-subspace\nVersion: %s\nSection: hamradio\nPriority: optional\nArchitecture: amd64\nMaintainer: WM8Q <andy.vantol@gmail.com>\nDescription: JS8Call Subspace Edition\n JS8Call with FT2 Subspace mode - async L2 decoder for weak-signal messaging.\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6multimedia6, libqt6network6 | libqt6network6t64, libqt6serialport6 | libqt6serialport6t64, libfftw3-single3, libhamlib4 | libhamlib4t64\n' "${VER}" > deb-pkg/DEBIAN/control
+        printf 'Package: js8call-subspace\nVersion: %s\nSection: hamradio\nPriority: optional\nArchitecture: amd64\nMaintainer: WM8Q <andy.vantol@gmail.com>\nDescription: JS8Call Subspace Edition\n JS8Call with FT2 Subspace mode - async L2 decoder for weak-signal messaging.\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6network6 | libqt6network6t64, libqt6serialport6 | libqt6serialport6t64, libfftw3-single3, libhamlib4 | libhamlib4t64\n' "${VER}" > deb-pkg/DEBIAN/control
         dpkg-deb --build deb-pkg js8call-subspace_${VER}_amd64.deb
         file deb-pkg/usr/bin/js8call-subspace
         ls -la js8call-subspace_${VER}_amd64.deb

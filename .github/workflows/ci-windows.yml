@@ -32,7 +32,6 @@ jobs:
           boost:p
           fftw:p
           qt6-base:p
-          qt6-multimedia:p
           qt6-serialport:p
           qt6-tools:p
 

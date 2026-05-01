@@ -125,7 +125,7 @@ cmake_dependent_option(
 find_package(Boost 1.74 REQUIRED)
 find_package(FFTW3      REQUIRED COMPONENTS single threads)
 find_package(Hamlib     REQUIRED)
-find_package(Qt6    6.4 REQUIRED COMPONENTS Multimedia Network SerialPort Widgets)
+find_package(Qt6    6.4 REQUIRED COMPONENTS Network SerialPort Widgets)
 
 include_directories(${Boost_INCLUDE_DIRS})
 include_directories(${FFTW3_INCLUDE_DIRS})
@@ -209,7 +209,6 @@ target_sources(
   ${TARGET} PRIVATE
   vendor/sqlite3/sqlite3.c
   JS8_Audio/AudioDevice.cpp
-  JS8_Audio/BWFFile.cpp
   JS8_Audio/NotificationAudio.cpp
   JS8_Audio/SoundInput.cpp
   JS8_Audio/SoundOutput.cpp
@@ -318,7 +317,6 @@ target_link_libraries(
   ${TARGET} PRIVATE
   ${FFTW3_LIBRARIES}
   Hamlib::Hamlib
-  Qt::Multimedia
   Qt::Network
   Qt::SerialPort
   Qt::Widgets

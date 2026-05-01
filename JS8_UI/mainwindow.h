@@ -61,7 +61,6 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
-#include <QAudioDevice>
 #include <QByteArrayView>
 #include <QCursor>
 #include <QDateTime>
@@ -95,7 +94,6 @@
 #include <QScopedPointer>
 #include <QScrollBar>
 #include <QSet>
-#include <QSoundEffect>
 #include <QStandardPaths>
 #include <QStringBuilder>
 #include <QTableWidget>

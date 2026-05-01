@@ -150,7 +150,7 @@ jobs:
         host: 'mac'
         target: 'desktop'
         arch: 'clang_64'
-        modules: 'qtmultimedia qtserialport'
+        modules: 'qtserialport'
         archives: 'qtsvg qtdeclarative qtbase'
 
     - name: Build JS8Call
