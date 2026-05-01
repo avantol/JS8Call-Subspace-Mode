@@ -32,21 +32,20 @@ jobs:
           libusb:p
           boost:p
           fftw:p
+          qt6-base:p
+          qt6-multimedia:p
+          qt6-serialport:p
+          qt6-tools:p
 
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v4
-      with:
-        # Build 134 retry: aqt 3.3 looks for old path layout
-        # (qt6_6110/qt6_6110/Updates.xml) but Qt 6.11 ships the new
-        # per-toolchain layout (qt6_6110/qt6_6110_mingw/Updates.xml).
-        # Try aqt 3.4 which may understand the new structure. If still
-        # broken, fall back to manual download or stay on 6.10.3.
-        aqtversion: '>=3.4'
-        version: '6.11.0'
-        target: 'desktop'
-        arch: 'win64_mingw'
-        modules: 'qtmultimedia qtserialport'
-        cache: true
+    # Build 135: dropped jurplel/install-qt-action — aqt's metadata
+    # consistently lagged Qt's new per-toolchain Updates.xml layout for
+    # 6.11.x, and aqt 3.3/3.4 didn't recognize the qt6_6110_mingw
+    # subdirectory structure. MSYS2's qt6-* packages track upstream
+    # within days of release, build with the same MinGW GCC 15 we use
+    # everywhere else (no ABI cross-toolchain surprises), and arrive
+    # via the same package manager already in this workflow. Qt headers,
+    # libs, plugins, and windeployqt all live under MSYSTEM_PREFIX
+    # (/mingw64 on this runner).
 
     - name: Download Hamlib
       uses: robinraju/release-downloader@v1.12
@@ -67,7 +66,7 @@ jobs:
       shell: msys2 {0}
       run: |
         cmake -B build \
-          -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${QT_ROOT_DIR}" \
+          -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${MSYSTEM_PREFIX}" \
           -DCMAKE_BUILD_TYPE=${{ inputs.build-type || 'Release' }} \
           -DCMAKE_Fortran_FLAGS="-static-libgfortran -static-libquadmath" \
           -DFFTW3F_LIBRARY=/mingw64/lib/libfftw3f.a
