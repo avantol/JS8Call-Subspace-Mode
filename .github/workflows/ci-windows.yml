@@ -36,13 +36,12 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        # Build 134: retry Qt 6.11.0 with newer aqt. Build 132's attempt
-        # failed because the default aqt version's metadata didn't yet
-        # know about 6.11.0. The actual binaries DO exist at
-        # download.qt.io/.../qt6_6110_mingw/ -- the qt.qt6.6110.addons.
-        # qtmultimedia.win64_mingw/ directory was confirmed present.
-        # Pinning aqt 3.3.x which has updated metadata.
-        aqtversion: '==3.3.*'
+        # Build 134 retry: aqt 3.3 looks for old path layout
+        # (qt6_6110/qt6_6110/Updates.xml) but Qt 6.11 ships the new
+        # per-toolchain layout (qt6_6110/qt6_6110_mingw/Updates.xml).
+        # Try aqt 3.4 which may understand the new structure. If still
+        # broken, fall back to manual download or stay on 6.10.3.
+        aqtversion: '>=3.4'
         version: '6.11.0'
         target: 'desktop'
         arch: 'win64_mingw'
