@@ -1092,8 +1092,14 @@ void UI_Constructor::openSettings(int tab) {
 
         if (m_config.restart_audio_output() &&
             !m_config.audio_output_device().isNull()) {
+            // Build 141 bridge: QAudioDevice → AudioDeviceInfo (see UI_Constructor.cpp).
+            auto const & qDev = m_config.audio_output_device();
+            AudioDeviceInfo info;
+            info.description = qDev.description();
+            info.mode        = AudioDeviceInfo::Output;
+            info.isDefault   = qDev.isDefault();
             Q_EMIT initializeAudioOutputStream(
-                m_config.audio_output_device(),
+                info,
                 AudioDevice::Mono == m_config.audio_output_channel() ? 1 : 2,
                 m_msAudioOutputBuffered);
         }

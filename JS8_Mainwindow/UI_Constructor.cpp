@@ -666,10 +666,20 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                                      m_framesAudioInputBuffered, m_detector,
                                      m_config.audio_input_channel());
     }
-    Q_EMIT initializeAudioOutputStream(
-        m_config.audio_output_device(),
-        AudioDevice::Mono == m_config.audio_output_channel() ? 1 : 2,
-        m_msAudioOutputBuffered);
+    {
+        // Build 141 bridge: QAudioDevice → AudioDeviceInfo. SoundOutput
+        // is on miniaudio; Configuration still hands us a QAudioDevice
+        // until Build 142.
+        auto const & qDev = m_config.audio_output_device();
+        AudioDeviceInfo info;
+        info.description = qDev.description();
+        info.mode        = AudioDeviceInfo::Output;
+        info.isDefault   = qDev.isDefault();
+        Q_EMIT initializeAudioOutputStream(
+            info,
+            AudioDevice::Mono == m_config.audio_output_channel() ? 1 : 2,
+            m_msAudioOutputBuffered);
+    }
     Q_EMIT initializeNotificationAudioOutputStream(
         m_config.notification_audio_output_device(), m_msAudioOutputBuffered);
     Q_EMIT transmitFrequency(freq() + m_XIT);

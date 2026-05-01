@@ -1,470 +1,295 @@
 /**
  * @file SoundOutput.cpp
- * @brief Checks for audio errors and emits appropriate error messages.
- * @return true if no error, false otherwise
+ * @brief miniaudio-based playback (Build 141, replaces QAudioSink)
  */
-
 #include "SoundOutput.h"
 
-#include "AudioTeardown.h"
-
-#include <QAudioOutput>
 #include <QCoreApplication>
-#include <QDateTime>
+#include <QIODevice>
 #include <QLoggingCategory>
-#include <QSysInfo>
-#include <qmath.h>
+#include <cmath>
+#include <cstring>
 
 #include "moc_SoundOutput.cpp"
 
 Q_DECLARE_LOGGING_CATEGORY(soundout_js8)
 
-bool SoundOutput::checkStream() const {
-    bool result{false};
+namespace {
 
-    Q_ASSERT_X(m_stream, "SoundOutput", "programming error");
-    if (m_stream) {
-        switch (m_stream->error()) {
-        case QAudio::OpenError:
-            Q_EMIT error(
-                tr("An error opening the audio output device has occurred."));
-            break;
+// Resolve an AudioDeviceInfo to a concrete ma_device_id by enumerating
+// playback devices. Same shape as SoundInput's resolver.
+bool
+resolvePlaybackDevice(AudioDeviceInfo const & info,
+                      ma_device_id & outId)
+{
+    ma_context ctx;
+    if (ma_context_init(nullptr, 0, nullptr, &ctx) != MA_SUCCESS) return false;
 
-        case QAudio::IOError:
-            Q_EMIT error(tr(
-                "An error occurred during write to the audio output device."));
-            break;
+    ma_device_info * playInfos = nullptr;
+    ma_uint32        playCount = 0;
+    ma_device_info * capInfos  = nullptr;
+    ma_uint32        capCount  = 0;
+    bool             matched   = false;
 
-        case QAudio::UnderrunError:
-            // Non-fatal: recover by resuming the stream instead of erroring out.
-            qWarning() << "SoundOutput: underrun detected, recovering...";
-            if (m_stream && (m_stream->state() == QAudio::IdleState
-                          || m_stream->state() == QAudio::SuspendedState)) {
-                m_stream->resume();
+    if (ma_context_get_devices(&ctx, &playInfos, &playCount, &capInfos, &capCount) == MA_SUCCESS) {
+        QByteArray const wantedId   = info.id;
+        QString    const wantedName = info.description;
+
+        for (ma_uint32 i = 0; i < playCount; ++i) {
+            QByteArray const thisId
+                = QByteArray(reinterpret_cast<char const *>(&playInfos[i].id),
+                             sizeof(ma_device_id)).toHex();
+            QString const thisName = QString::fromUtf8(playInfos[i].name);
+
+            bool const idMatch   = !wantedId.isEmpty() && wantedId == thisId;
+            bool const nameMatch = !wantedName.isEmpty() && wantedName == thisName;
+
+            if (idMatch || nameMatch) {
+                outId = playInfos[i].id;
+                matched = true;
+                break;
             }
-            result = true;  // non-fatal, keep going
-            break;
-
-        case QAudio::FatalError:
-            Q_EMIT error(tr("Non-recoverable error, audio output device not "
-                            "usable at this time."));
-            break;
-
-        case QAudio::NoError:
-            result = true;
-            break;
         }
     }
-    return result;
+
+    ma_context_uninit(&ctx);
+    return matched;
+}
+
+} // namespace
+
+/**
+ * @brief miniaudio playback callback. Runs on miniaudio's worker
+ * thread, NOT on the GUI or audio QThread. Pulls from the bound
+ * QIODevice source, applies attenuation, writes to the output.
+ */
+void
+SoundOutput::s_dataCallback(ma_device * device,
+                            void * pOutput,
+                            void const * /* pInput */,
+                            ma_uint32 frameCount)
+{
+    if (auto * self = static_cast<SoundOutput *>(device->pUserData)) {
+        self->onPlayback(pOutput, frameCount);
+    }
+}
+
+void
+SoundOutput::onPlayback(void * pOutput, ma_uint32 frameCount)
+{
+    qint64 const totalBytes = m_format.bytesForFrames(frameCount);
+    char *       out        = static_cast<char *>(pOutput);
+
+    qint64 written = 0;
+    if (m_source) {
+        // QIODevice::read may return less than requested when the source
+        // is idle / between frames; we pad the rest with silence.
+        written = m_source->read(out, totalBytes);
+        if (written < 0) written = 0;
+    }
+    if (written < totalBytes) {
+        std::memset(out + written, 0, static_cast<size_t>(totalBytes - written));
+    }
+
+    qreal const volume = m_volume;
+    if (volume != 1.0) {
+        qint16 * samples = reinterpret_cast<qint16 *>(out);
+        size_t const n   = static_cast<size_t>(totalBytes / sizeof(qint16));
+        for (size_t i = 0; i < n; ++i) {
+            samples[i] = static_cast<qint16>(samples[i] * volume);
+        }
+    }
+}
+
+void
+SoundOutput::teardown()
+{
+    if (m_deviceInitialized) {
+        ma_device_uninit(&m_device_ma);
+        m_deviceInitialized = false;
+    }
+}
+
+bool
+SoundOutput::buildAndStart(QIODevice * source)
+{
+    teardown();
+
+    if (m_device.isNull()) {
+        if (!source) return false;  // nothing to do
+        // Fall through anyway; miniaudio will pick the system default
+        // when pDeviceID is null.
+    }
+
+    ma_device_id deviceId;
+    bool const haveDevice = !m_device.isNull()
+                          && resolvePlaybackDevice(m_device, deviceId);
+
+    ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
+    cfg.playback.pDeviceID = haveDevice ? &deviceId : nullptr;
+    cfg.playback.format    = ma_format_s16;
+    cfg.playback.channels  = static_cast<ma_uint32>(m_format.channelCount);
+    cfg.sampleRate         = static_cast<ma_uint32>(m_format.sampleRate);
+    if (m_msBuffered > 0u) {
+        cfg.periodSizeInMilliseconds = m_msBuffered;
+    }
+    cfg.dataCallback = &SoundOutput::s_dataCallback;
+    cfg.pUserData    = this;
+
+    if (ma_device_init(nullptr, &cfg, &m_device_ma) != MA_SUCCESS) {
+        Q_EMIT error(tr("Failed to initialize audio output device."));
+        return false;
+    }
+    m_deviceInitialized = true;
+    m_source = source;
+
+    if (ma_device_start(&m_device_ma) != MA_SUCCESS) {
+        Q_EMIT error(tr("Failed to start audio output device."));
+        teardown();
+        m_source = nullptr;
+        return false;
+    }
+    Q_EMIT status(tr("Sending"));
+    return true;
 }
 
 /**
- * @brief Sets the audio format based on the device and channel count.
- * @param device The QAudioDevice to use.
- * @param channels The number of audio channels (1 for mono, 2 for stereo).
- * @param msBuffered The buffer size in milliseconds.
+ * @brief Convenience overload that constructs an AudioFormat for the
+ * given channel count at JS8Call's standard 48 kHz Int16.
  */
-void SoundOutput::setFormat(QAudioDevice const &device, unsigned channels,
-                            unsigned msBuffered) {
-
+void
+SoundOutput::setFormat(AudioDeviceInfo const & device,
+                       unsigned channels,
+                       unsigned msBuffered)
+{
     Q_ASSERT(0 < channels && channels < 3);
 
-    QAudioFormat format(device.preferredFormat());
+    AudioFormat fmt;
+    fmt.sampleRate   = 48000;
+    fmt.channelCount = static_cast<int>(channels);
+    fmt.sample       = AudioFormat::Int16;
 
-    format.setChannelCount(channels);
-    format.setSampleRate(48000);
-    format.setSampleFormat(QAudioFormat::Int16);
-
-    setDeviceFormat(device, format, msBuffered);
+    setDeviceFormat(device, fmt, msBuffered);
 }
 
 /**
- * @brief Synchronously tear down the audio sink before QScopedPointer
- *        destroys it. At process exit, intentionally leak the
- *        QAudioSink to bypass Qt6Multimedia's destructor cascade,
- *        which has internal teardown races that AV at +0xea4f /
- *        +0x5c7f2 even after state==Stopped (Build 127 minidump
- *        2026-04-30 confirmed the wait completed cleanly but the
- *        destructor still faulted). Process is exiting; OS reclaims
- *        memory. Runtime teardowns (setDeviceFormat / restart) keep
- *        the destroy path -- they need it.
+ * @brief Stash the device + format. We do NOT init the ma_device here;
+ * that happens in restart(source) once we have a source to bind. This
+ * is a behavior change from the QAudioSink era's pre-create + warmup
+ * pattern, but miniaudio's WASAPI backend doesn't have the cold-start
+ * latency Qt6Multimedia did, so init-on-demand is fine.
  */
-SoundOutput::~SoundOutput() {
-    if (m_stream) {
-        m_tearingDown = true;  // Build 130: gate handleStateChanged
-        m_stream->disconnect(this);
-        m_stream->reset();
-        m_stream->stop();
-        waitForAudioStopped(m_stream.data(), "SoundOutput::~SoundOutput");
-        if (QCoreApplication::closingDown()) {
-            qWarning() << "[AudioTeardown] SoundOutput::~SoundOutput "
-                       << "leaking QAudioSink at process exit "
-                       << "(bypasses Qt6Multimedia destructor cascade)";
-            Q_UNUSED(m_stream.take());
-            return;
-        }
-    }
-    // Runtime path: QScopedPointer auto-destroys m_stream after this returns.
-}
-
-/**
- * @brief Sets the audio device and format.
- * @param device The QAudioDevice to use.
- * @param format The QAudioFormat to set.
- * @param msBuffered The buffer size in milliseconds.
- */
-void SoundOutput::setDeviceFormat(QAudioDevice const &device,
-                                  QAudioFormat const &format,
-                                  unsigned msBuffered) {
-    if (!format.isValid()) {
-        Q_EMIT error(tr("Requested output audio format is not valid."));
-        return;
-    }
-    // Note: isFormatSupported is conservative in Qt6 and rejects formats
-    // that the platform actually resamples and plays fine (notably 8-bit,
-    // 8 kHz, mono). Warn but don't bail -- let QAudioSink attempt the
-    // format; if it really can't handle it, QAudioSink::error() will
-    // surface the failure.
-    if (!device.isFormatSupported(format)) {
-        qWarning() << "[SoundOutput] isFormatSupported=false, trying anyway:"
-                   << format;
-    }
-
-    // Race guard: if device/format/buffer are unchanged and we already
-    // have a healthy sink, skip the destroy-and-rebuild. NotificationAudio
-    // calls this on every play, and rapid plays (e.g. user mashing the
-    // test button in Configuration > Notifications) destroy a still-active
-    // QAudioSink mid-stream, crashing Qt6Multimedia at offset 0xea4f.
-    bool sameParams = (m_device == device && m_format == format &&
-                       m_msBuffered == msBuffered && m_stream);
-    if (sameParams) {
+void
+SoundOutput::setDeviceFormat(AudioDeviceInfo const & device,
+                             AudioFormat const & format,
+                             unsigned msBuffered)
+{
+    bool const sameParams = (m_device == device
+                          && m_format == format
+                          && m_msBuffered == msBuffered);
+    if (sameParams && m_deviceInitialized) {
         return;
     }
 
-    m_device = device;
-    m_format = format;
+    teardown();
+    m_source     = nullptr;
+    m_device     = device;
+    m_format     = format;
     m_msBuffered = msBuffered;
-
-    // Pre-create the QAudioSink so audio subsystem initialization happens
-    // at startup, not on the first TX frame. Without this, the first audio
-    // chunk can be dropped due to WASAPI (Windows) or PipeWire (Linux)
-    // initialization latency when the device is cold.
-    if (!m_device.isNull()) {
-        // Build 138: track whether this is the FIRST setDeviceFormat
-        // call vs a subsequent device-change. The warmup below crashes
-        // (EXECUTE at 0x0 inside Qt6Multimedia) when applied to a fresh
-        // sink right after the previous one was take().deleteLater()'d
-        // -- evidently Qt's WASAPI shared state still has the old
-        // sink's footprint and start()-ing the new one too early
-        // dispatches through an uninitialized vtable. Repro confirmed
-        // 2026-05-01 against Build 137 / Qt 6.11.0 on the slow pre-i3:
-        // 1st warmup at 01:52:06 succeeded; 2nd (after device change)
-        // crashed. Only warmup on first setup; the audio engine
-        // stays warm from there (Qt 6.11 also has its own warmup).
-        bool const had_prior_stream = static_cast<bool>(m_stream);
-        if (m_stream) {
-            m_tearingDown = true;  // Build 130: gate handleStateChanged
-            m_stream->disconnect(this);
-            m_stream->reset();
-            m_stream->stop();
-            waitForAudioStopped(m_stream.data(),
-                                "SoundOutput::setDeviceFormat");
-            QAudioSink *old = m_stream.take();
-            old->deleteLater();
-            qWarning() << m_tag << "[AudioTeardown] "
-                       << "SoundOutput::setDeviceFormat "
-                       << "deleteLater queued for previous sink";
-            // Build 133: drain the deferred-delete so old destructor
-            // completes before new construction. See SoundInput::start.
-            QCoreApplication::sendPostedEvents(nullptr,
-                                               QEvent::DeferredDelete);
-        }
-        m_stream.reset(new QAudioSink(m_device, m_format));
-        checkStream();
-        m_error = false;
-        connect(m_stream.data(), &QAudioSink::stateChanged, this,
-                &SoundOutput::handleStateChanged);
-        m_tearingDown = false;  // Build 130: new sink wired, allow signals
-        qWarning() << m_tag << "SoundOutput: pre-initializing audio sink"
-                   << "device=" << m_device.description();
-
-        // Build 138: warmup only on FIRST setDeviceFormat call (when
-        // there was no prior sink). On a subsequent device-change the
-        // start()-on-fresh-sink crashes inside Qt6Multimedia. The
-        // audio engine stays warm from the first warmup; Qt 6.11 also
-        // has its own warmup client. See had_prior_stream comment above.
-        if (!had_prior_stream) {
-            qreal const savedVolume = m_stream->volume();
-            m_stream->setVolume(0);
-            QIODevice *push = m_stream->start();
-            if (push) {
-                m_stream->stop();
-                m_stream->setVolume(savedVolume);
-                qWarning() << m_tag << "[AudioWarmup] "
-                           << "WASAPI primed via brief start/stop "
-                           << "(initial setup)";
-            } else {
-                m_stream->setVolume(savedVolume);
-                qWarning() << m_tag << "[AudioWarmup] "
-                           << "start() returned null, WASAPI not primed "
-                           << "(non-fatal)";
-            }
-        } else {
-            qWarning() << m_tag << "[AudioWarmup] "
-                       << "skipped (subsequent setDeviceFormat -- "
-                       << "engine already warm)";
-        }
-    } else {
-        qWarning() << m_tag << "SoundOutput::setDeviceFormat: device is NULL,"
-                   << "skipping sink creation";
-    }
 }
 
 /**
- * @brief Restarts audio output with the specified source.
- * @param source The QIODevice to read audio data from.
+ * @brief Bind a source and (re)start the playback device.
  */
-void SoundOutput::restart(QIODevice *source) {
-    // Race guard: if we're already streaming the same source and the sink
-    // is healthy, ignore re-entrant restart() calls. Multiple GUI-thread
-    // emits of sendMessage can land back-to-back on the audio thread queue
-    // and trigger restart() much more often than there are real TX cycles
-    // (WD4KAV captured 13 restarts in ~12 seconds — JS8 should produce
-    // 3-4 in that window). Each redundant restart destroys-and-rebuilds
-    // (or stop+starts) the QAudioSink, eventually corrupting the Windows
-    // audio backend and aborting the process.
-    if (m_stream && m_source == source &&
-        (m_stream->state() == QAudio::ActiveState ||
-         m_stream->state() == QAudio::IdleState)) {
-        qWarning() << m_tag << "SoundOutput::restart() skipped (already streaming"
-                   << "same source, state=" << (int)m_stream->state() << ")";
+void
+SoundOutput::restart(QIODevice * source)
+{
+    // Race guard: same source already streaming → no-op. Multiple
+    // GUI-thread emits of sendMessage can land back-to-back on the
+    // audio thread queue. Same intent as the prior QAudioSink code.
+    if (m_deviceInitialized
+        && m_source == source
+        && ma_device_is_started(&m_device_ma)) {
         return;
     }
-
-    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
-    qint64 const gapMs = m_lastRestartMs ? (nowMs - m_lastRestartMs) : -1;
-    QAudio::State const preState =
-        m_stream ? m_stream->state() : QAudio::StoppedState;
-    QAudio::Error const preErr =
-        m_stream ? m_stream->error() : QAudio::NoError;
-    m_lastRestartMs = nowMs;
-    qWarning() << m_tag << "SoundOutput::restart() source=" << source
-               << "isOpen=" << (source ? source->isOpen() : false)
-               << "hasStream=" << (m_stream != nullptr)
-               << "preState=" << (int)preState
-               << "preError=" << (int)preErr
-               << "gapSinceLastRestartMs=" << gapMs;
-
-    if (!m_device.isNull()) {
-#ifdef Q_OS_WIN
-        // On Windows, reuse the existing QAudioSink to avoid WASAPI
-        // initialization latency that drops the first audio chunk.
-        // Use stop()+start() to reset the stream without destroying
-        // the IAudioClient.
-        if (m_stream) {
-            m_stream->reset();
-            m_stream->stop();
-        } else {
-            // Fallback: create sink if setDeviceFormat() warmup didn't run
-            m_stream.reset(new QAudioSink(m_device, m_format));
-            checkStream();
-            m_error = false;
-            connect(m_stream.data(), &QAudioSink::stateChanged, this,
-                    &SoundOutput::handleStateChanged);
-        }
-#else
-        // On Linux, always create a fresh QAudioSink. Reusing via
-        // stop()+start() causes Active→Idle oscillation on Qt 6.4 /
-        // PipeWire after several cycles.
-        if (m_stream) {
-            m_tearingDown = true;  // Build 130: gate handleStateChanged
-            m_stream->disconnect(this);
-            m_stream->reset();
-            m_stream->stop();
-            waitForAudioStopped(m_stream.data(), "SoundOutput::restart");
-            QAudioSink *old = m_stream.take();
-            old->deleteLater();
-            qWarning() << m_tag << "[AudioTeardown] "
-                       << "SoundOutput::restart deleteLater queued";
-            // Build 133: drain deferred-delete before new construction.
-            QCoreApplication::sendPostedEvents(nullptr,
-                                               QEvent::DeferredDelete);
-        }
-        m_stream.reset(new QAudioSink(m_device, m_format));
-        qCDebug(soundout_js8)
-            << "SoundOutput::restart Selected audio output format:"
-            << m_stream->format();
-        checkStream();
-        m_error = false;
-        connect(m_stream.data(), &QAudioSink::stateChanged, this,
-                &SoundOutput::handleStateChanged);
-        m_tearingDown = false;  // Build 130: new sink wired
-#endif
-    }
-
-    if (!m_stream) {
-        if (!m_error) {
-            m_error = true; // only signal error once
-            Q_EMIT error(tr("No audio output device configured."));
-        }
-        return;
-    } else {
-        m_error = false;
-    }
-
-    m_stream->setVolume(m_volume);
-
-    // we have to set this before every start on the stream because the
-    // Windows implementation seems to forget the buffer size after a
-    // stop.
-    if (m_msBuffered > 0) {
-        m_stream->setBufferSize(
-            m_stream->format().bytesForDuration(m_msBuffered));
-    }
-
-    m_source = source;
-    m_stream->start(source);
+    buildAndStart(source);
 }
 
-/**
- * @brief Suspends audio output.
- */
-void SoundOutput::suspend() {
-    if (m_stream && QAudio::ActiveState == m_stream->state()) {
-        m_stream->suspend();
-        checkStream();
-    }
-}
-
-/**
- * @brief Resumes audio output.
- */
-void SoundOutput::resume() {
-    if (m_stream && QAudio::SuspendedState == m_stream->state()) {
-        m_stream->resume();
-        checkStream();
-    }
-}
-
-/**
- * @brief Resets the audio output.
- */
-void SoundOutput::reset() {
-    if (m_stream) {
-        m_stream->reset();
-        checkStream();
-    }
-}
-
-/**
- * @brief Stops audio output.
- */
-void SoundOutput::stop() {
-    if (m_stream) {
-        m_stream->reset();
-        m_stream->stop();
-    }
-    // m_stream.reset ();  // XXX in WSJTX, seems like a bug
-    // On Windows, the sink is intentionally kept alive (not destroyed)
-    // to avoid WASAPI re-initialization on the next start().
-}
-
-/**
- * @brief Gets the current attenuation in decibels.
- * @return The attenuation value.
- */
-qreal SoundOutput::attenuation() const {
-    return -(20. * qLn(m_volume) / qLn(10.));
-}
-
-/**
- * @brief Gets the current audio format.
- * @return The QAudioFormat object.
- */
-QAudioFormat SoundOutput::format() const { return m_format; }
-
-bool SoundOutput::isStreaming() const {
-    return m_stream && m_stream->state() != QAudio::StoppedState;
-}
-
-/**
- * @brief Sets the attenuation in decibels.
- * @param a The attenuation value.
- */
-void SoundOutput::setAttenuation(qreal a) {
-    Q_ASSERT(0. <= a && a <= 999.);
-    m_volume = qPow(10.0, -a / 20.0);
-    // qCDebug (soundout_js8) << "SoundOut: attn = " << a << ", vol = " <<
-    // m_volume;
-    if (m_stream) {
-        m_stream->setVolume(m_volume);
-    }
-}
-
-/**
- * @brief Resets the attenuation to zero.
- */
-void SoundOutput::resetAttenuation() {
-    m_volume = 1.;
-    if (m_stream) {
-        m_stream->setVolume(m_volume);
-    }
-}
-
-/**
- * @brief Handles state changes of the audio output.
- * @param newState The new state of the audio output.
- */
-void SoundOutput::handleStateChanged(QAudio::State newState) const {
-    // Build 130: drop already-queued stateChanged signals from a prior
-    // QAudioSink that arrive after disconnect() during teardown but
-    // before the new sink is wired. Without this, m_stream->error()
-    // below could fault inside Qt6Multimedia at +0xea4f / +0x5c7f2 on
-    // a transient/dangling sink.
-    if (m_tearingDown) {
-        qWarning() << m_tag << "[AudioTeardown] "
-                   << "SoundOutput::handleStateChanged ignored newState="
-                   << static_cast<int>(newState) << " (tearingDown=true)";
-        return;
-    }
-
-    const char *stateName = "Unknown";
-    switch (newState) {
-    case QAudio::IdleState:   stateName = "Idle";      break;
-    case QAudio::ActiveState: stateName = "Active";    break;
-    case QAudio::SuspendedState: stateName = "Suspended"; break;
-    case QAudio::StoppedState:   stateName = "Stopped";   break;
-    }
-    qWarning() << m_tag << "SoundOutput state:" << stateName;
-    if (m_stream) {
-        auto err = m_stream->error();
-        if (err != QAudio::NoError)
-            qWarning() << m_tag << "SoundOutput error:" << (int)err;
-    }
-
-    switch (newState) {
-    case QAudio::IdleState:
-        // Wake the sink to prevent permanent underrun (QTBUG-108672).
-        // When the Modulator is in KeepAlive, it has silence data available.
-        // Emit readyRead() on the source to tell the sink to resume pulling.
-        if (m_source)
-            QMetaObject::invokeMethod(m_source, "readyRead");
-        Q_EMIT status(tr("Idle"));
-        break;
-    case QAudio::ActiveState:
-        Q_EMIT status(tr("Sending"));
-        break;
-    case QAudio::SuspendedState:
+void
+SoundOutput::suspend()
+{
+    if (m_deviceInitialized && ma_device_is_started(&m_device_ma)) {
+        ma_device_stop(&m_device_ma);
         Q_EMIT status(tr("Suspended"));
-        break;
-    case QAudio::StoppedState:
-        if (!checkStream()) {
-            Q_EMIT status(tr("Error"));
-        } else {
-            Q_EMIT status(tr("Stopped"));
-        }
-        break;
     }
+}
+
+void
+SoundOutput::resume()
+{
+    if (m_deviceInitialized && !ma_device_is_started(&m_device_ma)) {
+        if (ma_device_start(&m_device_ma) != MA_SUCCESS) {
+            Q_EMIT error(tr("Failed to resume audio output device."));
+        } else {
+            Q_EMIT status(tr("Sending"));
+        }
+    }
+}
+
+/**
+ * @brief Reset is treated as stop — the QAudioSink semantic of
+ * "discard buffered data and idle the stream" maps cleanly onto
+ * ma_device_stop. The next restart() will spin a fresh device.
+ */
+void
+SoundOutput::reset()
+{
+    if (m_deviceInitialized && ma_device_is_started(&m_device_ma)) {
+        ma_device_stop(&m_device_ma);
+    }
+}
+
+void
+SoundOutput::stop()
+{
+    teardown();
+    m_source = nullptr;
+    Q_EMIT status(tr("Stopped"));
+}
+
+qreal
+SoundOutput::attenuation() const
+{
+    return -(20. * std::log(m_volume) / std::log(10.));
+}
+
+bool
+SoundOutput::isStreaming() const
+{
+    return m_deviceInitialized && ma_device_is_started(&m_device_ma);
+}
+
+void
+SoundOutput::setAttenuation(qreal a)
+{
+    Q_ASSERT(0. <= a && a <= 999.);
+    m_volume = std::pow(10.0, -a / 20.0);
+}
+
+void
+SoundOutput::resetAttenuation()
+{
+    m_volume = 1.0;
+}
+
+/**
+ * @brief Destructor. ma_device_uninit is synchronous (joins the
+ * worker), so no closingDown() leak path is needed — Builds 128's
+ * "intentionally leak QAudioSink at process exit" workaround is gone.
+ */
+SoundOutput::~SoundOutput()
+{
+    teardown();
 }
 
 Q_LOGGING_CATEGORY(soundout_js8, "soundout.js8", QtWarningMsg)

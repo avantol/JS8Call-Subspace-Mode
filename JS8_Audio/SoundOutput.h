@@ -2,34 +2,45 @@
 #ifndef SOUNDOUT_H__
 #define SOUNDOUT_H__
 
-#include <QAudioDevice>
-#include <QAudioFormat>
-#include <QAudioSink>
+#include "JS8_Audio/AudioDeviceInfo.h"
+#include "JS8_Audio/AudioFormat.h"
+#include "JS8_Audio/miniaudio/miniaudio.h"
+
 #include <QObject>
 #include <QString>
 
-// An instance of this sends audio data to a specified soundcard.
+class QIODevice;
 
+// Streams audio samples from a QIODevice source (the Modulator) to the
+// system's selected output device.
+//
+// Build 141 swapped this from QAudioSink (Qt6Multimedia) to miniaudio's
+// ma_device. Same rationale as SoundInput (Build 140): Qt 6.9.x WASAPI
+// teardown races caused a long crash family. ma_device_uninit() is
+// synchronous; the busywait, deferred-delete drain, m_tearingDown gate,
+// platform-specific stop-vs-recreate logic, and Build 138 first-only
+// warmup are all gone.
 class SoundOutput : public QObject {
     Q_OBJECT;
 
   public:
-    // `tag` is used as the log prefix for all qWarning lines so TX audio
-    // and notification-audio instances are distinguishable in diag logs.
-    // Default matches the historical "[FT2-TX]" for source compatibility.
-    explicit SoundOutput(QString const &tag = QStringLiteral("FT2-TX"))
+    // `tag` is the log prefix so TX audio and notification-audio
+    // instances are distinguishable. Default matches the historical
+    // "[FT2-TX]" for source compatibility.
+    explicit SoundOutput(QString const & tag = QStringLiteral("FT2-TX"))
         : m_tag("[" + tag + "]") {}
 
     ~SoundOutput() override;
 
-    qreal attenuation() const;
-    QAudioFormat format() const;
-    bool isStreaming() const;
+    qreal       attenuation() const;
+    AudioFormat format() const { return m_format; }
+    bool        isStreaming() const;
 
   public Q_SLOTS:
-    void setFormat(QAudioDevice const &device, unsigned channels,
+    void setFormat(AudioDeviceInfo const & device, unsigned channels,
                    unsigned msBuffered = 0u);
-    void setDeviceFormat(QAudioDevice const &device, QAudioFormat const &format,
+    void setDeviceFormat(AudioDeviceInfo const & device,
+                         AudioFormat const & format,
                          unsigned msBuffered = 0u);
     void restart(QIODevice *);
     void suspend();
@@ -44,28 +55,23 @@ class SoundOutput : public QObject {
     void status(QString message) const;
 
   private:
-    bool checkStream() const;
+    static void s_dataCallback(ma_device * device,
+                               void * pOutput,
+                               void const * pInput,
+                               ma_uint32 frameCount);
+    void onPlayback(void * pOutput, ma_uint32 frameCount);
 
-  private Q_SLOTS:
-    void handleStateChanged(QAudio::State) const;
+    void teardown();   // ma_device_uninit guard
+    bool buildAndStart(QIODevice * source);
 
-  private:
-    QString m_tag;
-    QAudioDevice m_device;
-    QScopedPointer<QAudioSink> m_stream;
-    QIODevice *m_source = nullptr;  // current pull-mode source device
-    QAudioFormat m_format;
-    unsigned m_msBuffered = 0u;
-    qreal m_volume = 1.0;
-    bool m_error = false;
-    qint64 m_lastRestartMs = 0;  // monotonic ms at previous restart() entry
-
-    // Build 130: gate handleStateChanged() during teardown / re-init so
-    // already-queued stateChanged signals from the prior QAudioSink that
-    // arrive after our disconnect() but before the new sink is wired
-    // don't fault inside Qt6Multimedia (calling m_stream->error() etc.
-    // on a transient/dangling sink). Same mechanism added to SoundInput.
-    bool m_tearingDown = false;
+    QString         m_tag;
+    AudioDeviceInfo m_device;
+    AudioFormat     m_format;
+    unsigned        m_msBuffered = 0u;
+    qreal           m_volume     = 1.0;
+    QIODevice *     m_source     = nullptr;
+    ma_device       m_device_ma  {};
+    bool            m_deviceInitialized = false;
 };
 
 #endif
