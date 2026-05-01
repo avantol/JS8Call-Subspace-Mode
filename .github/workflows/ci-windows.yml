@@ -89,25 +89,33 @@ jobs:
         cp local/hamlib/bin/libhamlib-4.dll build/JS8Call/
         cp local/hamlib/bin/libusb-1.0.dll build/JS8Call/
 
-        # Build 136: recursively bundle all MSYS2 runtime DLL dependencies.
-        # MSYS2's Qt6 packages dynamically link to /mingw64/bin runtime
-        # libraries (libzstd, libb2, libicu, libharfbuzz, etc.) that
-        # windeployqt does not copy. Walk the PE import tables of the
-        # JS8Call.exe AND every Qt plugin bundled by windeployqt, copy
-        # any /mingw64/bin DLL they reference, recurse on those DLLs.
-        copy_deps() {
+        # Build 137: recursively bundle MSYS2 runtime DLL dependencies.
+        # Build 136's walker was buggy -- it gated recursion on
+        # "destination doesn't already exist", so when windeployqt had
+        # already placed a Qt6 DLL we'd skip BOTH the copy AND the
+        # recursion, missing every transitive dep of that DLL. Result:
+        # 27 bundled DLLs (just direct + windeployqt's set), libzstd /
+        # libb2 / libbrotli all missed.
+        # This version keeps the two decisions separate: always walk
+        # the source DLL's imports (with a visited-set to prevent
+        # cycles); only copy if destination is absent.
+        visited_dir=$(mktemp -d)
+        walk_deps() {
             local pe="$1"
             local target_dir="$2"
+            local key=$(basename "$pe")
+            [ -e "$visited_dir/$key" ] && return
+            touch "$visited_dir/$key"
             objdump -p "$pe" 2>/dev/null | awk '/DLL Name:/{print $3}' | while read dll; do
                 local src="/mingw64/bin/$dll"
                 local dst="$target_dir/$dll"
-                if [ -f "$src" ] && [ ! -f "$dst" ]; then
-                    cp "$src" "$dst"
-                    copy_deps "$src" "$target_dir"
+                if [ -f "$src" ]; then
+                    [ -f "$dst" ] || cp "$src" "$dst"
+                    walk_deps "$src" "$target_dir"
                 fi
             done
         }
-        copy_deps build/JS8Call/JS8Call.exe build/JS8Call/
+        walk_deps build/JS8Call/JS8Call.exe build/JS8Call/
         # Plugins copied by windeployqt have their own dependencies too
         for plugin in build/JS8Call/platforms/*.dll \
                       build/JS8Call/imageformats/*.dll \
@@ -116,8 +124,17 @@ jobs:
                       build/JS8Call/tls/*.dll \
                       build/JS8Call/iconengines/*.dll \
                       build/JS8Call/networkinformation/*.dll; do
-            [ -f "$plugin" ] && copy_deps "$plugin" build/JS8Call/
+            [ -f "$plugin" ] && walk_deps "$plugin" build/JS8Call/
         done
+        # Walk again on Qt6*.dll because they were placed by windeployqt
+        # before our walk started (already-existed case skipped recursion
+        # under Build 136's broken walker). visited-set check makes
+        # this idempotent now, but explicit re-walk gives belt-and-
+        # suspenders coverage.
+        for qtdll in build/JS8Call/Qt6*.dll; do
+            [ -f "$qtdll" ] && walk_deps "$qtdll" build/JS8Call/
+        done
+        rm -rf "$visited_dir"
         echo "=== Bundled DLLs ==="
         ls build/JS8Call/*.dll | wc -l
         ls build/JS8Call/*.dll
