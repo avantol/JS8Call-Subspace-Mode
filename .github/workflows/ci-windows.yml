@@ -88,10 +88,39 @@ jobs:
         cp build/JS8Call/LICENSE build/JS8Call/ 2>/dev/null || true
         cp local/hamlib/bin/libhamlib-4.dll build/JS8Call/
         cp local/hamlib/bin/libusb-1.0.dll build/JS8Call/
-        # Overwrite Qt's runtime DLLs with MSYS2's (must match GCC 15 that compiled the exe)
-        cp /mingw64/bin/libgcc_s_seh-1.dll build/JS8Call/
-        cp /mingw64/bin/libstdc++-6.dll build/JS8Call/
-        cp /mingw64/bin/libwinpthread-1.dll build/JS8Call/
+
+        # Build 136: recursively bundle all MSYS2 runtime DLL dependencies.
+        # MSYS2's Qt6 packages dynamically link to /mingw64/bin runtime
+        # libraries (libzstd, libb2, libicu, libharfbuzz, etc.) that
+        # windeployqt does not copy. Walk the PE import tables of the
+        # JS8Call.exe AND every Qt plugin bundled by windeployqt, copy
+        # any /mingw64/bin DLL they reference, recurse on those DLLs.
+        copy_deps() {
+            local pe="$1"
+            local target_dir="$2"
+            objdump -p "$pe" 2>/dev/null | awk '/DLL Name:/{print $3}' | while read dll; do
+                local src="/mingw64/bin/$dll"
+                local dst="$target_dir/$dll"
+                if [ -f "$src" ] && [ ! -f "$dst" ]; then
+                    cp "$src" "$dst"
+                    copy_deps "$src" "$target_dir"
+                fi
+            done
+        }
+        copy_deps build/JS8Call/JS8Call.exe build/JS8Call/
+        # Plugins copied by windeployqt have their own dependencies too
+        for plugin in build/JS8Call/platforms/*.dll \
+                      build/JS8Call/imageformats/*.dll \
+                      build/JS8Call/multimedia/*.dll \
+                      build/JS8Call/styles/*.dll \
+                      build/JS8Call/tls/*.dll \
+                      build/JS8Call/iconengines/*.dll \
+                      build/JS8Call/networkinformation/*.dll; do
+            [ -f "$plugin" ] && copy_deps "$plugin" build/JS8Call/
+        done
+        echo "=== Bundled DLLs ==="
+        ls build/JS8Call/*.dll | wc -l
+        ls build/JS8Call/*.dll
 
     - name: Extract Version
       id: version
