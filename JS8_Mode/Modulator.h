@@ -3,7 +3,6 @@
 
 #include "JS8_Audio/AudioDevice.h"
 
-#include <QAudio>
 #include <QPointer>
 
 class SoundOutput;
