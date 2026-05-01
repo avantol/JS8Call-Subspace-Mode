@@ -514,7 +514,7 @@ class UI_Constructor : public QMainWindow {
 
     Q_SIGNAL void decodedLineReady(QByteArray t);
     Q_SIGNAL void playNotification(const QString &name);
-    Q_SIGNAL void initializeNotificationAudioOutputStream(const QAudioDevice &,
+    Q_SIGNAL void initializeNotificationAudioOutputStream(AudioDeviceInfo const &,
                                                           unsigned) const;
     Q_SIGNAL void initializeAudioOutputStream(AudioDeviceInfo, unsigned channels,
                                               unsigned msBuffered) const;

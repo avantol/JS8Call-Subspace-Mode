@@ -39,26 +39,19 @@ NotificationAudio::NotificationAudio(QObject *parent) : QObject{parent} {}
 NotificationAudio::~NotificationAudio() = default;
 
 /**
- * @brief Set the audio output device for all notification effects.
- *
- * The `msBuffer` parameter is accepted for API compatibility with the
- * previous SoundOutput-based implementation but is ignored -- QSoundEffect
- * manages its own buffering internally.
- *
- * @param device The QAudioDevice to use.
- * @param msBuffer Unused.
+ * @brief Set the notification audio device. Build 142: stored only
+ * for the diag log and the play()-side null guard. The native
+ * platform paths (PlaySoundW / paplay / afplay) always route to the
+ * system default; the rare QSoundEffect fallback also uses default
+ * because Qt6Multimedia coupling is being removed in Build 143.
+ * Per-app notification device routing is a separate feature.
  */
-void NotificationAudio::setDevice(QAudioDevice const &device,
+void NotificationAudio::setDevice(AudioDeviceInfo const &device,
                                   unsigned const msBuffer) {
     Q_UNUSED(msBuffer);
     m_device = device;
-    qWarning() << "[NotificationAudio] setDevice:" << m_device.description()
+    qWarning() << "[NotificationAudio] setDevice:" << m_device.description
                << "isNull=" << m_device.isNull();
-
-    // Push the new device to every cached effect.
-    for (auto *effect : std::as_const(m_effects)) {
-        effect->setAudioDevice(m_device);
-    }
 }
 
 /**
@@ -163,7 +156,10 @@ void NotificationAudio::play(QString const &filePath) {
     auto *effect = m_effects.value(filePath, nullptr);
     bool justCreated = false;
     if (!effect) {
-        effect = new QSoundEffect(m_device, this);
+        // Build 142: bind to system default audio device. We no longer
+        // hold a QAudioDevice (m_device is now AudioDeviceInfo). Build
+        // 143 drops QSoundEffect entirely.
+        effect = new QSoundEffect(this);
         effect->setSource(QUrl::fromLocalFile(filePath));
         effect->setLoopCount(1);
         effect->setVolume(1.0f);

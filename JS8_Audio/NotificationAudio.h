@@ -1,7 +1,8 @@
 #ifndef NOTIFICATIONAUDIO_H
 #define NOTIFICATIONAUDIO_H
 
-#include <QAudioDevice>
+#include "JS8_Audio/AudioDeviceInfo.h"
+
 #include <QMap>
 #include <QObject>
 #include <QString>
@@ -27,12 +28,12 @@ class NotificationAudio : public QObject {
     ~NotificationAudio();
 
   public slots:
-    void setDevice(QAudioDevice const &device, unsigned msBuffer = 0);
+    void setDevice(AudioDeviceInfo const &device, unsigned msBuffer = 0);
     void play(QString const &filePath);
     void stop();
 
   private:
-    QAudioDevice m_device;
+    AudioDeviceInfo m_device;
     QMap<QString, QSoundEffect *> m_effects;
     // Build 123: per-file in-flight subprocess (paplay on Linux,
     // afplay on macOS) so a new play() can kill the prior one for

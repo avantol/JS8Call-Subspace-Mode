@@ -650,36 +650,13 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     m_notificationAudioThread.start(m_notificationAudioThreadPriority);
     m_decoder.start(m_decoderThreadPriority);
 
-    // Build 140 bridge: Configuration still hands us a QAudioDevice
-    // (QtMultimedia); SoundInput now takes an AudioDeviceInfo (miniaudio).
-    // Carry across the description and isDefault flag so SoundInput can
-    // resolve the device by name via miniaudio enumeration. The hex-id
-    // round-trip arrives in Build 142 when Configuration enumerates with
-    // miniaudio directly.
-    {
-        auto const & qDev = m_config.audio_input_device();
-        AudioDeviceInfo info;
-        info.description = qDev.description();
-        info.mode        = AudioDeviceInfo::Input;
-        info.isDefault   = qDev.isDefault();
-        Q_EMIT startAudioInputStream(info,
-                                     m_framesAudioInputBuffered, m_detector,
-                                     m_config.audio_input_channel());
-    }
-    {
-        // Build 141 bridge: QAudioDevice → AudioDeviceInfo. SoundOutput
-        // is on miniaudio; Configuration still hands us a QAudioDevice
-        // until Build 142.
-        auto const & qDev = m_config.audio_output_device();
-        AudioDeviceInfo info;
-        info.description = qDev.description();
-        info.mode        = AudioDeviceInfo::Output;
-        info.isDefault   = qDev.isDefault();
-        Q_EMIT initializeAudioOutputStream(
-            info,
-            AudioDevice::Mono == m_config.audio_output_channel() ? 1 : 2,
-            m_msAudioOutputBuffered);
-    }
+    Q_EMIT startAudioInputStream(m_config.audio_input_device(),
+                                 m_framesAudioInputBuffered, m_detector,
+                                 m_config.audio_input_channel());
+    Q_EMIT initializeAudioOutputStream(
+        m_config.audio_output_device(),
+        AudioDevice::Mono == m_config.audio_output_channel() ? 1 : 2,
+        m_msAudioOutputBuffered);
     Q_EMIT initializeNotificationAudioOutputStream(
         m_config.notification_audio_output_device(), m_msAudioOutputBuffered);
     Q_EMIT transmitFrequency(freq() + m_XIT);

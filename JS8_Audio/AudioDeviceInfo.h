@@ -18,8 +18,9 @@ struct AudioDeviceInfo
 
     QByteArray id;
     QString    description;
-    Mode       mode      = Input;
-    bool       isDefault = false;
+    Mode       mode         = Input;
+    bool       isDefault    = false;
+    int        maxChannels  = 1; // 1 = mono only, >=2 = stereo / multi-channel pickoffs
 
     bool isNull() const { return id.isEmpty(); }
 

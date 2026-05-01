@@ -13,9 +13,10 @@
 #include <QLineEdit>
 #include <QObject>
 
+#include "JS8_Audio/AudioDeviceInfo.h"
+
 class QSettings;
 class QWidget;
-class QAudioDevice;
 class QString;
 class QDir;
 class Bands;
@@ -78,11 +79,11 @@ class Configuration final : public QObject {
     QDir temp_dir() const;
     QDir writeable_data_dir() const;
 
-    QAudioDevice const &audio_input_device() const;
+    AudioDeviceInfo const &audio_input_device() const;
     AudioDevice::Channel audio_input_channel() const;
-    QAudioDevice const &audio_output_device() const;
+    AudioDeviceInfo const &audio_output_device() const;
     AudioDevice::Channel audio_output_channel() const;
-    QAudioDevice const &notification_audio_output_device() const;
+    AudioDeviceInfo const &notification_audio_output_device() const;
 
     bool notifications_enabled() const;
     QString notification_path(const QString &key) const;
