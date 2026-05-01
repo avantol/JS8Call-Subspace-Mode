@@ -150,6 +150,18 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
     // chunk can be dropped due to WASAPI (Windows) or PipeWire (Linux)
     // initialization latency when the device is cold.
     if (!m_device.isNull()) {
+        // Build 138: track whether this is the FIRST setDeviceFormat
+        // call vs a subsequent device-change. The warmup below crashes
+        // (EXECUTE at 0x0 inside Qt6Multimedia) when applied to a fresh
+        // sink right after the previous one was take().deleteLater()'d
+        // -- evidently Qt's WASAPI shared state still has the old
+        // sink's footprint and start()-ing the new one too early
+        // dispatches through an uninitialized vtable. Repro confirmed
+        // 2026-05-01 against Build 137 / Qt 6.11.0 on the slow pre-i3:
+        // 1st warmup at 01:52:06 succeeded; 2nd (after device change)
+        // crashed. Only warmup on first setup; the audio engine
+        // stays warm from there (Qt 6.11 also has its own warmup).
+        bool const had_prior_stream = static_cast<bool>(m_stream);
         if (m_stream) {
             m_tearingDown = true;  // Build 130: gate handleStateChanged
             m_stream->disconnect(this);
@@ -176,27 +188,31 @@ void SoundOutput::setDeviceFormat(QAudioDevice const &device,
         qWarning() << m_tag << "SoundOutput: pre-initializing audio sink"
                    << "device=" << m_device.description();
 
-        // Build 129: actually warm WASAPI by briefly starting the sink
-        // and immediately stopping. Without this, IAudioClient::Initialize
-        // is deferred to the first real start() (the first TX), which can
-        // drop the first audio chunk on cold hardware. Set volume to 0
-        // first so any incidental output during the brief start window is
-        // silent. Build 60/61's "pre-create" only constructed the C++
-        // object but never called start(), so it never actually warmed
-        // WASAPI -- this fixes that.
-        qreal const savedVolume = m_stream->volume();
-        m_stream->setVolume(0);
-        QIODevice *push = m_stream->start();
-        if (push) {
-            m_stream->stop();
-            m_stream->setVolume(savedVolume);
-            qWarning() << m_tag << "[AudioWarmup] "
-                       << "WASAPI primed via brief start/stop";
+        // Build 138: warmup only on FIRST setDeviceFormat call (when
+        // there was no prior sink). On a subsequent device-change the
+        // start()-on-fresh-sink crashes inside Qt6Multimedia. The
+        // audio engine stays warm from the first warmup; Qt 6.11 also
+        // has its own warmup client. See had_prior_stream comment above.
+        if (!had_prior_stream) {
+            qreal const savedVolume = m_stream->volume();
+            m_stream->setVolume(0);
+            QIODevice *push = m_stream->start();
+            if (push) {
+                m_stream->stop();
+                m_stream->setVolume(savedVolume);
+                qWarning() << m_tag << "[AudioWarmup] "
+                           << "WASAPI primed via brief start/stop "
+                           << "(initial setup)";
+            } else {
+                m_stream->setVolume(savedVolume);
+                qWarning() << m_tag << "[AudioWarmup] "
+                           << "start() returned null, WASAPI not primed "
+                           << "(non-fatal)";
+            }
         } else {
-            m_stream->setVolume(savedVolume);
             qWarning() << m_tag << "[AudioWarmup] "
-                       << "start() returned null, WASAPI not primed "
-                       << "(non-fatal -- first TX will cold-start)";
+                       << "skipped (subsequent setDeviceFormat -- "
+                       << "engine already warm)";
         }
     } else {
         qWarning() << m_tag << "SoundOutput::setDeviceFormat: device is NULL,"
