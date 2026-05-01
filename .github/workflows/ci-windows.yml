@@ -26,7 +26,6 @@ jobs:
           git base-devel make unzip
         pacboy: >-
           toolchain:p
-          fc:p
           cmake:p
           ninja:p
           libusb:p
@@ -68,7 +67,6 @@ jobs:
         cmake -B build \
           -DCMAKE_PREFIX_PATH="${GITHUB_WORKSPACE}/local/hamlib;${MSYSTEM_PREFIX}" \
           -DCMAKE_BUILD_TYPE=${{ inputs.build-type || 'Release' }} \
-          -DCMAKE_Fortran_FLAGS="-static-libgfortran -static-libquadmath" \
           -DFFTW3F_LIBRARY=/mingw64/lib/libfftw3f.a
 
     - name: Build
