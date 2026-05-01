@@ -36,14 +36,14 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        # Build 132 (revised): aqt has no win64_mingw binary for Qt
-        # 6.11.0 yet ("Failed to locate XML data for Qt version '6.11.0'")
-        # so reverting to 6.10.3 (known good from Build 131). We still
-        # get the WASAPI shutdown-of-sink-streams + harden-worker-thread
-        # fixes from the 6.9 -> 6.10 jump. The additional 6.11.0 fixes
-        # (wrap AudioDeviceFormat into a future, etc.) will have to wait
-        # until MinGW binaries ship for 6.11.0 or later.
-        version: '6.10.3'
+        # Build 134: retry Qt 6.11.0 with newer aqt. Build 132's attempt
+        # failed because the default aqt version's metadata didn't yet
+        # know about 6.11.0. The actual binaries DO exist at
+        # download.qt.io/.../qt6_6110_mingw/ -- the qt.qt6.6110.addons.
+        # qtmultimedia.win64_mingw/ directory was confirmed present.
+        # Pinning aqt 3.3.x which has updated metadata.
+        aqtversion: '==3.3.*'
+        version: '6.11.0'
         target: 'desktop'
         arch: 'win64_mingw'
         modules: 'qtmultimedia qtserialport'
