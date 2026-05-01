@@ -1079,7 +1079,13 @@ void UI_Constructor::openSettings(int tab) {
 
         if (m_config.restart_audio_input() &&
             !m_config.audio_input_device().isNull()) {
-            Q_EMIT startAudioInputStream(m_config.audio_input_device(),
+            // Build 140 bridge: QAudioDevice → AudioDeviceInfo (see UI_Constructor.cpp).
+            auto const & qDev = m_config.audio_input_device();
+            AudioDeviceInfo info;
+            info.description = qDev.description();
+            info.mode        = AudioDeviceInfo::Input;
+            info.isDefault   = qDev.isDefault();
+            Q_EMIT startAudioInputStream(info,
                                          m_framesAudioInputBuffered, m_detector,
                                          m_config.audio_input_channel());
         }

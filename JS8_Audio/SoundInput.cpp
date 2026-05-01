@@ -1,84 +1,112 @@
 /**
- * @file soundin.cpp
- * @brief Implementation of SoundInput class
+ * @file SoundInput.cpp
+ * @brief miniaudio-based capture (Build 140, replaces QAudioSource)
  */
 #include "SoundInput.h"
-#include "AudioTeardown.h"
-#include "JS8_Main/DriftingDateTime.h"
 
-#include <QAudioFormat>
 #include <QCoreApplication>
 #include <QLoggingCategory>
-#include <QSysInfo>
+#include <cstring>
 
 #include "moc_SoundInput.cpp"
 
 Q_DECLARE_LOGGING_CATEGORY(soundin_js8)
 
-/**
- * @brief Checks for audio errors and emits appropriate error messages.
- *
- * @return true
- * @return false
- */
-bool SoundInput::audioError() const {
-    bool result(true);
+namespace {
 
-    Q_ASSERT_X(m_stream, "SoundInput", "programming error");
-    if (m_stream) {
-        switch (m_stream->error()) {
-        case QAudio::OpenError:
-            Q_EMIT error(
-                tr("An error opening the audio input device has occurred."));
-            break;
+// Resolve an AudioDeviceInfo to a concrete ma_device_id by enumerating
+// capture devices and matching on either the hex-encoded id (preferred,
+// available once Configuration is on miniaudio in Build 142) or the
+// human-readable description (the Build 140 bridge while Configuration
+// still uses QMediaDevices). Returns true on match; on miss the caller
+// should fall back to miniaudio's default capture device.
+bool
+resolveCaptureDevice(AudioDeviceInfo const & info,
+                     ma_device_id & outId)
+{
+    ma_context ctx;
+    if (ma_context_init(nullptr, 0, nullptr, &ctx) != MA_SUCCESS) return false;
 
-        case QAudio::IOError:
-            Q_EMIT error(tr(
-                "An error occurred during read from the audio input device."));
-            break;
+    ma_device_info * playInfos = nullptr;
+    ma_uint32        playCount = 0;
+    ma_device_info * capInfos  = nullptr;
+    ma_uint32        capCount  = 0;
+    bool             matched   = false;
 
-        case QAudio::UnderrunError:
-            // Non-fatal: input underruns happen on consumer hardware.
-            // Logging only — do not emit error (which would kill the stream).
-            qWarning() << "SoundInput: underrun detected, continuing...";
-            result = false;
-            break;
+    if (ma_context_get_devices(&ctx, &playInfos, &playCount, &capInfos, &capCount) == MA_SUCCESS) {
+        QByteArray const wantedId = info.id;
+        QString    const wantedName = info.description;
 
-        case QAudio::FatalError:
-            Q_EMIT error(tr("Non-recoverable error, audio input device not "
-                            "usable at this time."));
-            break;
+        for (ma_uint32 i = 0; i < capCount; ++i) {
+            QByteArray const thisId
+                = QByteArray(reinterpret_cast<char const *>(&capInfos[i].id),
+                             sizeof(ma_device_id)).toHex();
+            QString const thisName = QString::fromUtf8(capInfos[i].name);
 
-        case QAudio::NoError:
-            result = false;
-            break;
+            bool const idMatch   = !wantedId.isEmpty() && wantedId == thisId;
+            bool const nameMatch = !wantedName.isEmpty() && wantedName == thisName;
+
+            if (idMatch || nameMatch) {
+                outId = capInfos[i].id;
+                matched = true;
+                break;
+            }
         }
     }
-    return result;
+
+    ma_context_uninit(&ctx);
+    return matched;
+}
+
+} // namespace
+
+/**
+ * @brief miniaudio capture callback. Forwards to the SoundInput
+ * instance whose ma_device this is. Runs on miniaudio's worker thread,
+ * NOT on the GUI or audio QThread.
+ */
+void
+SoundInput::s_dataCallback(ma_device * device,
+                           void * /* pOutput */,
+                           void const * pInput,
+                           ma_uint32    frameCount)
+{
+    if (auto * self = static_cast<SoundInput *>(device->pUserData)) {
+        self->onCapture(pInput, frameCount);
+    }
+}
+
+void
+SoundInput::onCapture(void const * pInput, ma_uint32 frameCount)
+{
+    if (!m_sink || frameCount == 0) return;
+
+    qint64 const bytes = static_cast<qint64>(frameCount) * m_sink->bytesPerFrame();
+    m_sink->write(static_cast<char const *>(pInput), bytes);
 }
 
 /**
  * @brief Starts audio input from the specified device.
- *
- * @param device The QAudioDevice to use for input.
- * @param framesPerBuffer The number of frames per buffer.
- * @param sink The AudioDevice sink to write audio data to.
- * @param channel The audio channel configuration (Mono or Stereo).
  */
-void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
-                       AudioDevice *sink, AudioDevice::Channel channel) {
+void
+SoundInput::start(AudioDeviceInfo const & device,
+                  int                    framesPerBuffer,
+                  AudioDevice *          sink,
+                  AudioDevice::Channel   channel)
+{
     Q_ASSERT(sink);
 
-    // Idempotent guard: if we're already streaming the same device/channel
-    // into the same sink and the stream is healthy, do nothing. Prevents
-    // the destroy-and-rebuild churn that happens when the GUI emits
+    // Idempotent guard: skip rebuild if the same device/channel/sink/buffer
+    // is requested again and the stream is already running. Prevents the
+    // destroy-and-rebuild churn that happens when the GUI emits
     // startAudioInputStream more than once during init or settings reload.
-    if (m_stream && m_sink == sink && m_lastDevice == device &&
-        m_lastChannel == channel) {
-        auto const s = m_stream->state();
-        if (s == QAudio::ActiveState || s == QAudio::IdleState) {
-            return;
-        }
+    if (m_deviceInitialized
+        && m_sink == sink
+        && m_lastDevice == device
+        && m_lastChannel == channel
+        && m_lastFramesPerBuffer == framesPerBuffer
+        && ma_device_is_started(&m_device)) {
+        return;
     }
 
     stop();
@@ -86,196 +114,92 @@ void SoundInput::start(QAudioDevice const &device, int framesPerBuffer,
     m_sink = sink;
     m_lastDevice = device;
     m_lastChannel = channel;
+    m_lastFramesPerBuffer = framesPerBuffer;
 
-    QAudioFormat format(device.preferredFormat());
-    //  qCDebug (soundin_js8) << "Preferred audio input format:" << format;
-    format.setSampleFormat(QAudioFormat::Int16);
-    format.setChannelCount(AudioDevice::Mono == channel ? 1 : 2);
-    format.setSampleRate(48000);
-    if (!format.isValid()) {
-        Q_EMIT error(tr("Requested input audio format is not valid."));
-        return;
-    }
-
-    if (!device.isFormatSupported(format)) {
-        //      qCDebug (soundin_js8) << "Nearest supported audio format:" <<
-        //      device.nearestFormat (format);
-        Q_EMIT error(
-            tr("Requested input audio format is not supported on device."));
-        return;
-    }
-    //  qCDebug (soundin_js8) << "Selected audio input format:" << format;
-
-    if (m_stream) {
-        m_tearingDown = true;  // Build 130: drop in-flight queued signals
-        m_stream->disconnect(this);
-        m_stream->stop();
-        waitForAudioStopped(m_stream.data(), "SoundInput::start");
-        QAudioSource *old = m_stream.take();
-        old->deleteLater();
-        qWarning() << "[AudioTeardown] SoundInput::start "
-                   << "deleteLater queued for previous source";
-        // Build 133: synchronously drain the deferred-delete event so the
-        // OLD source's destructor runs BEFORE we construct the new one.
-        // Without this, new-construction can race old-destruction in Qt's
-        // internal audio state, faulting at Qt6Multimedia.dll+0xfd4f
-        // (READ at sentinel) or 0x0 (EXECUTE through null vtable). Only
-        // QEvent::DeferredDelete is processed -- not GUI input or paints
-        // -- so no re-entry risk.
-        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-    }
-    m_stream.reset(new QAudioSource{device, format});
-    if (audioError()) {
-        m_tearingDown = false;
-        return;
-    }
-
-    connect(m_stream.data(), &QAudioSource::stateChanged, this,
-            &SoundInput::handleStateChanged);
-
-    // Build 130: new source fully wired -- safe to allow handleStateChanged
-    // through again. Any queued events from the OLD source delivered after
-    // this point are still safe to drop, but we'd rather process events on
-    // the NEW source.
-    m_tearingDown = false;
-
-    m_stream->setBufferSize(m_stream->format().bytesForFrames(framesPerBuffer));
-    if (sink->initialize(QIODevice::WriteOnly, channel)) {
-        m_stream->start(sink);
-        audioError();
-    } else {
+    if (!sink->initialize(QIODevice::WriteOnly, channel)) {
         Q_EMIT error(tr("Failed to initialize audio sink device"));
-    }
-}
-
-/**
- * @brief Suspends audio input.
- */
-void SoundInput::suspend() {
-    if (m_stream) {
-        // Stop instead of suspend — more reliable on Linux and macOS
-        m_stream->stop();
-        audioError();
-    }
-}
-
-/**
- * @brief Resumes audio input.
- */
-void SoundInput::resume() {
-    if (m_sink) {
-        m_sink->reset();
-    }
-
-    if (m_stream) {
-        // Skip if the stream is already running. Prevents the
-        // "QAudioSource::start() called while already started" warning
-        // (and the Windows audio backend instability that warning
-        // sometimes correlates with) when monitor(true) fires shortly
-        // after a fresh start() that is already streaming.
-        auto const s = m_stream->state();
-        if (s == QAudio::ActiveState || s == QAudio::IdleState) {
-            return;
-        }
-        // Restart instead of resume — more reliable on Linux and macOS
-        m_stream->start(m_sink);
-        audioError();
-    }
-}
-
-/**
- * @brief Handles state changes of the audio input.
- * @param newState The new state of the audio input.
- */
-void SoundInput::handleStateChanged(QAudio::State newState) const {
-    // Build 130: drop already-queued stateChanged signals from the prior
-    // QAudioSource that arrive after disconnect() during teardown but
-    // before the new source is wired. audioError() below would otherwise
-    // call m_stream->error() on a transient/dangling source and fault
-    // inside Qt6Multimedia at +0x5c7f2 (Build 125/127/129 minidumps).
-    if (m_tearingDown) {
-        qWarning() << "[AudioTeardown] SoundInput::handleStateChanged "
-                   << "ignored newState=" << static_cast<int>(newState)
-                   << " (tearingDown=true)";
         return;
     }
 
-    // qCDebug (soundin_js8) << "SoundInput::handleStateChanged: newState:" <<
-    // newState;
+    ma_device_id deviceId;
+    bool const haveDevice = resolveCaptureDevice(device, deviceId);
 
-    switch (newState) {
-    case QAudio::IdleState:
-        Q_EMIT status(tr("Idle"));
-        break;
+    ma_device_config cfg = ma_device_config_init(ma_device_type_capture);
+    cfg.capture.pDeviceID = haveDevice ? &deviceId : nullptr;  // null → default
+    cfg.capture.format    = ma_format_s16;
+    cfg.capture.channels  = (channel == AudioDevice::Mono) ? 1 : 2;
+    cfg.sampleRate        = 48000;
+    cfg.periodSizeInFrames = static_cast<ma_uint32>(framesPerBuffer);
+    cfg.dataCallback      = &SoundInput::s_dataCallback;
+    cfg.pUserData         = this;
 
-    case QAudio::ActiveState:
-        Q_EMIT status(tr("Receiving"));
-        break;
+    if (ma_device_init(nullptr, &cfg, &m_device) != MA_SUCCESS) {
+        Q_EMIT error(tr("Failed to initialize audio input device."));
+        return;
+    }
+    m_deviceInitialized = true;
 
-    case QAudio::SuspendedState:
+    if (ma_device_start(&m_device) != MA_SUCCESS) {
+        Q_EMIT error(tr("Failed to start audio input device."));
+        ma_device_uninit(&m_device);
+        m_deviceInitialized = false;
+        return;
+    }
+
+    Q_EMIT status(tr("Receiving"));
+}
+
+/**
+ * @brief Suspends audio input. miniaudio's ma_device_stop() is
+ * deterministic — it stops the device and joins its worker before
+ * returning. ma_device_start() resumes it.
+ */
+void
+SoundInput::suspend()
+{
+    if (m_deviceInitialized) {
+        ma_device_stop(&m_device);
         Q_EMIT status(tr("Suspended"));
-        break;
+    }
+}
 
-    case QAudio::StoppedState:
-        if (audioError()) {
-            Q_EMIT status(tr("Error"));
+void
+SoundInput::resume()
+{
+    if (m_sink) m_sink->reset();
+
+    if (m_deviceInitialized && !ma_device_is_started(&m_device)) {
+        if (ma_device_start(&m_device) != MA_SUCCESS) {
+            Q_EMIT error(tr("Failed to resume audio input device."));
         } else {
-            Q_EMIT status(tr("Stopped"));
+            Q_EMIT status(tr("Receiving"));
         }
-        break;
     }
 }
 
 /**
- * @brief Stops audio input.
+ * @brief Stops audio input and releases the device. ma_device_uninit
+ * is synchronous: it stops the device, joins the worker thread, and
+ * frees backend resources before returning. No busywait or
+ * deferred-delete drain is needed.
  */
-void SoundInput::stop() {
-    if (m_stream) {
-        m_tearingDown = true;  // Build 130: gate handleStateChanged
-        m_stream->disconnect(this);
-        m_stream->stop();
-        waitForAudioStopped(m_stream.data(), "SoundInput::stop");
-        QAudioSource *old = m_stream.take();
-        old->deleteLater();
-        qWarning() << "[AudioTeardown] SoundInput::stop "
-                   << "deleteLater queued for source";
-        // Build 133: synchronously drain the deferred-delete event so the
-        // destructor runs now rather than at next event-loop iteration.
-        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+void
+SoundInput::stop()
+{
+    if (m_deviceInitialized) {
+        ma_device_uninit(&m_device);
+        m_deviceInitialized = false;
     }
-
-    if (m_sink) {
-        m_sink->close();
-    }
-    // Note: m_tearingDown stays true after stop(). The next start() will
-    // clear it once the new source is wired. ~SoundInput leaves it true,
-    // which is correct (no more signals will be processed).
+    if (m_sink) m_sink->close();
 }
 
 /**
- * @brief Destructs the SoundInput object.
- *
- * At process exit, intentionally leak the QAudioSource to bypass
- * Qt6Multimedia's destructor cascade. See SoundOutput::~SoundOutput
- * and AudioTeardown.h for the rationale -- two minidumps captured
- * 2026-04-29/30 against Build 127 showed that even after
- * state==Stopped (wait completed cleanly), the QAudioSource
- * destructor itself can AV at Qt6Multimedia.dll+0x5c7f2. Process
- * is exiting; OS reclaims memory. Runtime stop() (called via
- * Configuration changes) keeps the destroy path.
+ * @brief Destructs the SoundInput object. Just stops; ma_device_uninit
+ * gives us a clean teardown without the closingDown() leak path that
+ * Build 128 needed to bypass Qt6Multimedia's destructor cascade.
  */
-SoundInput::~SoundInput() {
-    if (QCoreApplication::closingDown() && m_stream) {
-        m_stream->disconnect(this);
-        m_stream->stop();
-        waitForAudioStopped(m_stream.data(), "SoundInput::~SoundInput");
-        qWarning() << "[AudioTeardown] SoundInput::~SoundInput "
-                   << "leaking QAudioSource at process exit "
-                   << "(bypasses Qt6Multimedia destructor cascade)";
-        Q_UNUSED(m_stream.take());
-        if (m_sink) m_sink->close();
-        return;
-    }
+SoundInput::~SoundInput()
+{
     stop();
 }
 

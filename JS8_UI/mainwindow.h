@@ -519,7 +519,7 @@ class UI_Constructor : public QMainWindow {
     Q_SIGNAL void initializeAudioOutputStream(QAudioDevice, unsigned channels,
                                               unsigned msBuffered) const;
     Q_SIGNAL void stopAudioOutputStream() const;
-    Q_SIGNAL void startAudioInputStream(QAudioDevice const &,
+    Q_SIGNAL void startAudioInputStream(AudioDeviceInfo const &,
                                         int framesPerBuffer, AudioDevice *sink,
                                         AudioDevice::Channel) const;
     Q_SIGNAL void suspendAudioInputStream() const;

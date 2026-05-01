@@ -8,6 +8,7 @@
 #include "FrequencyList.h"
 #include "IARURegions.h"
 #include "JS8_Audio/AudioDevice.h"
+#include "JS8_Audio/AudioDeviceInfo.h"
 #include "JS8_Transceiver/Transceiver.h"
 #include "JS8_Transceiver/TransceiverFactory.h"
 #include "JS8_UI/Configuration.h"
@@ -49,6 +50,7 @@ void register_types() {
 
     // Audio device
     qRegisterMetaType<AudioDevice::Channel>("AudioDevice::Channel");
+    qRegisterMetaType<AudioDeviceInfo>("AudioDeviceInfo");
 
     // Configuration
     qRegisterMetaType<Configuration::DataMode>("Configuration::DataMode");
