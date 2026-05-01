@@ -3116,11 +3116,11 @@ void Configuration::impl::accept() {
     }
 
     qCDebug(configuration_js8)
-        << "Configure::accept: audio i/p:" << audio_input_device_.description()
+        << "Configure::accept: audio i/p:" << audio_input_device_.description
         << "chan:" << audio_input_channel_
-        << "o/p:" << audio_output_device_.description()
+        << "o/p:" << audio_output_device_.description
         << "chan:" << audio_output_channel_
-        << "n:" << notification_audio_output_device_.description()
+        << "n:" << notification_audio_output_device_.description
         << "reset i/p:" << restart_sound_input_device_
         << "reset o/p:" << restart_sound_output_device_
         << "reset n:" << restart_notification_sound_output_device_;
