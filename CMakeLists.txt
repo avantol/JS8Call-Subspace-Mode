@@ -213,6 +213,7 @@ target_sources(
   JS8_Audio/NotificationAudio.cpp
   JS8_Audio/SoundInput.cpp
   JS8_Audio/SoundOutput.cpp
+  JS8_Audio/miniaudio_impl.cpp
   JS8_JSC/JSC.cpp
   JS8_JSC/JSC_checker.cpp
   JS8_JSC/JSC_list.cpp
@@ -323,10 +324,27 @@ target_link_libraries(
   Qt::Widgets
 )
 
-# Windows: link dbghelp for crash handler mini-dump support and
-# winmm for PlaySound (notification audio, Build 123).
+# Windows: link dbghelp for crash handler mini-dump support,
+# winmm for PlaySound (notification audio, Build 123), and ole32 for
+# miniaudio's WASAPI backend (Build 139, foundation for Qt6Multimedia
+# replacement).
 if(WIN32)
-  target_link_libraries(${TARGET} PRIVATE dbghelp winmm)
+  target_link_libraries(${TARGET} PRIVATE dbghelp winmm ole32)
+endif()
+
+# miniaudio platform backends. Pulse/ALSA on Linux are loaded via
+# dlopen() at runtime, so we only need libdl + libm + pthread here.
+if(APPLE)
+  find_library(COREAUDIO_LIBRARY    CoreAudio    REQUIRED)
+  find_library(AUDIOTOOLBOX_LIBRARY AudioToolbox REQUIRED)
+  find_library(AUDIOUNIT_LIBRARY    AudioUnit    REQUIRED)
+  target_link_libraries(${TARGET} PRIVATE
+    ${COREAUDIO_LIBRARY}
+    ${AUDIOTOOLBOX_LIBRARY}
+    ${AUDIOUNIT_LIBRARY}
+  )
+elseif(UNIX AND NOT WIN32)
+  target_link_libraries(${TARGET} PRIVATE pthread dl m)
 endif()
 
 #------------------------------------------------------------------------------#
