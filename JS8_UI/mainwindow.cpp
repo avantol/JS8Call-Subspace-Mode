@@ -186,17 +186,6 @@ void UI_Constructor::initialize_fonts() {
 }
 
 void UI_Constructor::on_the_minute() {
-    // Build 122 instrumentation: measure how long this top-of-minute
-    // handler actually takes. Reports of a ~1s waterfall stall at top-
-    // of-minute; static trace ruled out CAT-on-GUI as obvious cause but
-    // couldn't conclusively pin the culprit. If on_the_minute itself is
-    // routinely > 50ms we'll see it here; if it stays fast the stall
-    // lives elsewhere (e.g. coincident guiUpdate work in the same
-    // event-loop iteration) and the next instrumentation step is to
-    // wrap guiUpdate filtered to the top-of-minute window.
-    QElapsedTimer minuteWork;
-    minuteWork.start();
-
     if (minuteTimer.isSingleShot()) {
         minuteTimer.setSingleShot(false);
         minuteTimer.start(60 * 1000); // run free
@@ -214,10 +203,6 @@ void UI_Constructor::on_the_minute() {
     } else {
         tx_watchdog(false);
     }
-
-    auto const ms = minuteWork.elapsed();
-    if (ms > 50)
-        qWarning() << "[MINUTE-TIMER] on_the_minute took" << ms << "ms";
 }
 
 void UI_Constructor::tryBandHop() {
@@ -2951,15 +2936,6 @@ void UI_Constructor::updateClockUI(const QDateTime &now) {
 
 //------------------------------------------------------------- //guiUpdate()
 void UI_Constructor::guiUpdate() {
-    // Build 125 instrumentation: measure guiUpdate body, filtered to
-    // top-of-minute seconds (epoch%60 < 2). Build 122 confirmed
-    // on_the_minute() runs in <50ms (no [MINUTE-TIMER] entries
-    // collected across multiple sessions); the next suspect for the
-    // ~1s top-of-minute waterfall stall is coincident guiUpdate work
-    // in the same event-loop iteration.
-    QElapsedTimer guiUpdateWork;
-    guiUpdateWork.start();
-
     unsigned period = JS8::Submode::period(m_nSubMode);
 
     m_TRperiod = period; // Investigate: Does anyone need this?
@@ -3131,13 +3107,6 @@ void UI_Constructor::guiUpdate() {
     qint64 time_into_poll_slot = now_at_end_ms % UI_POLL_INTERVAL_MS;
     qint64 until_start_of_next_poll_slot =
         UI_POLL_INTERVAL_MS - time_into_poll_slot;
-
-    auto const guiUpdateMs = guiUpdateWork.elapsed();
-    auto const secInMinute = (now_at_end_ms / 1000) % 60;
-    if (guiUpdateMs > 50 && secInMinute < 2) {
-        qWarning() << "[GUIUPDATE-TIMER] guiUpdate took" << guiUpdateMs
-                   << "ms at sec" << secInMinute;
-    }
 
     m_guiTimer.start(until_start_of_next_poll_slot);
 } // End of guiUpdate
@@ -6235,7 +6204,7 @@ bool UI_Constructor::presentlyWantHBReplies() {
            ui->actionHeartbeatAcknowledgements->isChecked() &&
            m_messageBuffer.isEmpty() &&
            (!m_config.heartbeat_qso_pause() ||
-            m_prevSelectedCallsign.isEmpty());
+            m_selectedCallsign.isEmpty());
 }
 
 void UI_Constructor::updateModeButtonText() {
@@ -6545,58 +6514,6 @@ QString UI_Constructor::callsignSelected(bool) {
     return m_selectedCallsign;
 }
 
-void UI_Constructor::callsignSelectedChanged(QString /*old*/,
-                                             QString selectedCall) {
-    auto placeholderText =
-        QString("Type your outgoing messages here.\nType partial call sign to search list.").toUpper();
-    if (selectedCall.isEmpty()) {
-        // try to restore hb
-        if (m_hbPaused) {
-            ui->hbMacroButton->setChecked(true);
-            m_hbPaused = false;
-        }
-    } else {
-        placeholderText =
-            QString("Type your outgoing directed message to %1 here.")
-                .arg(selectedCall)
-                .toUpper();
-
-        // when we select a callsign, use it as the qso start time
-        if (!m_callSelectedTime.contains(selectedCall)) {
-            m_callSelectedTime[selectedCall] =
-                DriftingDateTime::currentDateTimeUtc();
-        }
-
-        // HB/CQ pause now handled in selectCallsign() — covers all click paths
-    }
-    ui->extFreeTextMsgEdit->setPlaceholderText(placeholderText);
-
-#if SHOW_CALL_DETAIL_BROWSER
-    auto html = generateCallDetail(selectedCall);
-    ui->callDetailTextBrowser->setHtml(html);
-    ui->callDetailTextBrowser->setVisible(
-        !selectedCall.isEmpty() && (!hearing.isEmpty() || !heardby.isEmpty()));
-#endif
-
-    m_prevSelectedCallsign = selectedCall;
-
-    // Auto-switch mode to match selected callsign's submode
-    // Uses setSubmode() — full mode switch with setupJS8() to update all layers
-    if (!selectedCall.isEmpty() && m_callActivity.contains(selectedCall)) {
-        int callSubmode = m_callActivity[selectedCall].submode;
-        if (callSubmode == Varicode::JS8CallFT2 && m_nSubMode != Varicode::JS8CallFT2) {
-            m_prevStandardSubmode = m_nSubMode;
-            setSubmode(Varicode::JS8CallFT2);
-        } else if (callSubmode != Varicode::JS8CallFT2 && m_nSubMode == Varicode::JS8CallFT2) {
-            setSubmode(m_prevStandardSubmode);
-        }
-    }
-
-    // immediately update the display
-    updateButtonDisplay();
-    updateTextDisplay();
-    statusChanged();
-}
 
 // --- Selection spec: central entry points ---
 
@@ -6664,6 +6581,19 @@ void UI_Constructor::selectCallsign(QString call, int submode) {
 }
 
 void UI_Constructor::clearSelection() {
+    // Restore HB if it was paused for this QSO (Build 122 set m_hbPaused
+    // when entering selectCallsign() with heartbeat_qso_pause enabled).
+    // The historical restore lived in callsignSelectedChanged(), but that
+    // function was never called after Build 58 moved selection to explicit
+    // click handlers — the timer was killed and never resumed. (J-IMP
+    // build 215124da plumbs the restore through callsignSelectedChanged
+    // from tableSelectionChanged; we inline it here instead since both
+    // deselect paths funnel through clearSelection().)
+    if (m_hbPaused) {
+        ui->hbMacroButton->setChecked(true);
+        m_hbPaused = false;
+    }
+
     m_callSelectedTime.remove(m_selectedCallsign);
     m_selectedCallsign.clear();
 

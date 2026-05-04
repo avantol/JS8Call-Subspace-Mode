@@ -757,7 +757,6 @@ class UI_Constructor : public QMainWindow {
     };
 
     QString m_selectedCallsign;
-    QString &m_prevSelectedCallsign = m_selectedCallsign; // legacy alias
     int m_bandActivityWidth;
     int m_callActivityWidth;
     int m_textActivityWidth;
@@ -1058,7 +1057,6 @@ class UI_Constructor : public QMainWindow {
     bool isAllCallIncluded(QString const &text);
     bool isGroupCallIncluded(const QString &text);
     QString callsignSelected(bool useInputText = false);
-    void callsignSelectedChanged(QString old, QString current);
     bool isRecentOffset(int submode, int offset);
     void markOffsetRecent(int offset);
     bool isDirectedOffset(int offset, bool *pIsAllCall);

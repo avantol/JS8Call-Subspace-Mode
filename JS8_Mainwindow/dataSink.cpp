@@ -188,6 +188,20 @@ void UI_Constructor::dataSink(qint64 frames) {
         }
 
         // Copy data and apply the window, then execute the FFT.
+        //
+        // Build 144: zero the FFT input first. fftwf_alloc_complex
+        // returns uninitialized memory, and the populate loop below
+        // SKIPS positions where the source index j is out of range
+        // (during the ~1.365s after the d2 buffer wraps at the top
+        // of every minute). Without this fill, those skipped slots
+        // contained stale heap bytes — the resulting wideband FFT
+        // produced flashes of "garbage spectrum" in the waterfall
+        // for ~1.5s after each minute boundary. Zeroing makes that
+        // window deterministic: clean dim/black that fades up to
+        // full power as more valid samples accumulate. Cosmetic
+        // only — decoders read from dec_data.d2 / m_l2RingBuf
+        // directly, not from this FFT.
+        std::fill(fftw_real, fftw_real + nfft3, 0.0f);
 
         for (int i = 0; i < nfft3; ++i) {
             if (int j = ja + i - nfft3; j >= 0 && j < NMAX)

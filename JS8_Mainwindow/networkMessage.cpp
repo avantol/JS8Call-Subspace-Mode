@@ -348,6 +348,29 @@ if(type == "STATION.SET_SPOT") {
                            });
         return;
     }
+    /** @brief RX.SET_CALL_SELECTED: Select (or deselect) a callsign.
+     *
+     * value = callsign to select, empty string = deselect.
+     * Uses the same selectCallsign() / clearCallsignSelected() paths as
+     * the click handlers, so HB-pause-on-QSO + restore-on-deselect
+     * (Build 144) and the per-callsign auto-mode-switch behave
+     * identically to a UI click. Responds with RX.CALL_SELECTED
+     * carrying the resulting selection (empty if deselect succeeded
+     * or the requested call wasn't accepted).
+     */
+    if (type == "RX.SET_CALL_SELECTED") {
+        auto const requested = message.value().trimmed().toUpper();
+        if (requested.isEmpty()) {
+            clearCallsignSelected();
+        } else {
+            selectCallsign(requested);
+        }
+        sendNetworkMessage("RX.CALL_SELECTED", callsignSelected(),
+                           {
+                               {"_ID", id},
+                           });
+        return;
+    }
     /**
      * @brief RX.GET_BAND_ACTIVITY: Returns recent band activity details.
      * Includes frequency, offset, text, SNR, and UTC timestamp for each entry.
@@ -597,7 +620,15 @@ if(type == "STATION.SET_SPOT") {
                            });
         return;
     }
-    /** @brief MODE.SET_SPEED: Updates the transmission speed mode. */
+    /** @brief MODE.SET_SPEED: Updates the transmission speed mode.
+     *
+     * Subspace edition does not support Ultra (JS8I) — no panel button,
+     * decoder gated off (JS8_ENABLE_JS8I=0 in commons.h). SPEED=8 (the
+     * historical Ultra value) is therefore re-mapped to Subspace (FT2)
+     * so any TCP-API client that still sends 8 lands in a sane mode
+     * instead of silently switching to a hidden TX-only mode that we
+     * can't decode either side of.
+     */
     if (type == "MODE.SET_SPEED") {
         auto ok = false;
         auto const speed =
@@ -611,9 +642,8 @@ if(type == "STATION.SET_SPOT") {
                 ui->actionModeJS8Turbo->setChecked(true);
             else if (speed == Varicode::JS8CallSlow)
                 ui->actionModeJS8Slow->setChecked(true);
-            else if (speed == Varicode::JS8CallUltra)
-                ui->actionModeJS8Ultra->setChecked(true);
-            else if (speed == Varicode::JS8CallFT2)
+            else if (speed == Varicode::JS8CallUltra
+                  || speed == Varicode::JS8CallFT2)
                 ui->actionModeFT2->setChecked(true);
             setupJS8();
         }
