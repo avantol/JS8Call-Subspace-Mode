@@ -302,8 +302,33 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
 
                     m_rxActivityQueue.append(d);
                     m_bandActivity[offset].append(d);
-                    while (m_bandActivity[offset].count() > 10) {
-                        m_bandActivity[offset].removeFirst();
+                    // Build 145: cap by submode class. Subspace and
+                    // Standard each keep an independent 10-frame
+                    // history within an offset bucket. Without this
+                    // split, busy traffic in one class would evict
+                    // the other's history even though they render as
+                    // separate rows (displayBandActivity, Build 145).
+                    {
+                        bool const incomingIsFT2 =
+                            d.submode == Varicode::JS8CallFT2;
+                        int sameClassCount = 0;
+                        for (auto const & it : m_bandActivity[offset])
+                            if ((it.submode == Varicode::JS8CallFT2)
+                                == incomingIsFT2)
+                                ++sameClassCount;
+                        while (sameClassCount > 10) {
+                            for (int i = 0;
+                                 i < m_bandActivity[offset].size(); ++i) {
+                                bool itIsFT2 =
+                                    m_bandActivity[offset][i].submode
+                                    == Varicode::JS8CallFT2;
+                                if (itIsFT2 == incomingIsFT2) {
+                                    m_bandActivity[offset].removeAt(i);
+                                    --sameClassCount;
+                                    break;
+                                }
+                            }
+                        }
                     }
 
 

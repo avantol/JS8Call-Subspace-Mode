@@ -230,7 +230,26 @@ void UI_Constructor::displayBandActivity() {
         foreach (int offset, keys) {
             bool isOffsetSelected = (offset == selectedOffset);
 
-            QList<ActivityDetail> items = filtered[offset];
+            // Build 145: split offset items into Subspace (FT2) vs
+            // standard groups so each class gets its own row. Without
+            // this split, both classes collapse into one row whose
+            // displayed mode reflects whichever submode landed last in
+            // the bucket — relabeling a Subspace row as Normal when
+            // newer Normal traffic arrived at the same offset. The
+            // merge-on-nearby logic in processDecodeEvent already
+            // separates classes across adjacent offsets; this closes
+            // the gap for exact-offset collisions.
+            QList<ActivityDetail> filteredStandard, filteredSubspace;
+            for (auto const & item : filtered[offset]) {
+                if (item.submode == Varicode::JS8CallFT2)
+                    filteredSubspace.append(item);
+                else
+                    filteredStandard.append(item);
+            }
+
+            for (QList<ActivityDetail> const * itemsPtr :
+                 {&filteredStandard, &filteredSubspace}) {
+            QList<ActivityDetail> const & items = *itemsPtr;
             if (items.length() > 0) {
                 QDateTime timestamp;
                 QStringList text;
@@ -452,6 +471,7 @@ void UI_Constructor::displayBandActivity() {
                     }
                 }
             }
+            } // end split-by-submode for loop (Build 145)
         }
 
         // Set table color
