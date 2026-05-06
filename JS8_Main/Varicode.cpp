@@ -2201,13 +2201,21 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
 
             if (useBcn) {
                 lineFrames.append({frame, Varicode::JS8Call});
-                line = line.mid(l);
+                // Build 146: lstrip the trailing whitespace after a
+                // header-frame consumption. Without this, the
+                // separator space between (e.g.) "CQ CQ CQ" and a
+                // non-grid trailing word ("SUBSPACE") leaks into the
+                // data-frame remainder, producing a doubled space on
+                // RX (header renderer adds its own separator + the
+                // data frame begins with one). Same shape applies to
+                // useCmp / useDir / useDat below.
+                line = lstrip(line.mid(l));
             }
 
 #if ALLOW_SEND_COMPOUND
             if (useCmp) {
                 lineFrames.append({frame, Varicode::JS8Call});
-                line = line.mid(o);
+                line = lstrip(line.mid(o));
             }
 #endif
 
@@ -2269,7 +2277,8 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
                     lineFrames.append({frame, Varicode::JS8Call});
                 }
 
-                line = line.mid(n);
+                // Build 146: lstrip — see useBcn branch above.
+                line = lstrip(line.mid(n));
 
                 // generate a checksum for buffered commands with line data
                 if (Varicode::isCommandBuffered(dirCmd) && !line.isEmpty()) {
@@ -2316,7 +2325,10 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
                 // use the standard data frame
                 lineFrames.append({frame, fastDataFrame ? Varicode::JS8CallData
                                                         : Varicode::JS8Call});
-                line = line.mid(m);
+                // Build 146: lstrip — see useBcn branch above. Less
+                // likely to matter here (data frames typically consume
+                // the rest of the line) but uniform for safety.
+                line = lstrip(line.mid(m));
             }
         }
 

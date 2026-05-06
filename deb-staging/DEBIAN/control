@@ -1,0 +1,9 @@
+Package: js8call-subspace
+Version: 4.0.0.146
+Section: hamradio
+Priority: optional
+Architecture: amd64
+Depends: libqt6core6, libqt6widgets6, libqt6serialport6, libfftw3-single3, libhamlib4
+Maintainer: WM8Q <andy.vantol@gmail.com>
+Description: JS8Call Subspace Edition
+ JS8Call with FT2 Subspace mode - async L2 decoder for weak-signal messaging.
