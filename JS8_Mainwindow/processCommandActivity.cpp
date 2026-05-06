@@ -7,8 +7,6 @@
 
 #include "JS8_UI/mainwindow.h"
 
-#include <QDebug>
-
 void UI_Constructor::processCommandActivity() {
 #if 0
     if (!m_txFrameQueue.isEmpty()) {
@@ -130,7 +128,24 @@ void UI_Constructor::processCommandActivity() {
         // Build baseText without the FROM prefix: "TO CMD EXTRA TEXT [eot]"
         // This is used for the TCP API where FROM is sent as a separate field.
         // The full text (with FROM prefix) is used for file logging and display.
-        QStringList baseList = {QString("%1%2").arg(d.to).arg(d.cmd)};
+        //
+        // Build 152: when d.cmd is the literal-space "freetext follows"
+        // marker (directed_cmds[" "] == 31), `d.to + d.cmd` already ends
+        // with a trailing space, and the trailing baseList.join(" ") below
+        // would add another separator, producing "WM8Q  THIS IS A MSG"
+        // (doubled). For whitespace-only cmds, drop d.cmd from the head and
+        // let join provide the single separator. Real cmds (" SNR",
+        // " ACK", "?", ">", etc.) keep their existing concat — for "?" and
+        // ">" the result is still "WM8Q?" / "WM8Q>" with no separator,
+        // matching prior behavior. Same pattern as the directed-frame fix
+        // in DecodedText::tryUnpackDirected (Build 147) and the
+        // heartbeat-alt fix in tryUnpackHeartbeat (Build 148).
+        QStringList baseList;
+        if (d.cmd.trimmed().isEmpty()) {
+            baseList << d.to;
+        } else {
+            baseList << QString("%1%2").arg(d.to).arg(d.cmd);
+        }
 
         if (!d.extra.isEmpty()) {
             baseList.append(d.extra);
@@ -153,21 +168,6 @@ void UI_Constructor::processCommandActivity() {
 
         // Prepend FROM for file logging and UI display: "FROM: TO CMD EXTRA TEXT [eot]"
         QString text = QString("%1: %2").arg(d.from).arg(baseText);
-
-        // Build 151 diagnostic — log the directed-message text constructed
-        // from d.to, d.cmd, d.extra, d.text. Whitespace shown as · so any
-        // doubled-space source in this construction is unambiguous.
-        {
-            auto vis = [](QString s) { s.replace(' ', QChar(0x00B7)); return s; };
-            qWarning().noquote().nospace()
-                << "[CMDTXT] from=[" << vis(d.from) << "]"
-                << " to=[" << vis(d.to) << "]"
-                << " cmd=[" << vis(d.cmd) << "]"
-                << " extra=[" << vis(d.extra) << "]"
-                << " dtext=[" << vis(d.text) << "]"
-                << " baseText=[" << vis(baseText) << "]"
-                << " full=[" << vis(text) << "]";
-        }
 
         // Log to DIRECTED.txt (includes FROM prefix)
         writeMsgTxt(text, d.snr, d.offset);
