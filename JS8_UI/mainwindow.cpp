@@ -3528,17 +3528,6 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
 
     if (found) {
         c.clearSelection();
-        // Build 148: defensive — if existing block ends with whitespace
-        // and incoming text starts with whitespace, drop the leading
-        // whitespace on incoming. Multi-frame messages can produce
-        // doubled spaces at frame boundaries depending on how the sender
-        // packed the frames; this prevents them from appearing in the
-        // textEditRX block when frames are appended sequentially.
-        if (!text.isEmpty() && text.front().isSpace() && c.position() > 0) {
-            QChar const prev = c.document()->characterAt(c.position() - 1);
-            if (prev.isSpace())
-                text = Varicode::lstrip(text);
-        }
         c.insertText(text);
     } else {
         text = text.toHtmlEscaped();

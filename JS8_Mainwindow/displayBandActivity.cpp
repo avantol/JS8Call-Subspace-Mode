@@ -344,25 +344,7 @@ void UI_Constructor::displayBandActivity() {
                     submode = item.submode;
                 }
 
-                // Build 149: collapse spaces ONLY at frame boundaries.
-                // Multi-frame messages can emit doubled spaces at the seam
-                // between two frames (heartbeat-alt with no grid, directed
-                // cmd " " marker, mixed builds): frame N ends with " " and
-                // frame N+1 begins with " ". When that pair shows up at a
-                // frame boundary, drop the leading space on the follower.
-                // Inside any single frame's body, multi-space stays intact —
-                // a sender can still column-align numbers or emphasize with
-                // double spaces and have it round-trip into the row.
-                QString joined;
-                for (auto const & part : text) {
-                    if (!joined.isEmpty() && joined.back().isSpace() &&
-                        !part.isEmpty() && part.front().isSpace()) {
-                        joined += Varicode::lstrip(part);
-                    } else {
-                        joined += part;
-                    }
-                }
-                joined = Varicode::rstrip(joined);
+                auto joined = Varicode::rstrip(text.join(""));
                 if (joined.isEmpty()) {
                     continue;
                 }

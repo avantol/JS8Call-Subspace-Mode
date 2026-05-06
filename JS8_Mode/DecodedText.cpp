@@ -7,6 +7,7 @@
 #include "JS8_Include/commons.h"
 #include <JS8_Main/Varicode.h>
 
+#include <QDebug>
 #include <QStringBuilder>
 
 /******************************************************************************/
@@ -97,6 +98,25 @@ DecodedText::DecodedText(QString const &frame, int bits, int submode,
     for (auto unpack : unpackStrategies) {
         if ((this->*unpack)(m))
             break;
+    }
+
+    // Build 150 diagnostic — pin the doubled-space-on-RX bug at its
+    // source. Logs every decoded frame's resulting message_ with each
+    // space rendered as middle-dot (·) so consecutive spaces are
+    // visible. Frame is CRC-checked, so this output is deterministic
+    // and unambiguous. Remove once the source is identified and
+    // fixed at the unpack site. Also bracketed [...] so leading or
+    // trailing whitespace can't be missed in console wrap.
+    {
+        QString vis = message_;
+        vis.replace(' ', QChar(0x00B7));
+        qWarning().noquote().nospace()
+            << "[DSP] frameType=" << frameType_
+            << " bits=0x" << QString::number(bits_, 16)
+            << " sub=" << submode_
+            << " parts=" << directed_.length()
+            << " len=" << message_.length()
+            << " msg=[" << vis << "]";
     }
 }
 
