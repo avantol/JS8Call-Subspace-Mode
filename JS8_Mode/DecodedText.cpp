@@ -244,9 +244,21 @@ bool DecodedText::tryUnpackDirected(QString const &m) {
     switch (parts.length()) {
     case 3: // Directed message         => "0: 12 "
     case 4: // Directed numeric message => "0: 12 3 "
-        message_ =
-            parts.at(0) % ": " % parts.at(1) % parts.mid(2).join(' ') % ' ';
+    {
+        // Build 147: when cmd is the literal-space "freetext follows"
+        // marker (directed_cmds[" "] == 31), parts.mid(2).join(' ')
+        // returns " " and the trailing % ' ' adds another, producing
+        // two trailing spaces. The data frame that follows then
+        // appears with a doubled space ("K9AVT: WM8Q  HELLO"). For any
+        // cmd that's whitespace-only, drop it from the rendered text;
+        // the trailing ' ' below provides the single separator before
+        // the next frame's body.
+        auto cmdJoin = parts.mid(2).join(' ');
+        if (cmdJoin.trimmed().isEmpty())
+            cmdJoin.clear();
+        message_ = parts.at(0) % ": " % parts.at(1) % cmdJoin % ' ';
         break;
+    }
     default: // Free text message
         message_ = parts.join("");
         break;
