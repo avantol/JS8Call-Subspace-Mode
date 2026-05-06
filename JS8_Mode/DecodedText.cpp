@@ -184,7 +184,14 @@ bool DecodedText::tryUnpackHeartbeat(QString const &m) {
         message_ += "@HB " % (sbits3 == "HB" ? "HEARTBEAT" : sbits3);
     }
 
-    message_ += ' ' % extra_ % ' ';
+    // Build 148: avoid emitting "  " (two spaces) when extra_ (the grid)
+    // is empty — heartbeat-alt CQ frames without a grid otherwise produce
+    // a doubled trailing space, which shows up as a doubled space between
+    // the heartbeat render and the next frame's body.
+    if (!extra_.isEmpty()) {
+        message_ += ' ' % extra_;
+    }
+    message_ += ' ';
 
     return true;
 }

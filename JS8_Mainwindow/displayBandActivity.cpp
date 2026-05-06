@@ -344,7 +344,15 @@ void UI_Constructor::displayBandActivity() {
                     submode = item.submode;
                 }
 
-                auto joined = Varicode::rstrip(text.join(""));
+                // Build 148: collapse runs of 2+ internal spaces to single.
+                // Multi-frame messages can emit doubled spaces at frame
+                // boundaries depending on how the sender packed the frames
+                // (heartbeat-alt with no grid, directed cmd " " marker, mixed
+                // builds). Renderer-level catch-all so the band activity row
+                // is always single-spaced regardless of upstream source.
+                static const QRegularExpression multiSpaceRe("  +");
+                auto joined =
+                    Varicode::rstrip(text.join("")).replace(multiSpaceRe, " ");
                 if (joined.isEmpty()) {
                     continue;
                 }
