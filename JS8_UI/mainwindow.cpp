@@ -3526,13 +3526,26 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
     if (found && isTx != (c.block().userState() == State::TX))
         found = false;
 
+    auto wtuiVis = [](QString s) { s.replace(' ', QChar(0x00B7)); return s; };
+
     if (found) {
         c.clearSelection();
+        QString const blockBefore = c.block().text();
+        qWarning().noquote().nospace()
+            << "[WTUI-APPEND] insert=[" << wtuiVis(text) << "]"
+            << " blockBefore=[" << wtuiVis(blockBefore) << "]"
+            << " curPos=" << c.position()
+            << " blockEnd=" << (c.block().position() + c.block().length() - 1);
         c.insertText(text);
+        QString const blockAfter = c.block().text();
+        qWarning().noquote().nospace()
+            << "[WTUI-APPEND-POST] blockAfter=[" << wtuiVis(blockAfter) << "]";
     } else {
         text = text.toHtmlEscaped();
         text = text.replace("\n", "<br/>");
         text = text.replace("  ", "&nbsp;&nbsp;");
+        qWarning().noquote().nospace()
+            << "[WTUI-NEW-PRE] textForInsert=[" << wtuiVis(text) << "]";
         c.insertBlock();
         // Mode indicator: ⚡ for FT2/Subspace, first letter for standard modes
         QString modeInd;
@@ -3548,11 +3561,17 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
             modeInd = "S";
         else
             modeInd = "?";
-        c.insertHtml(QString("%1 - %2 - (%3) - %4")
-                         .arg(modeInd)
-                         .arg(date.time().toString())
-                         .arg(freq)
-                         .arg(text));
+        QString const htmlInsert = QString("%1 - %2 - (%3) - %4")
+                                       .arg(modeInd)
+                                       .arg(date.time().toString())
+                                       .arg(freq)
+                                       .arg(text);
+        qWarning().noquote().nospace()
+            << "[WTUI-NEW-INS] htmlInsert=[" << wtuiVis(htmlInsert) << "]";
+        c.insertHtml(htmlInsert);
+        QString const blockAfter = c.block().text();
+        qWarning().noquote().nospace()
+            << "[WTUI-NEW-POST] blockAfter=[" << wtuiVis(blockAfter) << "]";
     }
 
     if (isTx) {
