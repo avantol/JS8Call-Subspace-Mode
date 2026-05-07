@@ -26,7 +26,7 @@ class WSJTXMessageClient : public QObject {
      *
      * Instantiates the client and initiates a host lookup on the server.
      *
-     * @param id Application identifier (e.g., "JS8Call")
+     * @param id Application identifier (e.g., "Subspace Edition")
      * @param version Application version string
      * @param revision Application revision string
      * @param server_name Server hostname or IP address (supports multicast)

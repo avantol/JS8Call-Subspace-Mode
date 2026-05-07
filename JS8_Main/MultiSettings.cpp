@@ -56,8 +56,14 @@ QString settings_path() {
         throw std::runtime_error{"Cannot find a usable configuration path \"" +
                                  config_path.path().toStdString() + '"'};
     }
-    return config_path.absoluteFilePath(QApplication::applicationName() +
-                                        ".ini");
+    // Build 153 (rebrand): hardcode "JS8Call.ini" rather than deriving
+    // from QApplication::applicationName(). The applicationName was
+    // renamed to "Subspace Edition" for UI/branding purposes, but the
+    // settings file path is invisible to users and changing it would
+    // orphan every existing user's saved configuration on upgrade.
+    // Keep the filename stable across the rebrand so installs preserve
+    // their settings.
+    return config_path.absoluteFilePath("JS8Call.ini");
 }
 
 //

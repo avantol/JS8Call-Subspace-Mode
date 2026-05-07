@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=JS8Call Subspace
-Comment=JS8Call Subspace Edition - weak-signal messaging
+Name=Subspace Edition
+Comment=Subspace Edition - weak-signal messaging
 Exec=/usr/bin/js8call-subspace
 Icon=js8call-subspace
 Terminal=false

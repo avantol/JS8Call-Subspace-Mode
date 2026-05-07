@@ -1519,7 +1519,7 @@ void UI_Constructor::on_actionCopyright_Notice_triggered() {
         "PY2SDR; "
         "Philip Karn, KA9Q; and other members of the WSJT Development "
         "Group.\n\n"
-        "Further, the source code of JS8Call contains material Copyright (C) "
+        "Further, the source code of Subspace Edition contains material Copyright (C) "
         "2018-2019 by Jordan Sherer, KN4CRD.\"");
     JS8MessageBox::warning_message(this, message);
 }

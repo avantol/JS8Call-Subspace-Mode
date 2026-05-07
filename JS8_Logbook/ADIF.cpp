@@ -448,7 +448,7 @@ bool ADIF::addQSOToFile(QByteArray const &ADIF_record) {
     else {
         QTextStream out(&f2);
         if (f2.size() == 0)
-            out << "JS8Call ADIF Export<eoh>" << Qt::endl; // new file
+            out << "Subspace Edition ADIF Export<eoh>" << Qt::endl; // new file
 
         out << ADIF_record << " <eor>" << Qt::endl;
         out.flush();

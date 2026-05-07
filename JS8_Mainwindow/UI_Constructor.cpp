@@ -451,7 +451,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     });
 
     setWindowTitle(program_title());
-    ui->labVersion->setText("JS8Call v" + version());
+    ui->labVersion->setText("Subspace Edition v" + version());
     // Link label spacing — leave at .ui defaults
     buildColumnLabelMap();
 

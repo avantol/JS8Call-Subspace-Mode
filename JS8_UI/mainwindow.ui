@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>JS8Call</string>
+   <string>Subspace Edition</string>
   </property>
   <widget class="QWidget" name="centralWidget">
    <property name="sizePolicy">
@@ -2125,7 +2125,7 @@ background-color: #22ff22;
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>About &amp;JS8Call</string>
+    <string>About &amp;Subspace Edition</string>
    </property>
   </action>
   <action name="actionErase_ALL_TXT">

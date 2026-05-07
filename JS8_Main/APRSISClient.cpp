@@ -102,7 +102,7 @@ QString APRSISClient::loginFrame(QString callsign, QString filter) {
     auto loginFrame = QString("user %1 pass %2 ver %3 %4\n");
     loginFrame = loginFrame.arg(callsign);
     loginFrame = loginFrame.arg(hashCallsign(callsign));
-    loginFrame = loginFrame.arg("JS8Call");
+    loginFrame = loginFrame.arg("Subspace Edition");
     if (!filter.isEmpty()) {
         loginFrame = loginFrame.arg(filter);
     } else {

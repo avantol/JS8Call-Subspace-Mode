@@ -1,6 +1,6 @@
-#define MyAppName "JS8Call"
+#define MyAppName "Subspace Edition"
 #define MyAppVersion "2.5.0"
-#define MyAppPublisher "JS8Call-improved"
+#define MyAppPublisher "Subspace Edition"
 #define MyAppURL "https://www.js8call-improved.com/"
 #define MyAppExeName "JS8Call.exe"
 
@@ -32,7 +32,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=D:\a\JS8Call-improved\JS8Call-improved\build\JS8Call
 ; This can be changed from the ci-windows.yml for release builds
-OutputBaseFilename=JS8Call-installer
+OutputBaseFilename=Subspace-Edition-installer
 SetupIconFile=D:\a\JS8Call-improved\JS8Call-improved\icons\windows-icons\js8call.ico
 UninstallDisplayIcon=D:\a\JS8Call-improved\JS8Call-improved\icons\windows-icons\js8call.ico
 SolidCompression=yes

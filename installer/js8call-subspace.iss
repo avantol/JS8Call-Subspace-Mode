@@ -3,13 +3,13 @@
 #endif
 
 [Setup]
-AppName=JS8Call-Subspace
+AppName=Subspace Edition
 AppVersion={#AppVersion}
-AppPublisher=JS8Call-Subspace Project
-DefaultDirName={localappdata}\Programs\JS8Call-Subspace
-DefaultGroupName=JS8Call-Subspace
+AppPublisher=Subspace Edition
+DefaultDirName={localappdata}\Programs\Subspace Edition
+DefaultGroupName=Subspace Edition
 UninstallDisplayIcon={app}\JS8Call.exe
-OutputBaseFilename=JS8Call-Subspace-Setup_{#AppVersion}_win64
+OutputBaseFilename=Subspace-Edition-Setup_{#AppVersion}_win64
 OutputDir=Output
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -24,9 +24,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "..\build\JS8Call\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\JS8Call-Subspace"; Filename: "{app}\JS8Call.exe"
-Name: "{group}\Uninstall JS8Call-Subspace"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\JS8Call-Subspace"; Filename: "{app}\JS8Call.exe"; Tasks: desktopicon
+Name: "{group}\Subspace Edition"; Filename: "{app}\JS8Call.exe"
+Name: "{group}\Uninstall Subspace Edition"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Subspace Edition"; Filename: "{app}\JS8Call.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\JS8Call.exe"; Description: "Launch JS8Call-Subspace"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\JS8Call.exe"; Description: "Launch Subspace Edition"; Flags: nowait postinstall skipifsilent

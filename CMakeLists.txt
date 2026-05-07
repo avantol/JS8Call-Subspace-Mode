@@ -64,7 +64,7 @@ project(
 set(PROJECT_VENDOR "Jordan Sherer, KN4CRD")
 set(PROJECT_CONTACT "Jordan Sherer <kn4crd@gmail.com>")
 set(PROJECT_COPYRIGHT "Copyright (C) 2001-2018 by Joe Taylor, K1JT, (C) 2018 by Jordan Sherer, KN4CRD, (C) of contributed work is owned by individual contributors")
-set(PROJECT_HOMEPAGE https://groups.io/g/js8call)
+set(PROJECT_HOMEPAGE https://github.com/avantol/JS8Call-Subspace-Mode)
 set(PROJECT_SUMMARY_DESCRIPTION "${PROJECT_NAME} - Digital Modes for Weak Signal Communications in Amateur Radio.")
 set(PROJECT_DESCRIPTION "${PROJECT_SUMMARY_DESCRIPTION}
  ${PROJECT_NAME} is a computer program designed to facilitate amateur radio communication using very weak signals.")
@@ -173,7 +173,7 @@ qt_add_executable(${TARGET} MACOSX_BUNDLE WIN32 ${ICON_FILE})
 set_target_properties(
   ${TARGET} PROPERTIES
   MACOSX_BUNDLE_INFO_PLIST             "${CMAKE_CURRENT_SOURCE_DIR}/Darwin/Info.plist.in"
-  MACOSX_BUNDLE_INFO_STRING            "JS8Call facilitates amateur radio communication using very weak signals.."
+  MACOSX_BUNDLE_INFO_STRING            "Subspace Edition facilitates amateur radio communication using very weak signals.."
   MACOSX_BUNDLE_ICON_FILE              "${ICON_FILE}"
   MACOSX_BUNDLE_BUNDLE_VERSION         "${wsjtx_VERSION}"
   MACOSX_BUNDLE_SHORT_VERSION_STRING   "${wsjtx_SHORT_VERSION}"

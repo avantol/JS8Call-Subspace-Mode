@@ -185,27 +185,27 @@ static void writeDump(EXCEPTION_POINTERS *exceptionInfo, wchar_t const *cause) {
         wchar_t msg[MAX_PATH + 320];
         if (ok) {
             swprintf_s(msg, MAX_PATH + 320,
-                     L"JS8Call has crashed (%s).\n\n"
+                     L"Subspace Edition has crashed (%s).\n\n"
                      L"A crash report was saved to:\n\n%s\n\n"
                      L"(folder: %s)\n\n"
                      L"Please send this file to WM8Q for analysis.",
                      cause, path, folderTag);
         } else {
             swprintf_s(msg, MAX_PATH + 320,
-                     L"JS8Call has crashed (%s).\n\n"
+                     L"Subspace Edition has crashed (%s).\n\n"
                      L"A dump file was created at:\n\n%s\n\n"
                      L"but MiniDumpWriteDump failed (GetLastError=%lu). "
                      L"The file may be empty or truncated.",
                      cause, path, GetLastError());
         }
-        MessageBoxW(nullptr, msg, L"JS8Call Crash Report",
+        MessageBoxW(nullptr, msg, L"Subspace Edition Crash Report",
                     MB_OK | MB_ICONERROR);
     } else {
         // All four candidate folders failed.
         wchar_t msg[MAX_PATH + 320];
         swprintf_s(msg, MAX_PATH + 320,
-                 L"JS8Call has crashed (%s) but could not write a crash "
-                 L"report to any of:\n\n"
+                 L"Subspace Edition has crashed (%s) but could not write a "
+                 L"crash report to any of:\n\n"
                  L"  %%LOCALAPPDATA%%\\JS8Call\n"
                  L"  %%TEMP%%\n"
                  L"  current directory\n"
@@ -213,7 +213,7 @@ static void writeDump(EXCEPTION_POINTERS *exceptionInfo, wchar_t const *cause) {
                  L"Last GetLastError=%lu. Antivirus or permissions may be "
                  L"blocking writes to all four locations.",
                  cause, lastError);
-        MessageBoxW(nullptr, msg, L"JS8Call Crash Report",
+        MessageBoxW(nullptr, msg, L"Subspace Edition Crash Report",
                     MB_OK | MB_ICONERROR);
     }
 }
@@ -279,7 +279,7 @@ void crashTest(char const *kind) {
                 L"crash-test: about to crash. Click OK to continue.\n\n"
                 L"After OK you should see a second dialog from the crash "
                 L"handler. If not, the handler did not fire.",
-                L"JS8Call crash-test", MB_OK | MB_ICONINFORMATION);
+                L"Subspace Edition crash-test", MB_OK | MB_ICONINFORMATION);
     MessageBeep(MB_ICONERROR);
 
     if (strcmp(kind, "abort") == 0) {
@@ -295,7 +295,7 @@ void crashTest(char const *kind) {
     } else {
         MessageBoxW(nullptr, L"Unknown --crash-test kind. Use one of: "
                              L"abort, segv, throw, purecall.",
-                    L"JS8Call crash-test", MB_OK | MB_ICONWARNING);
+                    L"Subspace Edition crash-test", MB_OK | MB_ICONWARNING);
     }
 }
 
