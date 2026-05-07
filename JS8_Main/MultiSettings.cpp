@@ -48,21 +48,32 @@ QString unescape_ampersands(QString s) { return s.replace("&&", "&"); }
 
 // calculate a useable and unique settings file path
 QString settings_path() {
-    auto const &config_directory =
+    // Build 154 (rebrand follow-up): the settings file location must
+    // remain stable across the applicationName rename to "Subspace
+    // Edition". On Windows, QStandardPaths::ConfigLocation resolves to
+    // %APPDATA%\<applicationName>\ — so renaming applicationName moves
+    // the entire config directory and every existing user's settings
+    // appear lost on upgrade. Linux's ~/.config/ doesn't suffix the
+    // app name, so it didn't show this. macOS varies.
+    //
+    // Force the legacy "JS8Call" applicationName for path resolution
+    // only, then restore the branding-time name. This keeps the
+    // resolved location identical to what existing user installs have
+    // on disk, on every platform.
+    QString const savedAppName = QCoreApplication::applicationName();
+    QCoreApplication::setApplicationName("JS8Call");
+    auto const config_directory =
         QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
+    QCoreApplication::setApplicationName(savedAppName);
+
     QDir config_path{
         config_directory}; // will be "." if config_directory is empty
     if (!config_path.mkpath(".")) {
         throw std::runtime_error{"Cannot find a usable configuration path \"" +
                                  config_path.path().toStdString() + '"'};
     }
-    // Build 153 (rebrand): hardcode "JS8Call.ini" rather than deriving
-    // from QApplication::applicationName(). The applicationName was
-    // renamed to "Subspace Edition" for UI/branding purposes, but the
-    // settings file path is invisible to users and changing it would
-    // orphan every existing user's saved configuration on upgrade.
-    // Keep the filename stable across the rebrand so installs preserve
-    // their settings.
+    // Filename also hardcoded to "JS8Call.ini" rather than derived from
+    // applicationName for the same continuity reason.
     return config_path.absoluteFilePath("JS8Call.ini");
 }
 

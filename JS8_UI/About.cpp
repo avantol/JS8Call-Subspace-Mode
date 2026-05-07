@@ -27,7 +27,7 @@ CAboutDlg::CAboutDlg(QWidget *parent) : QDialog(parent), ui(new Ui::CAboutDlg) {
         "<p align='left'><small><small>"
         
         "Subspace Edition was derived from "
-        "<a href=\"https://github.com/JS8Call-improved/JS8Call-improved\">'JS8Call-Improved v2.6.0'</a>. "
+        "<a href=\"https://github.com/JS8Call-improved/JS8Call-improved\">'JS8Call-Improved v2.5.0'</a>. "
         "JS8Call-Improved was developed by the team that "
         "continued development of the original "
         "JS8Call starting in late 2024. This team includes: "

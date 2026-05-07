@@ -443,7 +443,7 @@ color : white;
                  <string notr="true">QLabel { font-size: 11pt; }</string>
                 </property>
                 <property name="text">
-                 <string>&lt;a href=&quot;https://groups.io/g/JS8Call-Subspace/topics&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Join the discussion&lt;/a&gt;</string>
+                 <string>&lt;a href=&quot;https://groups.io/g/Subspace/messages&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Join the discussion&lt;/a&gt;</string>
                 </property>
                 <property name="openExternalLinks">
                  <bool>true</bool>
@@ -456,7 +456,7 @@ color : white;
                  <string notr="true">QLabel { font-size: 11pt; }</string>
                 </property>
                 <property name="text">
-                 <string>&lt;a href=&quot;https://www.qrz.com/db/WM8Q&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Subspace by WM8Q&lt;/a&gt;</string>
+                 <string>&lt;a href=&quot;https://www.qrz.com/db/WM8Q&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Apps from WM8Q&lt;/a&gt;</string>
                 </property>
                 <property name="openExternalLinks">
                  <bool>true</bool>
