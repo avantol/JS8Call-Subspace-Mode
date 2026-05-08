@@ -229,9 +229,16 @@ int main(int argc, char *argv[]) {
             QStandardPaths::writableLocation(QStandardPaths::TempLocation)};
         Q_ASSERT(temp_dir.exists()); // sanity check
 
-        // disallow multiple instances with same instance key
+        // disallow multiple instances with same instance key.
+        // Hardcoded "JS8Call.lock" rather than derived from
+        // applicationName() — same continuity rationale as the
+        // JS8Call.ini settings filename. The applicationName was
+        // renamed to "Subspace Edition" for branding, but a
+        // filename with a space ("Subspace Edition.lock") is a
+        // shell-quoting hazard and gives no user-visible benefit
+        // (the lock file is purely internal).
         QLockFile instance_lock{
-            temp_dir.absoluteFilePath(a.applicationName() + ".lock")};
+            temp_dir.absoluteFilePath("JS8Call.lock")};
         instance_lock.setStaleLockTime(0);
         while (!instance_lock.tryLock()) {
             if (QLockFile::LockFailedError == instance_lock.error()) {

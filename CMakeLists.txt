@@ -64,7 +64,7 @@ project(
 set(PROJECT_VENDOR "Jordan Sherer, KN4CRD")
 set(PROJECT_CONTACT "Jordan Sherer <kn4crd@gmail.com>")
 set(PROJECT_COPYRIGHT "Copyright (C) 2001-2018 by Joe Taylor, K1JT, (C) 2018 by Jordan Sherer, KN4CRD, (C) of contributed work is owned by individual contributors")
-set(PROJECT_HOMEPAGE https://github.com/avantol/JS8Call-Subspace-Mode)
+set(PROJECT_HOMEPAGE https://github.com/avantol/Subspace-Edition)
 set(PROJECT_SUMMARY_DESCRIPTION "${PROJECT_NAME} - Digital Modes for Weak Signal Communications in Amateur Radio.")
 set(PROJECT_DESCRIPTION "${PROJECT_SUMMARY_DESCRIPTION}
  ${PROJECT_NAME} is a computer program designed to facilitate amateur radio communication using very weak signals.")

@@ -430,7 +430,7 @@ color : white;
                  <string notr="true">QLabel { font-size: 11pt; }</string>
                 </property>
                 <property name="text">
-                 <string>&lt;a href=&quot;https://github.com/avantol/JS8Call-Subspace-Mode/releases/latest&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Check for updates&lt;/a&gt;</string>
+                 <string>&lt;a href=&quot;https://github.com/avantol/Subspace-Edition/releases/latest&quot; style=&quot;color: #88bbff; text-decoration: underline;&quot;&gt;Check for updates&lt;/a&gt;</string>
                 </property>
                 <property name="openExternalLinks">
                  <bool>true</bool>

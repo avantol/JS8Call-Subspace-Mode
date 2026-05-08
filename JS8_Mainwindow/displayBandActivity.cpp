@@ -92,15 +92,11 @@ void UI_Constructor::displayBandActivity() {
                         shouldDisplay = false;
                     }
 
-                    // hide "CALL: CALL NO" (exact) not directed to me
-                    {
-                        static const QRegularExpression noRe(
-                            R"(\b\w+:\s+\w+\s+NO\s*[^\w]*$)");
-                        if (noRe.match(item.text).hasMatch() &&
-                            !item.text.contains(myCall + " NO")) {
-                            shouldDisplay = false;
-                        }
-                    }
+                    // NO messages are intentionally NOT filtered here —
+                    // even when "Show band heartbeats and acks" is off,
+                    // a "CALL: CALL NO" reply is meaningful traffic
+                    // worth seeing. (Reverted prior filter that hid
+                    // these alongside HBs/ACKs.)
 
                     // hide YES SNR replies not directed to me
                     {

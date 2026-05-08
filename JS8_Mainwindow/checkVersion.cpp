@@ -34,7 +34,7 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
                         QString("A new version (%1) of Subspace Edition is "
                                 "now available. Please see the <a "
                                 "href='https://github.com/avantol/"
-                                "JS8Call-Subspace-Mode/releases'>GitHub "
+                                "Subspace-Edition/releases'>GitHub "
                                 "Releases</a> for more details.")
                             .arg(content),
                         QMessageBox::Information, QMessageBox::Ok,
@@ -56,7 +56,7 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
             });
 
     qCDebug(mainwindow_js8) << "Checking for Updates...";
-    QUrl url("https://github.com/avantol/JS8Call-Subspace-Mode/releases/"
+    QUrl url("https://github.com/avantol/Subspace-Edition/releases/"
              "latest/download/version.txt");
     QNetworkRequest r(url);
     m->get(r);
