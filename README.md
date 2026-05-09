@@ -54,7 +54,9 @@ No data is ever shared with the developer or any third-party entities.
 4. Data Storage
 All logs (ADIF files) and configuration settings are stored locally on your machine in the application's private data folder. These remain under the user's total control.
 
-## JS8Call-improved (original README)
+<br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/><br/>
+
+### JS8Call-improved (original README)
 JS8Call-improved is continued development of the original JS8Call project. Most of the same developers have worked on both projects.
 
 Full information on JS8Call, including the User Guide and code documentation is available on our [website](https://js8call-improved.github.io)
@@ -63,10 +65,10 @@ Like JS8Call, JS8Call-improved is licensed under the GPLv3, the Qt libraries use
 
 You can view or save an offline copy of the JS8Call User Guide [here](https://js8call-improved.github.io/JS8Call-improved/d6/d14/md_docs_2user__guide_2JS8Call__User__Guide.html)
 
-### Building JS8Call-improved From Sourcecode
+#### Building JS8Call-improved From Sourcecode
 Instructions can be found in [docs](docs) in the source tree for building JS8Call on MacOS, Linux and Windows, as well as a contributor's guide.
 
-### Debugging JS8Call-improved
+#### Debugging JS8Call-improved
 You can get a lot of debug output reporting what the program does by setting the environment variable `QT_LOGGING_RULES` to an appropriate value.
 
 The value `*.js8=true` gives you all output there is.
@@ -79,10 +81,10 @@ You find `decoder.js8` a bit too noisy, you may use the value `*.js8=true;decode
 
 The official documentation of what we are using here can be found at [https://doc.qt.io/qt-6/qloggingcategory.html#checking-category-configuration](https://doc.qt.io/qt-6/qloggingcategory.html#checking-category-configuration).
 
-### History - JS8Call
+#### History - JS8Call
 JS8Call is an experiment in combining the robustness of FT8 (a weak-signal mode by K1JT) with a messaging and network protocol layer for weak signal communication. The open source software is designed for connecting amateur radio operators who are operating under weak signal conditions and offers real-time keyboard-to-keyboard messaging, store-and-forward messaging, and automatic station announcements.
 
-### Notice
+#### Notice
 JS8Call is a derivative of the WSJT-X application, restructured and redesigned for message passing using a custom FSK modulation called JS8. It is not supported by nor endorsed by the WSJT-X development group. While the WSJT-X group maintains copyright over the original work and code, JS8Call is a derivative work licensed under and in accordance with the terms of the GPLv3 license. The source code modifications are public and can be found in this repository: https://github.com/js8call/js8call .
 
 * July 6, 2017 - The initial idea of using a modification to the FT8 protocol to support long-form QSOs was developed by Jordan, KN4CRD, and submitted to the WSJT-X mailing list: https://sourceforge.net/p/wsjt/mailman/message/35931540/
@@ -116,7 +118,7 @@ JS8Call is a derivative of the WSJT-X application, restructured and redesigned f
 * November 29, 2019 - Version 2.0.0 general availability - Fast and Turbo speeds introduced!
 * December 22, 2019 - Version 2.1.0 general availability - Slow speed introduced!
 
-### JS8Call Updates to v2.3.x
+#### JS8Call Updates to v2.3.x
 This is, in the flavor of `WSJTX-improved`, an 'improved' version of the original JS8Call, the source
 code for which is now hosted on this repository.
 
@@ -128,7 +130,7 @@ visual improvements to the UI.
 Anyway.....that's what this does; that's all this does. It's not intended to be anything but a vehicle
 by which to provide my changes to the original author.
 
-### Notable Changes
+#### Notable Changes
 - Use of Fortran has been eliminated; everything that was previously implemented in Fortran has
   been ported to C++.
 - The requirement for a separate decoder process and use of shared memory has been eliminated.
@@ -209,7 +211,7 @@ grunt work while I largely just type things and drink coffee.
 
 Allan Bazinet, W6BAZ
 
-### JS8Call v2.4.x and later
+#### JS8Call v2.4.x and later
 All versions of JS8Call up to version 2.3.1 were named "jscall" (lower case). JS8Call-improved was founded by Chris AC9KH to move development forward from v2.3.1. Version 2.4.0 was released as JS8Call-improved on Nov 3, 2025 when development moved to the new team environment. Jordan archived the original [js8call repository](https://github.com/js8call/js8call), joined the JS8Call-improved team and the software was named JS8Call (both upper and lower case) for versions 2.5.0 and later. JS8Call-improved is now the official source of the software. Builds for Mac, Windows and Linux are provided in our [releases](https://github.com/JS8Call-improved/JS8Call-improved/releases) from version 2.4.0 and later. Included in the releases are build assets that you can use to build JS8Call from source code, such as pre-built libraries for MacOS and automated scripts for Linux-based systems.
 
 Chris Olson, AC9KH
