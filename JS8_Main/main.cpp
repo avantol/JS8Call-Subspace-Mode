@@ -15,6 +15,7 @@
 #include "MetaDataRegistry.h"
 #include "MultiSettings.h"
 #include "Radio.h"
+#include "StoragePathMigration.h"
 #include "TraceFile.h"
 #include "revision_utils.h"
 
@@ -126,6 +127,11 @@ int main(int argc, char *argv[]) {
         // Override programs executable basename as application name.
         a.setApplicationName("Subspace Edition");
         a.setApplicationVersion(version());
+
+        // One-shot migration of user data from the historic
+        // "Subspace Edition" AppLocalDataLocation directory back to
+        // the canonical "JS8Call" directory shared with older builds.
+        StoragePathMigration::run();
 
 #if QT_VERSION >= 0x050200
         QCommandLineParser parser;

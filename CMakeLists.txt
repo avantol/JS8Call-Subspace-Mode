@@ -246,6 +246,7 @@ target_sources(
   JS8_Main/MultiSettings.cpp
   JS8_Main/RDP.cpp
   JS8_Main/StationList.cpp
+  JS8_Main/StoragePathMigration.cpp
   JS8_Main/TxLoop.cpp
   JS8_Main/WF.cpp
   JS8_Main/fileutils.cpp
