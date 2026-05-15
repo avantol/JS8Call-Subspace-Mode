@@ -6,6 +6,8 @@
 
 #include "HamlibTransceiver.h"
 
+#include "JS8_Main/StoragePaths.h"
+
 #include <QByteArray>
 #include <QFile>
 #include <QJsonDocument>
@@ -249,14 +251,8 @@ HamlibTransceiver::HamlibTransceiver(
         //
         // user defined Hamlib settings
         //
-        auto settings_file_name = QStandardPaths::locate(
-#if QT_VERSION >= 0x050500
-            QStandardPaths::AppConfigLocation
-#else
-            QStandardPaths::ConfigLocation
-#endif
-            ,
-            "hamlib_settings.json");
+        auto settings_file_name =
+            StoragePaths::locateConfig("hamlib_settings.json");
         if (!settings_file_name.isEmpty()) {
             QFile settings_file{settings_file_name};
             qCDebug(hamlibtransceiver_js8)

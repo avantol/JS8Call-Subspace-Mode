@@ -4,10 +4,11 @@
  */
 #include "LogBook.h"
 
+#include "JS8_Main/StoragePaths.h"
+
 #include <QDebug>
 #include <QDir>
 #include <QFontMetrics>
-#include <QStandardPaths>
 
 namespace {
 auto logFileName = "js8call_log.adi";
@@ -20,8 +21,7 @@ auto countryFileName = "cty.dat";
  */
 
 void LogBook::init() {
-    QDir dataPath{
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)};
+    QDir dataPath{StoragePaths::dataLocation()};
     QString countryDataFilename;
     if (dataPath.exists(countryFileName)) {
         // User override

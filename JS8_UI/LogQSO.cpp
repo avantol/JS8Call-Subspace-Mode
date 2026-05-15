@@ -10,6 +10,7 @@
 #include "JS8_Main/Bands.h"
 #include "JS8_Main/DriftingDateTime.h"
 #include "JS8_Main/JS8MessageBox.h"
+#include "JS8_Main/StoragePaths.h"
 #include "ui_LogQSO.h"
 
 #include <QAbstractItemView>
@@ -274,8 +275,7 @@ void LogQSO::accept() {
     // Log this QSO to ADIF file "js8call_log.adi"
     QString filename = "js8call_log.adi"; // TODO allow user to set
     ADIF adifile;
-    auto adifilePath = QDir{QStandardPaths::writableLocation(
-                                QStandardPaths::AppLocalDataLocation)}
+    auto adifilePath = QDir{StoragePaths::dataLocation()}
                            .absoluteFilePath(filename);
     adifile.init(adifilePath);
 
@@ -293,8 +293,7 @@ void LogQSO::accept() {
     }
 
     // Log this QSO to file "js8call.log"
-    static QFile f{QDir{
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)}
+    static QFile f{QDir{StoragePaths::dataLocation()}
                        .absoluteFilePath("js8call.log")};
     if (!f.open(QIODevice::Text | QIODevice::Append)) {
         JS8MessageBox::warning_message(

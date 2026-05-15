@@ -145,6 +145,7 @@
 #include "JS8_Main/MetaDataRegistry.h"
 #include "JS8_Main/Modes.h"
 #include "JS8_Main/StationList.h"
+#include "JS8_Main/StoragePaths.h"
 #include "JS8_Main/Varicode.h"
 #include "JS8_Main/qt_helpers.h"
 #include "JS8_Network/NetworkServerLookup.h"
@@ -1220,8 +1221,7 @@ Configuration::impl::impl(Configuration *self, QDir const &temp_directory,
     : QDialog{parent}, self_{self}, transceiver_thread_{nullptr},
       ui_{new Ui::configuration_dialog}, settings_{settings},
       temp_dir_{temp_directory},
-      writeable_data_dir_{QStandardPaths::writableLocation(
-          QStandardPaths::AppLocalDataLocation)},
+      writeable_data_dir_{StoragePaths::dataLocation()},
       restart_sound_input_device_{false}, restart_sound_output_device_{false},
       restart_notification_sound_output_device_{false}, frequencies_{&bands_},
       next_frequencies_{&bands_}, stations_{&bands_}, next_stations_{&bands_},

@@ -1,5 +1,7 @@
 #include "StoragePathMigration.h"
 
+#include "StoragePaths.h"
+
 #include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
@@ -12,13 +14,12 @@
 
 namespace {
 
-// Resolve AppLocalDataLocation for an arbitrary applicationName by
-// temporarily swapping it on QCoreApplication, then restoring. Same
-// pattern used in MultiSettings::settings_path() for the legacy
-// JS8Call.ini path.
-QString resolveAppLocalDataDir(QString const &appName) {
+// Resolve the legacy "Subspace Edition" AppLocalDataLocation by
+// temporarily swapping applicationName so we can locate any data
+// that earlier branded builds left behind.
+QString legacySubspaceDataDir() {
     QString const saved = QCoreApplication::applicationName();
-    QCoreApplication::setApplicationName(appName);
+    QCoreApplication::setApplicationName(QStringLiteral("Subspace Edition"));
     QString const path = QStandardPaths::writableLocation(
         QStandardPaths::AppLocalDataLocation);
     QCoreApplication::setApplicationName(saved);
@@ -34,27 +35,56 @@ bool moveIfAbsent(QString const &srcPath, QString const &dstPath) {
     return QFile::rename(srcPath, dstPath);
 }
 
+// Locate the first record byte in an ADIF file (immediately past the
+// "<eoh>" marker and any trailing line breaks). Returns 0 when no
+// header marker is present, so plain record-only files append cleanly.
+qint64 adifBodyStart(QFile &f) {
+    qint64 const saved = f.pos();
+    f.seek(0);
+    QByteArray const probe = f.read(8192);
+    f.seek(saved);
+    int const idx = probe.toLower().indexOf("<eoh>");
+    if (idx < 0) return 0;
+    qint64 pos = idx + 5;
+    while (pos < probe.size() &&
+           (probe[pos] == '\r' || probe[pos] == '\n'))
+        ++pos;
+    return pos;
+}
+
 // If dst doesn't exist, move src to dst. If dst exists, append src
-// contents to dst and remove src.
-bool appendOrMove(QString const &srcPath, QString const &dstPath) {
+// to dst then unlink src. When skipAdifHeader is true the source's
+// ADIF header (text up to and including "<eoh>") is skipped so the
+// destination keeps a single valid header.
+bool appendOrMove(QString const &srcPath, QString const &dstPath,
+                  bool skipAdifHeader = false) {
     if (!QFileInfo::exists(srcPath)) return true;
     if (!QFileInfo::exists(dstPath)) {
         QDir().mkpath(QFileInfo(dstPath).absolutePath());
         return QFile::rename(srcPath, dstPath);
     }
-    QFile in(srcPath);
-    if (!in.open(QIODevice::ReadOnly)) return false;
-    QFile out(dstPath);
-    if (!out.open(QIODevice::Append)) return false;
-    constexpr qint64 BUF = 64 * 1024;
-    while (!in.atEnd()) {
-        QByteArray const chunk = in.read(BUF);
-        if (chunk.isEmpty()) break;
-        if (out.write(chunk) != chunk.size()) return false;
+    bool copied = true;
+    {
+        QFile in(srcPath);
+        if (!in.open(QIODevice::ReadOnly)) return false;
+        QFile out(dstPath);
+        if (!out.open(QIODevice::Append)) return false;
+        if (skipAdifHeader) in.seek(adifBodyStart(in));
+        constexpr qint64 BUF = 64 * 1024;
+        while (!in.atEnd()) {
+            QByteArray const chunk = in.read(BUF);
+            if (chunk.isEmpty()) break;
+            if (out.write(chunk) != chunk.size()) {
+                copied = false;
+                break;
+            }
+        }
+        out.flush();
     }
-    in.close();
-    out.close();
-    return QFile::remove(srcPath);
+    if (copied) {
+        QFile::remove(srcPath);
+    }
+    return copied;
 }
 
 // Recursively move contents of srcDir into dstDir using no-clobber
@@ -83,18 +113,18 @@ bool isDirEmpty(QDir const &dir) {
 } // namespace
 
 void StoragePathMigration::run() {
-    QString const srcRoot = resolveAppLocalDataDir("Subspace Edition");
+    QString const srcRoot = legacySubspaceDataDir();
     QDir const src(srcRoot);
     if (!src.exists()) return;
 
     QString const markerPath = src.absoluteFilePath("merged");
     if (QFileInfo::exists(markerPath)) return;
 
-    QString const dstRoot = resolveAppLocalDataDir("JS8Call");
+    QString const dstRoot = StoragePaths::dataLocation();
     QDir().mkpath(dstRoot);
     QDir const dst(dstRoot);
 
-    // Move-if-absent: binary state files; keep whichever the user
+    // Move-if-absent: binary state files. Keep whichever the user
     // already has at the canonical location.
     QStringList const moveOnly{
         QStringLiteral("inbox.db3"),
@@ -104,24 +134,29 @@ void StoragePathMigration::run() {
                      dst.absoluteFilePath(name));
     }
 
-    // Move-or-append: text logs concatenate cleanly.
-    QStringList const appendable{
+    // Move-or-append: plain text logs concatenate cleanly.
+    QStringList const appendablePlain{
         QStringLiteral("ALL.TXT"),
         QStringLiteral("DIRECTED.TXT"),
-        QStringLiteral("js8call_log.adi"),
         QStringLiteral("js8call.log")};
-    for (QString const &name : appendable) {
+    for (QString const &name : appendablePlain) {
         appendOrMove(src.absoluteFilePath(name),
                      dst.absoluteFilePath(name));
     }
+    // ADIF needs its source-side header skipped or the destination
+    // ends up with a header embedded mid-record.
+    appendOrMove(src.absoluteFilePath("js8call_log.adi"),
+                 dst.absoluteFilePath("js8call_log.adi"),
+                 /*skipAdifHeader=*/true);
 
     // save/ subdirectory: per-file no-clobber merge.
     moveDirContents(QDir(src.absoluteFilePath("save")),
                     QDir(dst.absoluteFilePath("save")));
     QDir(src.absoluteFilePath("save")).rmdir(".");
 
-    // If nothing remains at the source, remove it. Otherwise drop a
-    // sentinel so we don't repeat the work on the next launch.
+    // If nothing remains at the source, remove it; otherwise drop a
+    // sentinel so subsequent launches skip the work. Runtime no
+    // longer writes here, so a one-shot is sufficient.
     QDir reread(srcRoot);
     if (isDirEmpty(reread)) {
         reread.rmdir(".");
