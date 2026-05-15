@@ -41,3 +41,15 @@ QString StoragePaths::locateConfig(QString const &fileName) {
     return QStandardPaths::locate(QStandardPaths::AppConfigLocation,
                                   fileName);
 }
+
+QString StoragePaths::settingsDirectory() {
+    AppNamePin pin{QStringLiteral("JS8Call")};
+    return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
+}
+
+QString StoragePaths::pathApplicationName() {
+    QString name = QCoreApplication::applicationName();
+    name.replace(QStringLiteral("Subspace Edition"),
+                 QStringLiteral("JS8Call"));
+    return name;
+}

@@ -24,6 +24,20 @@ QString configLocation();
 // with applicationName pinned to "JS8Call".
 QString locateConfig(QString const &fileName);
 
+// ConfigLocation pinned to "JS8Call" -- the directory the legacy
+// JS8Call.ini sits in (and where diagnostic-log files belong).
+// MultiSettings::settings_path() already does this internally for
+// the .ini path; this exposes the parent directory for other
+// callers (e.g. the early-startup diag-log emitter).
+QString settingsDirectory();
+
+// applicationName() with the "Subspace Edition" display brand
+// substituted back to "JS8Call". Multi-instance rig/test suffixes
+// are preserved. Use this whenever the runtime brand is being baked
+// into a path or filename so file routing stays on the historical
+// names.
+QString pathApplicationName();
+
 } // namespace StoragePaths
 
 #endif // STORAGE_PATHS_H

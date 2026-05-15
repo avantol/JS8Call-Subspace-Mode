@@ -16,6 +16,7 @@
 #include "MultiSettings.h"
 #include "Radio.h"
 #include "StoragePathMigration.h"
+#include "StoragePaths.h"
 #include "TraceFile.h"
 #include "revision_utils.h"
 
@@ -182,9 +183,10 @@ int main(int argc, char *argv[]) {
             new TraceFile(parser.value(output_option));
         } else {
             // Check DiagnosticLogging setting directly from QSettings
-            // (Configuration object not yet created at this point)
-            auto configDir = QStandardPaths::writableLocation(
-                QStandardPaths::ConfigLocation);
+            // (Configuration object not yet created at this point).
+            // Use StoragePaths so the lookup stays on the historical
+            // "JS8Call" path regardless of the runtime branding.
+            auto configDir = StoragePaths::settingsDirectory();
             QSettings settings(configDir + "/JS8Call.ini", QSettings::IniFormat);
             settings.beginGroup("Configuration");
             bool diagEnabled = settings.value("DiagnosticLogging", false).toBool();
@@ -275,14 +277,14 @@ int main(int argc, char *argv[]) {
 
 #if WSJT_QDEBUG_TO_FILE
         // Open a trace file
-        TraceFile trace_file{
-            temp_dir.absoluteFilePath(a.applicationName() + "_trace.log")};
+        TraceFile trace_file{temp_dir.absoluteFilePath(
+            StoragePaths::pathApplicationName() + "_trace.log")};
         qCDebug(main_js8) << program_title() + " - Program startup";
 #endif
 
         // Create a unique writeable temporary directory in a suitable location
         bool temp_ok{false};
-        QString unique_directory{QApplication::applicationName()};
+        QString unique_directory{StoragePaths::pathApplicationName()};
         do {
             if (!temp_dir.mkpath(unique_directory) ||
                 !temp_dir.cd(unique_directory)) {
