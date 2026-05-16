@@ -370,6 +370,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 if (shouldProcessCompound && decodedtext.isCompound() &&
                     !decodedtext.isDirectedMessage()) {
                     cd.call = decodedtext.compoundCall();
+                    if (!cd.call.isEmpty() && cd.call != "<....>") {
+                        m_wideGraph->setCallsignOverlayEnabled(
+                            m_config.show_calls_on_waterfall());
+                        m_wideGraph->annotateCall(
+                            cd.call, decodedtext.frequencyOffset(),
+                            decodedtext.submode());
+                    }
                     cd.grid = decodedtext.extra(); // compound calls via pings
                                                    // may contain grid...
                     cd.snr = decodedtext.snr();
@@ -462,6 +469,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     auto parts = decodedtext.directedMessage();
 
                     cmd.from = parts.at(0);
+                    if (!cmd.from.isEmpty() && cmd.from != "<....>") {
+                        m_wideGraph->setCallsignOverlayEnabled(
+                            m_config.show_calls_on_waterfall());
+                        m_wideGraph->annotateCall(
+                            cmd.from, decodedtext.frequencyOffset(),
+                            decodedtext.submode());
+                    }
                     cmd.to = parts.at(1);
                     cmd.cmd = parts.at(2);
                     cmd.dial = freq;

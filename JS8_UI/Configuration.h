@@ -135,6 +135,7 @@ class Configuration final : public QObject {
     bool write_logs() const;
     bool reset_activity() const;
     bool diagnostic_logging() const;
+    bool show_calls_on_waterfall() const;
     int message_subdivisions() const;
     bool tx_qsy_allowed() const;
     bool spot_to_reporting_networks() const;
@@ -357,6 +358,7 @@ class Configuration final : public QObject {
     Q_SIGNAL void tcp_max_connections_changed(int n);
 
     Q_SIGNAL void spot_to_aprs_relay_changed(bool enabled);
+    Q_SIGNAL void show_calls_on_waterfall_changed(bool enabled);
 
     // WSJT-X Protocol signals
     /**

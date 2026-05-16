@@ -294,8 +294,14 @@ void UI_Constructor::processCommandActivity() {
                     m_cq_loop->onLoopCancel();
                 }
 
-                // notification for directed message
-                tryNotify("directed", d.submode);
+                // notification for directed message. @APRSIS is group
+                // traffic (anyone gateway-relaying to APRS-IS), not
+                // anything directed to this operator, so suppress the
+                // "directed-msg" alert there. Spotting / display / any
+                // auto-reply logic on @APRSIS is unchanged.
+                if (d.to != "@APRSIS") {
+                    tryNotify("directed", d.submode);
+                }
             }
         }
 

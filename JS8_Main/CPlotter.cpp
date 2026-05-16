@@ -201,7 +201,14 @@ void CPlotter::drawData(WF::SWide swide, WF::State const state) {
         m_line = std::numeric_limits<int>::max();
 
         p.setPen(Qt::white);
-        p.drawText(5, p.fontMetrics().ascent(), m_text);
+        // When call-sign overlays are enabled, callsign labels start
+        // descending from the top of the waterfall along its full
+        // width. Push the time/band label to the right edge so the
+        // two don't fight for the same column.
+        int const labelX = m_callsignOverlayEnabled
+            ? std::max(5, m_w - p.fontMetrics().horizontalAdvance(m_text) - 5)
+            : 5;
+        p.drawText(labelX, p.fontMetrics().ascent(), m_text);
     }
 
     // A number of factors determine whether or not we should draw the spectrum.
@@ -326,6 +333,58 @@ void CPlotter::drawHorizontalLine(QColor const &color, int const x,
 
     p.setPen(color);
     p.drawLine(x, 0, width <= 0 ? m_w : x + width, 0);
+}
+
+void CPlotter::setCallsignOverlayEnabled(bool const enabled) {
+    m_callsignOverlayEnabled = enabled;
+}
+
+// Paint the callsign as a vertical label at the signal's offset on
+// the waterfall. The label is drawn rotated -90 degrees so the
+// glyphs read from bottom to top; the LAST character sits at row 0
+// (the visible top of the waterfall) and the FIRST character is
+// below. A solid black rectangle is painted behind the white text so
+// background-noise variation in the waterfall doesn't fight legibility.
+// The label is horizontally centered over the signal's bandwidth
+// using the submode-specific bandwidth.
+void CPlotter::annotateCall(QString const &call,
+                            int const offsetHz,
+                            int const submode) {
+    if (!m_callsignOverlayEnabled) return;
+    if (call.isEmpty()) return;
+    if (m_WaterfallPixmap.isNull()) return;
+
+    QPainter p(&m_WaterfallPixmap);
+
+    QFont f = p.font();
+    f.setPointSize(10);
+    p.setFont(f);
+
+    QFontMetrics const fm = p.fontMetrics();
+    int const ascent = fm.ascent();
+    int const descent = fm.descent();
+    int const textWidth = fm.horizontalAdvance(call);
+
+    // Center the label over the signal's bandwidth.
+    int const bandwidth = JS8::Submode::bandwidth(submode);
+    int const centerHz = offsetHz + bandwidth / 2;
+    int const x = xFromFreq(static_cast<float>(centerHz));
+
+    p.save();
+    p.translate(x, textWidth);
+    p.rotate(-90.0);
+
+    // Opaque background: in the rotated frame this rect spans the
+    // text's full advance lengthwise and the font's ascent+descent
+    // crosswise, giving a tight box behind the glyphs.
+    p.fillRect(QRect(0, -ascent, textWidth, ascent + descent), Qt::black);
+
+    p.setPen(Qt::white);
+    p.drawText(0, 0, call);
+
+    p.restore();
+
+    update();
 }
 
 void CPlotter::drawMetrics() {
@@ -560,13 +619,40 @@ void CPlotter::replot() {
     // can iterate in forward order here, the Qt coordinate system having
     // (0, 0) as the upper-left point.
 
+    // Mirror the live drawData label-suppression rule: live drawLine
+    // arms m_line = K (= fontHeight * devicePixelRatio); each drawData
+    // decrements; if another drawLine arrives first, the previous text
+    // is overwritten unseen. On resize this loop replays every QString
+    // in the replot buffer, which exposes labels that the live pipeline
+    // would have suppressed when cycle markers are spaced closer than
+    // K. Pre-compute which QString entries actually had their text
+    // drawn live so we only replay those.
+    auto const K = p.fontMetrics().height() *
+                   m_WaterfallPixmap.devicePixelRatio();
+    std::vector<bool> drawText(m_replot.size(), false);
+    {
+        int last = -1;
+        int idx = 0;
+        for (auto const &v : m_replot) {
+            if (std::holds_alternative<QString>(v)) {
+                int const distance = (last < 0) ? idx : (idx - last - 1);
+                if (distance >= K) drawText[idx] = true;
+                last = idx;
+            }
+            ++idx;
+        }
+    }
+
     auto y = 0;
 
     for (auto &&v : m_replot) {
         std::visit(
             [ratio = m_WaterfallPixmap.devicePixelRatio(),
              width = m_WaterfallPixmap.size().width(),
-             extra = p.fontMetrics().descent(), &y = std::as_const(y),
+             extra = p.fontMetrics().descent(),
+             rightAlign = m_callsignOverlayEnabled,
+             drawTextHere = drawText[y],
+             &y = std::as_const(y),
              &colors = std::as_const(m_colors),
              &scaler = std::as_const(m_scaler1D), &p](auto const &v) {
                 // Note that a monostate is constructed as the default when we
@@ -579,11 +665,17 @@ void CPlotter::replot() {
                 // the pixmap, annotated by the text provided.
 
                 if constexpr (std::is_same_v<T, QString>) {
-                    p.setPen(Qt::white);
-                    p.save();
-                    p.scale(1, ratio);
-                    p.drawText(5, y / ratio - extra, v);
-                    p.restore();
+                    if (drawTextHere) {
+                        p.setPen(Qt::white);
+                        p.save();
+                        p.scale(1, ratio);
+                        int const labelX = rightAlign
+                            ? std::max(5,
+                                width - p.fontMetrics().horizontalAdvance(v) - 5)
+                            : 5;
+                        p.drawText(labelX, y / ratio - extra, v);
+                        p.restore();
+                    }
                     p.setPen(Qt::green);
                     p.drawLine(0, y, width, y);
                 }

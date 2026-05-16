@@ -459,6 +459,16 @@ void WideGraph::drawHorizontalLine(QColor const &color, int const x,
     ui->widePlot->drawHorizontalLine(color, x, width);
 }
 
+void WideGraph::annotateCall(QString const &call,
+                             int const offsetHz,
+                             int const submode) {
+    ui->widePlot->annotateCall(call, offsetHz, submode);
+}
+
+void WideGraph::setCallsignOverlayEnabled(bool const enabled) {
+    ui->widePlot->setCallsignOverlayEnabled(enabled);
+}
+
 void WideGraph::dataSink(WF::SPlot const &s, float const df3) {
     QMutexLocker lock(&m_drawLock);
 

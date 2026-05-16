@@ -188,6 +188,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             m_aprsClient, &APRSISClient::setIncomingRelayEnabled);
     connect(&m_config, &Configuration::spot_to_aprs_relay_changed, m_aprsClient,
             &APRSISClient::setIncomingRelayEnabled);
+    connect(&m_config, &Configuration::show_calls_on_waterfall_changed,
+            this, [this](bool enabled) {
+                m_wideGraph->setCallsignOverlayEnabled(enabled);
+            });
     connect(m_aprsClient, &APRSISClient::messageReceived, m_aprsInboundRelay,
             &AprsInboundRelay::onMessageReceived);
     connect(&m_networkThread, &QThread::finished, m_aprsClient,
@@ -703,6 +707,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     ui->horizontalLayoutBand->insertSpacing(1, 6);
     ui->horizontalLayoutBand->insertWidget(2, m_wideGraph.data(), 1);
     ui->horizontalLayoutBand->insertSpacing(3, 8);
+
+    // Push the call-sign waterfall overlay setting so the time/band
+    // label scoots to the right immediately if the user has it on.
+    m_wideGraph->setCallsignOverlayEnabled(
+        m_config.show_calls_on_waterfall());
 
     // remove disabled menus from the menu bar
     foreach (auto action, ui->menuBar->actions()) {

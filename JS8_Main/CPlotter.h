@@ -146,6 +146,9 @@ class CPlotter final : public QWidget {
     void drawData(WF::SWide, WF::State);
     void drawDecodeLine(const QColor &, int, int);
     void drawHorizontalLine(const QColor &, int, int);
+    void annotateCall(QString const &call, int offsetHz, int submode);
+    void setCallsignOverlayEnabled(bool enabled);
+    bool callsignOverlayEnabled() const { return m_callsignOverlayEnabled; }
     void setBinsPerPixel(int);
     void setColors(Colors const &);
     void setDialFreq(float);
@@ -216,6 +219,7 @@ class CPlotter final : public QWidget {
     int m_h1 = 0;
     int m_h2 = 0;
     bool m_filterEnabled = false;
+    bool m_callsignOverlayEnabled = true;
     float m_freqPerPixel;
 
     RDP m_rdp;

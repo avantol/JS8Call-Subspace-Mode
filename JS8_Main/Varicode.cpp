@@ -2302,6 +2302,33 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
                     int checksumSize = 0;
 #endif
 
+                    // If the input already ends with a valid checksum
+                    // suffix for this command's size, strip it before
+                    // appending a fresh one. Without this, recalling a
+                    // previously sent message (m_lastTxMessage holds the
+                    // wire form, checksum and all) and re-Sending grows
+                    // a stacked checksum on every cycle.
+                    if (checksumSize > 0) {
+                        int const tail = (checksumSize == 32) ? 6 : 3;
+                        if (line.length() >= tail + 2 &&
+                            line.at(line.length() - tail - 1) ==
+                                QLatin1Char(' ')) {
+                            QString const suffix = line.right(tail);
+                            QString const body =
+                                line.left(line.length() - tail - 1);
+                            bool const valid =
+                                (checksumSize == 32)
+                                    ? Varicode::checksum32Valid(suffix, body)
+                                    : Varicode::checksum16Valid(suffix, body);
+                            if (valid) {
+                                qCDebug(varicode_js8)
+                                    << "stripping stale checksum from recall:"
+                                    << suffix;
+                                line = body;
+                            }
+                        }
+                    }
+
                     if (checksumSize == 32) {
                         line = line + " " + Varicode::checksum32(line);
                     } else if (checksumSize == 16) {

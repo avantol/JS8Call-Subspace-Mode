@@ -488,6 +488,13 @@
                    </layout>
                   </item>
                   <item>
+                   <widget class="QCheckBox" name="showCallsOnWaterfall_checkBox">
+                    <property name="text">
+                     <string>Show call signs on waterfall</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
                    <widget class="QCheckBox" name="diagnosticLogging_checkBox">
                     <property name="text">
                      <string>Enable diagnostic logging (restart required)</string>
