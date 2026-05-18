@@ -488,11 +488,35 @@
                    </layout>
                   </item>
                   <item>
-                   <widget class="QCheckBox" name="showCallsOnWaterfall_checkBox">
-                    <property name="text">
-                     <string>Show call signs on waterfall</string>
-                    </property>
-                   </widget>
+                   <layout class="QHBoxLayout">
+                    <item>
+                     <widget class="QCheckBox" name="showCallsOnWaterfall_checkBox">
+                      <property name="text">
+                       <string>Show call signs on waterfall</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
+                     <widget class="QToolButton" name="show_calls_info_button">
+                      <property name="toolTip">
+                       <string>More info about waterfall call-sign labels</string>
+                      </property>
+                      <property name="text">
+                       <string>&#9432;</string>
+                      </property>
+                      <property name="autoRaise">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
+                     <spacer>
+                      <property name="orientation">
+                       <enum>Qt::Orientation::Horizontal</enum>
+                      </property>
+                     </spacer>
+                    </item>
+                   </layout>
                   </item>
                   <item>
                    <widget class="QCheckBox" name="diagnosticLogging_checkBox">

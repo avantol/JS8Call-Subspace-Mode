@@ -52,7 +52,9 @@ class WideGraph : public QWidget {
     void drawDecodeLine(QColor const &, int, int);
     void drawHorizontalLine(QColor const &, int, int);
     void annotateCall(QString const &call, int offsetHz, int submode,
-                      bool inMyGroup = false);
+                      bool inMyGroup = false,
+                      bool destIsSubspaceGroup = false,
+                      bool isUpgrade = false);
     void setCallsignOverlayEnabled(bool enabled);
     void saveSettings();
     void setBand(QString const &);

@@ -148,7 +148,9 @@ class CPlotter final : public QWidget {
     void drawDecodeLine(const QColor &, int, int);
     void drawHorizontalLine(const QColor &, int, int);
     void annotateCall(QString const &call, int offsetHz, int submode,
-                      bool inMyGroup = false);
+                      bool inMyGroup = false,
+                      bool destIsSubspaceGroup = false,
+                      bool isUpgrade = false);
     void setCallsignOverlayEnabled(bool enabled);
     bool callsignOverlayEnabled() const { return m_callsignOverlayEnabled; }
     void setBinsPerPixel(int);
@@ -233,7 +235,12 @@ class CPlotter final : public QWidget {
         qint64 row;       // m_waterfallRow at paint time
         int lenPx;        // vertical extent (text horizontalAdvance)
         QString call;     // for same-call upgrade matching
+        int submode;      // for color matrix on replot
+        bool inMyGroup;
+        bool destIsSubspaceGroup;
     };
+    void paintLabelAt(QPainter &p, LabelEntry const &e,
+                      qint64 yOffset);
     std::deque<LabelEntry> m_recentLabels;
     qint64 m_waterfallRow = 0;  // monotonic 1-per-scroll counter
 

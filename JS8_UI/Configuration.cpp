@@ -1638,6 +1638,30 @@ Configuration::impl::impl(Configuration *self, QDir const &temp_directory,
                 Q_EMIT self_->show_calls_on_waterfall_changed(enabled);
             });
 
+    connect(ui_->show_calls_info_button, &QToolButton::clicked, this,
+            [this]() {
+        QMessageBox box{this};
+        box.setIcon(QMessageBox::Information);
+        box.setWindowTitle(tr("Waterfall call-sign labels"));
+        box.setTextFormat(Qt::RichText);
+        box.setText(tr(
+            "<p>Signals on the waterfall are easy to identify when "
+            "the call sign is displayed on the signal.</p>"
+            "<p>Calls directed to one of your groups are shown with "
+            "a purple background: "
+            "<span style='background:#800080;color:white;"
+            "padding:1px 4px;font-family:monospace;'>K1JT</span></p>"
+            "<p>Subspace mode calls are shown using a yellow "
+            "foreground: "
+            "<span style='background:black;color:yellow;"
+            "padding:1px 4px;font-family:monospace;'>K1JT</span></p>"
+            "<p>Subspace mode calls to the @SUBSPACE group are "
+            "shown with a yellow background: "
+            "<span style='background:yellow;color:black;"
+            "padding:1px 4px;font-family:monospace;'>K1JT</span></p>"));
+        box.exec();
+    });
+
     // delegates
     auto stations_item_delegate = new QStyledItemDelegate{this};
     stations_item_delegate->setItemEditorFactory(item_editor_factory());
@@ -2058,6 +2082,19 @@ void Configuration::impl::read_settings() {
     my_callsign_ = settings_->value("MyCall", QString{}).toString();
     my_grid_ = settings_->value("MyGrid", QString{}).toString();
     my_groups_ = settings_->value("MyGroups", QStringList{}).toStringList();
+    // One-time seed of @SUBSPACE into MyGroups. Gated on a separate
+    // MyGroupsSeeded flag so it fires exactly once per user (new
+    // installs AND existing users upgrading to a build that includes
+    // this logic). Append rather than replace, so existing groups
+    // are preserved. Once seeded, the flag stays set forever — if
+    // the user later removes @SUBSPACE, it stays removed.
+    if (!settings_->value("MyGroupsSeeded", false).toBool()) {
+        if (!my_groups_.contains("@SUBSPACE")) {
+            my_groups_.append("@SUBSPACE");
+            settings_->setValue("MyGroups", my_groups_);
+        }
+        settings_->setValue("MyGroupsSeeded", true);
+    }
     auto_whitelist_ =
         settings_->value("AutoWhitelist", QStringList{}).toStringList();
     auto_blacklist_ =

@@ -384,8 +384,11 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             impliedTo =
                                 decodedtext.isAlt() ? "@ALLCALL" : "@HB";
                         }
+                        // @ALLCALL is too broad to ever flag as
+                        // a user-group destination.
                         bool const inMyGroup =
                             !impliedTo.isEmpty() &&
+                            impliedTo != "@ALLCALL" &&
                             isGroupCallIncluded(impliedTo);
                         m_wideGraph->setCallsignOverlayEnabled(
                             m_config.show_calls_on_waterfall());
@@ -485,29 +488,93 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     auto parts = decodedtext.directedMessage();
 
                     cmd.from = parts.at(0);
-                    // Resolve compound-directed FROM placeholder by
-                    // peeking at any compound frame buffered for this
-                    // offset (deposited by the compound branch when
-                    // the preceding compound frame decoded).
-                    QString annotateFrom = cmd.from;
-                    if (annotateFrom == "<....>") {
-                        auto const bufIt =
-                            m_messageBuffer.find(decodedtext.frequencyOffset());
+                    // Resolve FROM/TO from parts + buffered compound
+                    // based on actual observed wire layout (probed
+                    // 2026-05-18):
+                    //   FrameDirected:         [FROM, TO, CMD, ...]
+                    //     — both are real callsigns / basecalls.
+                    //     Either may be "<....>" if it was sent in a
+                    //     preceding FrameCompound (compound-TO case
+                    //     not observed in practice — JS8 prefers
+                    //     FrameCompoundDirected for that).
+                    //   FrameCompoundDirected: [<....>, TO_compound, CMD, ...]
+                    //     — this frame carries the compound TO.
+                    //     The FROM is in a preceding FrameCompound
+                    //     buffered for this offset.
+                    // isUpgrade is true when the compound branch
+                    // already painted the FROM (any time we resolve
+                    // it from the buffer).
+                    QString annotateFrom;
+                    QString annotateTo;
+                    bool annotateIsUpgrade = false;
+                    if (decodedtext.frameType() ==
+                        Varicode::FrameCompoundDirected) {
+                        annotateTo = (parts.size() > 1)
+                                         ? parts.at(1)
+                                         : QString();
+                        auto const bufIt = m_messageBuffer.find(
+                            decodedtext.frequencyOffset());
                         if (bufIt != m_messageBuffer.end() &&
                             !bufIt.value().compound.isEmpty()) {
                             annotateFrom =
                                 bufIt.value().compound.last().call;
+                            annotateIsUpgrade = true;
+                        } else {
+                            annotateFrom = "<....>";
+                        }
+                    } else {
+                        annotateFrom = cmd.from;
+                        annotateTo = parts.at(1);
+                        bool const fromCompound = (annotateFrom == "<....>");
+                        bool const toCompound = (annotateTo == "<....>");
+                        if (fromCompound || toCompound) {
+                            auto const bufIt = m_messageBuffer.find(
+                                decodedtext.frequencyOffset());
+                            if (bufIt != m_messageBuffer.end() &&
+                                !bufIt.value().compound.isEmpty()) {
+                                auto const &cmps = bufIt.value().compound;
+                                if (fromCompound && toCompound &&
+                                    cmps.size() >= 2) {
+                                    annotateFrom = cmps.first().call;
+                                    annotateTo = cmps.last().call;
+                                } else if (fromCompound) {
+                                    annotateFrom = cmps.last().call;
+                                } else if (toCompound) {
+                                    annotateTo = cmps.last().call;
+                                }
+                                annotateIsUpgrade = fromCompound;
+                            }
                         }
                     }
                     if (!annotateFrom.isEmpty() &&
                         annotateFrom != "<....>") {
-                        m_wideGraph->setCallsignOverlayEnabled(
-                            m_config.show_calls_on_waterfall());
+                        // @ALLCALL is too broad to ever flag as a
+                        // user-group destination, regardless of
+                        // MyGroups contents.
                         bool const inMyGroup =
-                            isGroupCallIncluded(parts.at(1));
-                        m_wideGraph->annotateCall(
-                            annotateFrom, decodedtext.frequencyOffset(),
-                            decodedtext.submode(), inMyGroup);
+                            (annotateTo != "@ALLCALL") &&
+                            isGroupCallIncluded(annotateTo);
+                        bool const destIsSubspaceGroup =
+                            (annotateTo == "@SUBSPACE");
+                        // Skip the repaint when the compound branch
+                        // already painted the same FROM (isUpgrade)
+                        // and the directed branch's color matches.
+                        // Compound paints with inMyGroup=false and
+                        // destIsSubspaceGroup=false, producing black
+                        // bg + (yellow if Subspace else white) text.
+                        // Directed matches iff both flags are also
+                        // false here.
+                        bool const colorsMatchCompound =
+                            annotateIsUpgrade && !inMyGroup &&
+                            !destIsSubspaceGroup;
+                        if (!colorsMatchCompound) {
+                            m_wideGraph->setCallsignOverlayEnabled(
+                                m_config.show_calls_on_waterfall());
+                            m_wideGraph->annotateCall(
+                                annotateFrom, decodedtext.frequencyOffset(),
+                                decodedtext.submode(), inMyGroup,
+                                destIsSubspaceGroup, annotateIsUpgrade);
+                        }
                     }
                     cmd.to = parts.at(1);
                     cmd.cmd = parts.at(2);

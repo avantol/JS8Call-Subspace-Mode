@@ -6,6 +6,7 @@
 #include "CPlotter.h"
 #include "DriftingDateTime.h"
 #include "JS8_Include/commons.h"
+#include "JS8_Main/Varicode.h"
 #include "JS8_Mode/JS8Submode.h"
 
 #include <QDebug>
@@ -352,7 +353,9 @@ void CPlotter::setCallsignOverlayEnabled(bool const enabled) {
 void CPlotter::annotateCall(QString const &call,
                             int const offsetHz,
                             int const submode,
-                            bool const inMyGroup) {
+                            bool const inMyGroup,
+                            bool const destIsSubspaceGroup,
+                            bool const isUpgrade) {
     if (!m_callsignOverlayEnabled) return;
     if (call.isEmpty()) return;
     if (m_WaterfallPixmap.isNull()) return;
@@ -378,54 +381,113 @@ void CPlotter::annotateCall(QString const &call,
     // scroll-row deltas (m_waterfallRow is incremented once per pixmap
     // scroll, so currentRow - entry.row = exact pixels the entry has
     // scrolled down since paint). Prune entries that have scrolled
-    // clear, then suppress new paints that would overlap a survivor.
+    // past the pixmap height (they can't be on-screen anymore and
+    // can't be re-painted by replot). Replot relies on this deque
+    // to repopulate labels after a pixmap rebuild, so we keep entries
+    // alive as long as they could still be visible.
     qint64 const currentRow = m_waterfallRow;
-    constexpr int kPruneMarginPx = 200;
+    int const pixmapHeight = m_WaterfallPixmap.height();
     while (!m_recentLabels.empty()) {
         auto const &back = m_recentLabels.back();
         qint64 const oldTopY = currentRow - back.row;
-        if (oldTopY > back.lenPx + kPruneMarginPx) {
+        if (oldTopY > pixmapHeight + back.lenPx) {
             m_recentLabels.pop_back();
         } else {
             break;
         }
     }
+    // Default: new paint anchored to current scroll row (drawn at
+    // the top of the waterfall). For an upgrade we'll re-anchor to
+    // the original entry's row so the new paint lands on the old
+    // pixels (overdrawing them in place).
+    qint64 paintRow = currentRow;
+
+    // Upgrade scan first, independent of scroll distance: a
+    // compound→directed pair can span seconds (one TX cycle apart),
+    // so by the time the directed frame arrives the compound's
+    // entry may have scrolled well past textWidth. We still want
+    // to find it and overdraw it in place. Match on call + x only.
+    if (isUpgrade) {
+        for (auto it = m_recentLabels.begin();
+             it != m_recentLabels.end(); ++it) {
+            if (it->call == call && it->x == x) {
+                paintRow = it->row;
+                m_recentLabels.erase(it);
+                break;
+            }
+        }
+    }
+
+    // Collision suppression: scan for any survivor whose column is
+    // close enough AND whose current top-y still falls within this
+    // label's textWidth footprint at the top of the waterfall.
+    // (The upgrade target — if any — was erased above and won't
+    // appear here.)
     for (auto it = m_recentLabels.begin();
          it != m_recentLabels.end(); ++it) {
         if (std::abs(it->x - x) >= columnWidth) continue;
         qint64 const oldTopY = currentRow - it->row;
         if (oldTopY >= textWidth) continue;  // already scrolled past
-        if (it->call == call && it->x == x && oldTopY < ascent) {
-            // Same call, same column, AND the previous paint has
-            // barely scrolled (under one row): this is a true rapid
-            // upgrade (compound→directed inside one decode event).
-            // Drop the stale entry and fall through to repaint.
-            // A later same-call message at the same offset has
-            // oldTopY well past ascent and falls through to suppress.
-            m_recentLabels.erase(it);
-            break;
-        }
         return;  // would overlap → suppress
     }
 
-    p.save();
-    p.translate(x, textWidth);
-    p.rotate(-90.0);
-
-    // Opaque background: in the rotated frame this rect spans the
-    // text's full advance lengthwise and the font's ascent+descent
-    // crosswise, giving a tight box behind the glyphs.
-    p.fillRect(QRect(0, -ascent, textWidth, ascent + descent),
-               inMyGroup ? QColor(128, 0, 128) : Qt::black);
-
-    p.setPen(Qt::white);
-    p.drawText(0, 0, call);
-
-    p.restore();
-
-    m_recentLabels.push_front({x, currentRow, textWidth, call});
+    qint64 const yOffset = currentRow - paintRow;
+    LabelEntry const entry{x, paintRow, textWidth, call, submode,
+                           inMyGroup, destIsSubspaceGroup};
+    paintLabelAt(p, entry, yOffset);
+    m_recentLabels.push_front(entry);
 
     update();
+}
+
+void CPlotter::paintLabelAt(QPainter &p,
+                            LabelEntry const &e,
+                            qint64 const yOffset) {
+    // Color rules:
+    //   Subspace mode + destination is @SUBSPACE:
+    //     yellow bg, black text — canonical Subspace highlight,
+    //     maximum visibility for the community group.
+    //   Subspace mode + not @SUBSPACE + in MyGroups (e.g. @LOCAL):
+    //     white text on purple — mode de-emphasized, treat like
+    //     standard for non-canonical groups.
+    //   Subspace mode + not in any group:
+    //     yellow text on black.
+    //   Standard mode + in MyGroups:
+    //     white text on purple.
+    //   Standard mode + not in any group:
+    //     white text on black.
+    bool const isSubspace = (e.submode == Varicode::JS8CallFT2);
+    bool const canonicalSubspace = isSubspace && e.destIsSubspaceGroup;
+    QColor bgColor;
+    QColor textColor;
+    if (canonicalSubspace) {
+        bgColor = Qt::yellow;
+        textColor = Qt::black;
+    } else if (e.inMyGroup) {
+        bgColor = QColor(128, 0, 128);
+        textColor = Qt::white;
+    } else if (isSubspace) {
+        bgColor = Qt::black;
+        textColor = Qt::yellow;
+    } else {
+        bgColor = Qt::black;
+        textColor = Qt::white;
+    }
+
+    QFont f = p.font();
+    f.setPointSize(10);
+    p.setFont(f);
+    QFontMetrics const fm = p.fontMetrics();
+    int const ascent = fm.ascent();
+    int const descent = fm.descent();
+
+    p.save();
+    p.translate(e.x, yOffset + e.lenPx);
+    p.rotate(-90.0);
+    p.fillRect(QRect(0, -ascent, e.lenPx, ascent + descent), bgColor);
+    p.setPen(textColor);
+    p.drawText(0, 0, e.call);
+    p.restore();
 }
 
 void CPlotter::drawMetrics() {
@@ -647,11 +709,11 @@ void CPlotter::replot() {
 
     m_WaterfallPixmap.fill(Qt::black);
 
-    // Call-sign overlays aren't part of m_replot's buffered data, so
-    // they're gone from the rebuilt pixmap. Drop the collision-history
-    // deque too -- any new label would otherwise be suppressed against
-    // a phantom that no longer exists on screen.
-    m_recentLabels.clear();
+    // Call-sign overlays aren't part of m_replot's buffered data,
+    // so they're gone from the rebuilt pixmap. We keep the
+    // m_recentLabels deque so we can re-paint them after the
+    // spectrum rebuild below (each label's row counter still
+    // gives its correct on-screen position via currentRow - row).
 
     // We need to consider that entries have been added to the replot
     // buffer at a rate proportional to the display pixel ratio, i.e.,
@@ -744,6 +806,19 @@ void CPlotter::replot() {
             v);
 
         y++;
+    }
+
+    // Re-paint waterfall call-sign labels that are still in scroll
+    // range. Each entry's stored row counter survives the pixmap
+    // rebuild; current visual y-offset = currentRow - entry.row.
+    // Skip entries that have scrolled past the pixmap height — their
+    // pixels would land off-screen and we'd be wasting paint cycles.
+    qint64 const labelCurrentRow = m_waterfallRow;
+    int const labelPixmapHeight = m_WaterfallPixmap.height();
+    for (auto const &entry : m_recentLabels) {
+        qint64 const yOffset = labelCurrentRow - entry.row;
+        if (yOffset < 0 || yOffset >= labelPixmapHeight) continue;
+        paintLabelAt(p, entry, yOffset);
     }
 
     // The waterfall pixmap should now look as it did before, but with the
