@@ -371,11 +371,27 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     !decodedtext.isDirectedMessage()) {
                     cd.call = decodedtext.compoundCall();
                     if (!cd.call.isEmpty() && cd.call != "<....>") {
+                        // Compound frames don't carry an explicit
+                        // destination, but heartbeats imply one.
+                        // Pre-compute it so this paint goes group-
+                        // colored when applicable. The directed branch
+                        // (when it fires for the same call at the same
+                        // offset later) will repaint with the actual
+                        // "to" via the same-call upgrade path in
+                        // annotateCall.
+                        QString impliedTo;
+                        if (decodedtext.isHeartbeat()) {
+                            impliedTo =
+                                decodedtext.isAlt() ? "@ALLCALL" : "@HB";
+                        }
+                        bool const inMyGroup =
+                            !impliedTo.isEmpty() &&
+                            isGroupCallIncluded(impliedTo);
                         m_wideGraph->setCallsignOverlayEnabled(
                             m_config.show_calls_on_waterfall());
                         m_wideGraph->annotateCall(
                             cd.call, decodedtext.frequencyOffset(),
-                            decodedtext.submode());
+                            decodedtext.submode(), inMyGroup);
                     }
                     cd.grid = decodedtext.extra(); // compound calls via pings
                                                    // may contain grid...
@@ -469,12 +485,29 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     auto parts = decodedtext.directedMessage();
 
                     cmd.from = parts.at(0);
-                    if (!cmd.from.isEmpty() && cmd.from != "<....>") {
+                    // Resolve compound-directed FROM placeholder by
+                    // peeking at any compound frame buffered for this
+                    // offset (deposited by the compound branch when
+                    // the preceding compound frame decoded).
+                    QString annotateFrom = cmd.from;
+                    if (annotateFrom == "<....>") {
+                        auto const bufIt =
+                            m_messageBuffer.find(decodedtext.frequencyOffset());
+                        if (bufIt != m_messageBuffer.end() &&
+                            !bufIt.value().compound.isEmpty()) {
+                            annotateFrom =
+                                bufIt.value().compound.last().call;
+                        }
+                    }
+                    if (!annotateFrom.isEmpty() &&
+                        annotateFrom != "<....>") {
                         m_wideGraph->setCallsignOverlayEnabled(
                             m_config.show_calls_on_waterfall());
+                        bool const inMyGroup =
+                            isGroupCallIncluded(parts.at(1));
                         m_wideGraph->annotateCall(
-                            cmd.from, decodedtext.frequencyOffset(),
-                            decodedtext.submode());
+                            annotateFrom, decodedtext.frequencyOffset(),
+                            decodedtext.submode(), inMyGroup);
                     }
                     cmd.to = parts.at(1);
                     cmd.cmd = parts.at(2);

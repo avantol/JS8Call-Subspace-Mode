@@ -158,6 +158,7 @@ void CPlotter::resizeEvent(QResizeEvent *) { m_resizeTimer->start(); }
 
 void CPlotter::drawLine(QString const &text) {
     m_WaterfallPixmap.scroll(0, 1, m_WaterfallPixmap.rect());
+    ++m_waterfallRow;
 
     QPainter p(&m_WaterfallPixmap);
 
@@ -179,6 +180,7 @@ void CPlotter::drawLine(QString const &text) {
 
 void CPlotter::drawData(WF::SWide swide, WF::State const state) {
     m_WaterfallPixmap.scroll(0, 1, m_WaterfallPixmap.rect());
+    ++m_waterfallRow;
 
     // Flattening, we just process the visible width; tends to be the best
     // approach in terms of what happens when resizing to a larger size.
@@ -349,7 +351,8 @@ void CPlotter::setCallsignOverlayEnabled(bool const enabled) {
 // using the submode-specific bandwidth.
 void CPlotter::annotateCall(QString const &call,
                             int const offsetHz,
-                            int const submode) {
+                            int const submode,
+                            bool const inMyGroup) {
     if (!m_callsignOverlayEnabled) return;
     if (call.isEmpty()) return;
     if (m_WaterfallPixmap.isNull()) return;
@@ -364,11 +367,46 @@ void CPlotter::annotateCall(QString const &call,
     int const ascent = fm.ascent();
     int const descent = fm.descent();
     int const textWidth = fm.horizontalAdvance(call);
+    int const columnWidth = ascent + descent;
 
     // Center the label over the signal's bandwidth.
     int const bandwidth = JS8::Submode::bandwidth(submode);
     int const centerHz = offsetHz + bandwidth / 2;
     int const x = xFromFreq(static_cast<float>(centerHz));
+
+    // Collision check against recently-painted labels using exact
+    // scroll-row deltas (m_waterfallRow is incremented once per pixmap
+    // scroll, so currentRow - entry.row = exact pixels the entry has
+    // scrolled down since paint). Prune entries that have scrolled
+    // clear, then suppress new paints that would overlap a survivor.
+    qint64 const currentRow = m_waterfallRow;
+    constexpr int kPruneMarginPx = 200;
+    while (!m_recentLabels.empty()) {
+        auto const &back = m_recentLabels.back();
+        qint64 const oldTopY = currentRow - back.row;
+        if (oldTopY > back.lenPx + kPruneMarginPx) {
+            m_recentLabels.pop_back();
+        } else {
+            break;
+        }
+    }
+    for (auto it = m_recentLabels.begin();
+         it != m_recentLabels.end(); ++it) {
+        if (std::abs(it->x - x) >= columnWidth) continue;
+        qint64 const oldTopY = currentRow - it->row;
+        if (oldTopY >= textWidth) continue;  // already scrolled past
+        if (it->call == call && it->x == x && oldTopY < ascent) {
+            // Same call, same column, AND the previous paint has
+            // barely scrolled (under one row): this is a true rapid
+            // upgrade (compound→directed inside one decode event).
+            // Drop the stale entry and fall through to repaint.
+            // A later same-call message at the same offset has
+            // oldTopY well past ascent and falls through to suppress.
+            m_recentLabels.erase(it);
+            break;
+        }
+        return;  // would overlap → suppress
+    }
 
     p.save();
     p.translate(x, textWidth);
@@ -377,12 +415,15 @@ void CPlotter::annotateCall(QString const &call,
     // Opaque background: in the rotated frame this rect spans the
     // text's full advance lengthwise and the font's ascent+descent
     // crosswise, giving a tight box behind the glyphs.
-    p.fillRect(QRect(0, -ascent, textWidth, ascent + descent), Qt::black);
+    p.fillRect(QRect(0, -ascent, textWidth, ascent + descent),
+               inMyGroup ? QColor(128, 0, 128) : Qt::black);
 
     p.setPen(Qt::white);
     p.drawText(0, 0, call);
 
     p.restore();
+
+    m_recentLabels.push_front({x, currentRow, textWidth, call});
 
     update();
 }
@@ -605,6 +646,12 @@ void CPlotter::replot() {
     // before attaching a painter.
 
     m_WaterfallPixmap.fill(Qt::black);
+
+    // Call-sign overlays aren't part of m_replot's buffered data, so
+    // they're gone from the rebuilt pixmap. Drop the collision-history
+    // deque too -- any new label would otherwise be suppressed against
+    // a phantom that no longer exists on screen.
+    m_recentLabels.clear();
 
     // We need to consider that entries have been added to the replot
     // buffer at a rate proportional to the display pixel ratio, i.e.,

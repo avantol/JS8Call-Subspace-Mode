@@ -461,8 +461,9 @@ void WideGraph::drawHorizontalLine(QColor const &color, int const x,
 
 void WideGraph::annotateCall(QString const &call,
                              int const offsetHz,
-                             int const submode) {
-    ui->widePlot->annotateCall(call, offsetHz, submode);
+                             int const submode,
+                             bool const inMyGroup) {
+    ui->widePlot->annotateCall(call, offsetHz, submode, inMyGroup);
 }
 
 void WideGraph::setCallsignOverlayEnabled(bool const enabled) {

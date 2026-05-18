@@ -51,7 +51,8 @@ class WideGraph : public QWidget {
     void dataSink(WF::SPlot const &, float);
     void drawDecodeLine(QColor const &, int, int);
     void drawHorizontalLine(QColor const &, int, int);
-    void annotateCall(QString const &call, int offsetHz, int submode);
+    void annotateCall(QString const &call, int offsetHz, int submode,
+                      bool inMyGroup = false);
     void setCallsignOverlayEnabled(bool enabled);
     void saveSettings();
     void setBand(QString const &);

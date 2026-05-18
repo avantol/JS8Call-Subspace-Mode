@@ -25,6 +25,7 @@
 #include <array>
 #include <boost/circular_buffer.hpp>
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <variant>
 
@@ -146,7 +147,8 @@ class CPlotter final : public QWidget {
     void drawData(WF::SWide, WF::State);
     void drawDecodeLine(const QColor &, int, int);
     void drawHorizontalLine(const QColor &, int, int);
-    void annotateCall(QString const &call, int offsetHz, int submode);
+    void annotateCall(QString const &call, int offsetHz, int submode,
+                      bool inMyGroup = false);
     void setCallsignOverlayEnabled(bool enabled);
     bool callsignOverlayEnabled() const { return m_callsignOverlayEnabled; }
     void setBinsPerPixel(int);
@@ -221,6 +223,19 @@ class CPlotter final : public QWidget {
     bool m_filterEnabled = false;
     bool m_callsignOverlayEnabled = true;
     float m_freqPerPixel;
+
+    // History of recently-painted call-sign overlays, used to
+    // suppress new labels that would visually overlap an existing
+    // one. The scroll-rate estimate is updated from drawData
+    // timestamps.
+    struct LabelEntry {
+        int x;            // baseline column (pixel x)
+        qint64 row;       // m_waterfallRow at paint time
+        int lenPx;        // vertical extent (text horizontalAdvance)
+        QString call;     // for same-call upgrade matching
+    };
+    std::deque<LabelEntry> m_recentLabels;
+    qint64 m_waterfallRow = 0;  // monotonic 1-per-scroll counter
 
     RDP m_rdp;
     Scaler1D m_scaler1D;

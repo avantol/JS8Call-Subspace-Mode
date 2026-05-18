@@ -199,13 +199,13 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         if (bits[73] & 1) frameBits |= Varicode::JS8CallLast;
         if (bits[74] & 1) frameBits |= Varicode::JS8CallData;
 
-        // Filter garbage: reserved bits 75-76 must be 0,
-        // and at least one flag bit must be set (First, Data, or Last)
-        // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup
+        // Filter garbage: reserved bits 75-76 must be 0.
+        // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup.
+        // noFlags removed — middle FrameCompoundDirected legitimately has First=Last=Data=0.
         bool reservedBad = (bits[75] & 1) || (bits[76] & 1);
         bool noFlags = (frameBits == 0);
         bool syncLow = (sync < 2.2f && snr < -4);
-        bool garbage = reservedBad || noFlags || syncLow;
+        bool garbage = reservedBad || syncLow;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
                    << "freq=" << freq << "sync=" << sync
