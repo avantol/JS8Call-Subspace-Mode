@@ -1,11 +1,11 @@
-# Subspace Edition "Tranya" (3.75 sec Tx period, async protocol)
-Subspace Edition adds a new "Subspace" mode for faster communication, spectral efficiency, and freedom from time accuracy requirements.
+# JS8 Subspace Edition "Tranya" (3.75 sec Tx period, async protocol)
+Subspace Edition adds a new "Subspace" mode to JS8 for faster communication, spectral efficiency, and freedom from time accuracy requirements.
 
 Installers are available for Windows, Mac OS, Linux, and Raspberry Pi, at the <a href="https://github.com/avantol/Subspace-Edition/releases/latest">Release page</a>.
 
 Subspace Edition is an experiment in combining the robustness of FT8 (a weak-signal mode by K1JT) with a messaging and network protocol layer for weak signal communication. The open source software is designed for connecting amateur radio operators who are operating under weak signal conditions and offers real-time keyboard-to-keyboard messaging, store-and-forward messaging, and automatic station announcements.
 
-Now there are 5 modes: Slow, Normal, Fast, Turbo, and **Subspace**.
+Now there are 5 modes for JS8: Slow, Normal, Fast, Turbo, and **Subspace**.
 
 The cycle time for "Subspace" mode is 3.75 seconds. If that sounds familiar, it's similar in some ways to the transport layer in Decodium FT2, except greatly enhanced for use in the Subspace Edition, where reliability is at the top of the list for message traffic.
 
