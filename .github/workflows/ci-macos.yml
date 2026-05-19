@@ -15,8 +15,16 @@ env:
 
 jobs:
   build_macos:
-    runs-on: macos-15
+    runs-on: ${{ matrix.runner }}
     permissions: write-all
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
 
     steps:
     - uses: actions/checkout@v5
@@ -170,10 +178,10 @@ jobs:
         echo "ver=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
 
     - name: Create DMG
-      run: create-dmg "Subspace-Edition-${{ steps.version.outputs.ver }}-arm64-macos.dmg" "build/JS8Call.app"
+      run: create-dmg "Subspace-Edition-${{ steps.version.outputs.ver }}-${{ matrix.arch }}-macos.dmg" "build/JS8Call.app"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
       with:
-        name: "Subspace-Edition-${{ steps.version.outputs.ver }}-arm64-macos.dmg"
-        path: ${{ github.workspace }}/Subspace-Edition-${{ steps.version.outputs.ver }}-arm64-macos.dmg
+        name: "Subspace-Edition-${{ steps.version.outputs.ver }}-${{ matrix.arch }}-macos.dmg"
+        path: ${{ github.workspace }}/Subspace-Edition-${{ steps.version.outputs.ver }}-${{ matrix.arch }}-macos.dmg
