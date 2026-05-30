@@ -177,7 +177,12 @@ set_target_properties(
   MACOSX_BUNDLE_ICON_FILE              "${ICON_FILE}"
   MACOSX_BUNDLE_BUNDLE_VERSION         "${wsjtx_VERSION}"
   MACOSX_BUNDLE_SHORT_VERSION_STRING   "${wsjtx_SHORT_VERSION}"
-  MACOSX_BUNDLE_BUNDLE_NAME            "${PROJECT_NAME}"
+  # CFBundleName drives the macOS app menu title (e.g. "About <Name>",
+  # "Quit <Name>", "Hide <Name>") and must be <=16 chars. Keep the
+  # executable name as PROJECT_NAME so the binary inside Contents/MacOS
+  # stays JS8Call (matches Linux/Windows artifacts), but override the
+  # bundle name for the user-facing menu.
+  MACOSX_BUNDLE_BUNDLE_NAME            "Subspace Edition"
   MACOSX_BUNDLE_BUNDLE_EXECUTABLE_NAME "${PROJECT_NAME}"
   MACOSX_BUNDLE_COPYRIGHT              "${PROJECT_COPYRIGHT}"
   MACOSX_BUNDLE_GUI_IDENTIFIER          "org.kn4crd.js8call"
