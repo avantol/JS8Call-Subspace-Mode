@@ -31,7 +31,13 @@ void UI_Constructor::processCommandActivity() {
 
         auto selectedCallsign = callsignSelected();
         bool isAllCall = isAllCallIncluded(d.to);
-        bool isGroupCall = isGroupCallIncluded(d.to) || d.to == "@APRSIS";
+        // @APRSIS is bridging traffic, not user-addressed. Don't
+        // route to the conversation panel unless the user has
+        // explicitly added @APRSIS to their MyGroups. The actual
+        // APRS-IS bridging logic (spotAprsCmd / spotAprsGrid / the
+        // MSG TO: relay paths later in this file) runs independently
+        // of this flag and continues to function regardless.
+        bool isGroupCall = isGroupCallIncluded(d.to);
 
         qCDebug(mainwindow_js8)
             << "try processing command" << d.from << d.to << d.cmd << d.dial

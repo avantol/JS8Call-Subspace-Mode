@@ -865,7 +865,7 @@
                     <item>
                      <widget class="QRadioButton" name="hail_two_frame_radio">
                       <property name="text">
-                       <string>Two-frame hailing (shows grid)</string>
+                       <string>Two-frame hailing (shows grid and SNR)</string>
                       </property>
                      </widget>
                     </item>

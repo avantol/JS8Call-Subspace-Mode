@@ -437,10 +437,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             // "finished" cqs
                             m_rxCommandQueue.append(cmd);
 
-                            // since this is no longer processed here we omit
-                            // logging it here. if we change this behavior, we'd
-                            // change this back to logging here.
-                            // logCallActivity(cd, true);
+                            // Persist the CQ-bearing CallDetail so cqTimestamp
+                            // reaches displayCallActivity (drives the 5-min
+                            // green-row + telephone icon). The queued cmd
+                            // path doesn't carry cqTimestamp, so without this
+                            // call the marker is set on cd here and then lost
+                            // when cd falls out of scope. Build 162.
+                            logCallActivity(cd, true);
 
                             // notification for cq
                             tryNotify("cq", cd.submode);

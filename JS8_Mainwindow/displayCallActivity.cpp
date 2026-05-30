@@ -7,6 +7,32 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include <QFont>
+
+namespace {
+// The icon column renders Misc-Symbols glyphs (☎ U+260E, ⚑ U+2691,
+// ★ U+2605, ⚟ U+269F). System UI fonts on Linux (Liberation Sans,
+// Cantarell) lack this block and the glyphs render as tofu boxes;
+// Windows' Segoe UI is also patchy. Force a font with guaranteed
+// coverage per platform so the icons render reliably. macOS is left
+// to the default — its system font fallback already finds the glyph.
+// Size is bumped one point larger than the table font for visual
+// emphasis on these status indicators.
+QFont iconFont(QFont const &base) {
+    QFont f = base;
+    int const basePt = base.pointSize();
+    if (basePt > 0) {
+        f.setPointSize(basePt + 1);
+    }
+#if defined(Q_OS_LINUX)
+    f.setFamily("DejaVu Sans");
+#elif defined(Q_OS_WIN)
+    f.setFamily("Segoe UI Symbol");
+#endif
+    return f;
+}
+} // namespace
+
 void UI_Constructor::displayCallActivity() {
 
     auto now = DriftingDateTime::currentDateTimeUtc();
@@ -234,6 +260,7 @@ void UI_Constructor::displayCallActivity() {
                                                  : hasCQ      ? "\u260E"
                                                  : hasThrough ? "\u269F"
                                                               : "");
+            iconItem->setFont(iconFont(ui->tableWidgetCalls->font()));
             iconItem->setData(Qt::UserRole, QVariant(d.call));
             iconItem->setToolTip(
                 hasMessage ? "Message Available"
