@@ -177,8 +177,11 @@ jobs:
         PATCH=$(grep WSJTX_VERSION_PATCH Versions.cmake | sed 's/.*PATCH //' | sed 's/)//')
         echo "ver=${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
 
+    - name: Rename .app bundle
+      run: mv build/JS8Call.app "build/Subspace Edition.app"
+
     - name: Create DMG
-      run: create-dmg "Subspace-Edition-${{ steps.version.outputs.ver }}-${{ matrix.arch }}-macos.dmg" "build/JS8Call.app"
+      run: create-dmg "Subspace-Edition-${{ steps.version.outputs.ver }}-${{ matrix.arch }}-macos.dmg" "build/Subspace Edition.app"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v5
