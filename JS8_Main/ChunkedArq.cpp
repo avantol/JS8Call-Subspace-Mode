@@ -1,0 +1,778 @@
+/**
+ * @file ChunkedArq.cpp
+ * @brief Chunked stop-and-wait ARQ implementation.
+ */
+#include "JS8_Main/ChunkedArq.h"
+
+#include <QDateTime>
+#include <QElapsedTimer>
+#include <QRegularExpression>
+#include <QRegularExpressionMatch>
+
+// CRCpp is header-only; same setup as Varicode.cpp uses.
+#define CRCPP_INCLUDE_ESOTERIC_CRC_DEFINITIONS
+#define CRCPP_USE_CPP11
+#include <vendor/CRCpp/CRC.h>
+
+Q_LOGGING_CATEGORY(chunkedarq_js8, "chunkedarq.js8", QtWarningMsg)
+
+namespace ChunkedArq {
+
+// --- Wire format ------------------------------------------------------------
+
+// Match "<from>: <to> <body> #NN.CC/TT.HHHH" with optional trailing
+// JS8 ♢ end-of-message marker and surrounding whitespace. Body is
+// captured non-greedily so a body containing '#' doesn't fool the
+// parser into eating part of the marker.
+//
+// Callsign chars: A-Z 0-9 plus '/' (portable) and '@' (group calls).
+//
+// Note: QRegularExpression is initialized lazily on first use, so a
+// static lives across calls without re-compiling the pattern.
+namespace {
+
+QRegularExpression const &dataFrameRegex() {
+    static QRegularExpression const re(
+        QStringLiteral(
+            "^\\s*(?<from>[A-Z0-9/@]+)\\s*:\\s*"
+            "(?<to>[A-Z0-9/@]+)\\s+"
+            "(?<body>.*?)\\s*"
+            "#(?<msg>\\d{2})\\.(?<chunk>\\d{2})/(?<total>\\d{2})\\.(?<crc>[0-9A-F]{4})"));
+    return re;
+}
+
+}  // namespace
+
+QString bodyCrcHex(QString const &body) {
+    // JS8 uppercases all text on the wire, so the receiver always
+    // sees uppercase. Hash against the canonical (uppercased) form so
+    // both ends produce the same CRC.
+    QByteArray const bytes = body.toUpper().toLatin1();
+    auto const crc = CRC::Calculate(bytes.data(),
+                                    static_cast<size_t>(bytes.size()),
+                                    CRC::CRC_16_CCITTFALSE());
+    return QStringLiteral("%1").arg(crc, 4, 16, QLatin1Char('0')).toUpper();
+}
+
+QString normalizeBody(QString const &body) {
+    // Collapse any whitespace run (spaces, tabs, newlines) to a
+    // single space, then strip leading/trailing. Matches what JS8's
+    // wire form actually carries — keeps the sender's CRC consistent
+    // with the body the receiver decodes.
+    static QRegularExpression const whitespace(
+        QStringLiteral("\\s+"));
+    return body.trimmed().replace(whitespace, QStringLiteral(" "));
+}
+
+QString encodeChunkedData(QString const &myCall,
+                          QString const &peer,
+                          QString const &body,
+                          int            msgId,
+                          int            chunkId,
+                          int            total) {
+    QString const crc = bodyCrcHex(body);
+    return QStringLiteral("%1: %2 %3 #%4.%5/%6.%7")
+        .arg(myCall,
+             peer,
+             body,
+             QString::number(msgId).rightJustified(2, QLatin1Char('0')),
+             QString::number(chunkId).rightJustified(2, QLatin1Char('0')),
+             QString::number(total).rightJustified(2, QLatin1Char('0')),
+             crc);
+}
+
+bool parseChunkedData(QString const &text, ParsedChunk &out) {
+    auto const match = dataFrameRegex().match(text);
+    if (!match.hasMatch()) {
+        return false;
+    }
+    bool ok = false;
+    int const msgId = match.captured("msg").toInt(&ok);
+    if (!ok || msgId < MSG_ID_MIN || msgId > MSG_ID_MAX) {
+        return false;
+    }
+    int const chunkId = match.captured("chunk").toInt(&ok);
+    if (!ok || chunkId < 1) {
+        return false;
+    }
+    int const total = match.captured("total").toInt(&ok);
+    if (!ok || total < 1 || total > MAX_CHUNKS_PER_MESSAGE || chunkId > total) {
+        return false;
+    }
+    out.from    = match.captured("from");
+    out.to      = match.captured("to");
+    out.body    = match.captured("body").trimmed();
+    out.msgId   = msgId;
+    out.chunkId = chunkId;
+    out.total   = total;
+    out.crcHex  = match.captured("crc");
+    return true;
+}
+
+std::optional<QString> tryFormatChunkedDisplay(QString const &fullText) {
+    // Display-time helper. The input may include the conversation
+    // panel's visual prefix ("⚡ - HH:MM:SS - (1185) - ") prepended by
+    // writeMessageTextToUI, so we can't reuse parseChunkedData's
+    // start-anchored regex. Search for the wire-format pattern
+    // ANYWHERE in the text instead.
+    static QRegularExpression const re(
+        QStringLiteral(
+            R"((?<from>[A-Z0-9/@]+)\s*:\s*(?<to>[A-Z0-9/@]+)\s+)"
+            R"((?<body>.*?)\s*#(?<msg>\d{2})\.(?<chunk>\d{2})/)"
+            R"((?<total>\d{2})\.(?<crc>[0-9A-Fa-f]{4}))"));
+    auto const m = re.match(fullText);
+    if (!m.hasMatch()) {
+        return std::nullopt;
+    }
+    bool ok = false;
+    int const msgId = m.captured("msg").toInt(&ok);
+    if (!ok || msgId < MSG_ID_MIN || msgId > MSG_ID_MAX) {
+        return std::nullopt;
+    }
+    int const chunkId = m.captured("chunk").toInt(&ok);
+    if (!ok || chunkId < 1) {
+        return std::nullopt;
+    }
+    int const total = m.captured("total").toInt(&ok);
+    if (!ok || total < 1 || total > MAX_CHUNKS_PER_MESSAGE ||
+        chunkId > total) {
+        return std::nullopt;
+    }
+    QString const from = m.captured("from");
+    QString const body = m.captured("body").trimmed();
+    // NOTE: no CRC check here. At display time the body text may have
+    // accumulated frame-join spacing drift (typeahead concatenation,
+    // band-activity frame join) that diverges from what the sender
+    // computed CRC over. The Manager's onChunkReceived path runs the
+    // authoritative CRC check (against the pristine assembled-message
+    // text from processCommandActivity) and drives ACK/NACK accordingly.
+    // Display is purely cosmetic — rewrite on any pattern match so the
+    // operator sees clean text even when CRC is borderline.
+    return QStringLiteral("%1: %2 (%3/%4)")
+        .arg(from, body)
+        .arg(chunkId)
+        .arg(total);
+}
+
+QList<QString> splitIntoChunks(QString const &body, int maxChunkBody) {
+    QString const normalized = normalizeBody(body);
+    QList<QString> chunks;
+    if (normalized.isEmpty()) {
+        chunks << QString();
+        return chunks;
+    }
+    if (normalized.size() <= maxChunkBody) {
+        chunks << normalized;
+        return chunks;
+    }
+    QString remaining = normalized;
+    while (!remaining.isEmpty()) {
+        if (remaining.size() <= maxChunkBody) {
+            chunks << remaining;
+            break;
+        }
+        // Prefer a space within the window — keeps words intact.
+        int cut = remaining.lastIndexOf(QLatin1Char(' '), maxChunkBody);
+        if (cut <= 0) {
+            // No space in window — force hard split (long word).
+            cut = maxChunkBody;
+        }
+        chunks << remaining.left(cut);
+        // Strip leading spaces (one or more) from the remainder.
+        int start = cut;
+        while (start < remaining.size() && remaining[start] == QLatin1Char(' ')) {
+            ++start;
+        }
+        remaining = remaining.mid(start);
+    }
+    return chunks;
+}
+
+// --- Manager ---------------------------------------------------------------
+
+Manager::Manager(QObject *parent) : QObject(parent) {}
+
+Manager::~Manager() = default;
+
+bool Manager::isActiveSession(QString const &peer) const {
+    auto it = m_recv.constFind(peer);
+    return it != m_recv.constEnd() && it.value().sessionActive;
+}
+
+bool Manager::hasActiveSession() const {
+    if (!m_sends.isEmpty()) {
+        return true;
+    }
+    for (auto it = m_recv.constBegin(); it != m_recv.constEnd(); ++it) {
+        if (!it.value().assemblies.isEmpty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void Manager::haltAll() {
+    // Operator hit Halt — tear down every in-flight send and the
+    // reassembly buffers. Emit sendFailed("halted") for each pending
+    // send so UI / TCP API listeners observe the abort. Clears MSG-cmd
+    // state automatically (it lives on each SendState).
+    qCWarning(chunkedarq_js8)
+        << "[ARQ] haltAll: sends=" << m_sends.size()
+        << "recv=" << m_recv.size();
+
+    for (auto it = m_sends.begin(); it != m_sends.end(); ++it) {
+        if (it.value().ackTimer) {
+            it.value().ackTimer->stop();
+        }
+        emit sendFailed(it.key(), it.value().msgId,
+                        it.value().nextIdx,
+                        it.value().chunks.size(),
+                        it.value().totalRetries,
+                        QStringLiteral("halted"));
+    }
+    m_sends.clear();
+
+    for (auto it = m_recv.begin(); it != m_recv.end(); ++it) {
+        if (it.value().quietTimer) {
+            it.value().quietTimer->stop();
+        }
+        for (QTimer *t : it.value().evictTimers) {
+            if (t) t->stop();
+        }
+    }
+    m_recv.clear();
+
+    if (m_txIdlePollTimer && m_txIdlePollTimer->isActive()) {
+        m_txIdlePollTimer->stop();
+    }
+}
+
+SendResult Manager::sendChunked(QString const &peer, QString const &body) {
+    SendResult result;
+    if (m_sends.contains(peer) && !m_sends[peer].chunks.isEmpty()
+        && m_sends[peer].nextIdx < m_sends[peer].chunks.size()) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] sendChunked rejected: send already in flight for"
+            << peer;
+        emit sendFailed(peer, 0, 0, 0, 0, QStringLiteral("busy"));
+        result.error = QStringLiteral("busy");
+        return result;
+    }
+    auto const chunks = splitIntoChunks(body);
+    if (chunks.size() > MAX_CHUNKS_PER_MESSAGE) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] sendChunked rejected: message would need"
+            << chunks.size() << "chunks; max is" << MAX_CHUNKS_PER_MESSAGE;
+        emit sendFailed(peer, 0, 0, chunks.size(), 0,
+                        QStringLiteral("too_long"));
+        result.error = QStringLiteral("too_long");
+        result.totalChunks = chunks.size();
+        return result;
+    }
+
+    auto &state = getOrCreateSend(peer);
+    state.msgId        = m_nextMsgId;
+    state.chunks       = chunks;
+    state.nextIdx      = 0;
+    state.retries      = 0;
+    state.originalBody = body;
+    state.wasMsgCmd    = false;
+    state.msgAddressee.clear();
+
+    // MSG-cmd detection. Match the JS8 directed-cmd words "MSG TO:"
+    // (slot 10, store at a station — capture addressee) and the bare
+    // "MSG" (slot 9, this is a complete message — no addressee).
+    // Case-insensitive to be forgiving of operator-typed input.
+    QString const trimmedBody = body.trimmed();
+    static QRegularExpression const msgToRe(
+        QStringLiteral(R"(^\s*MSG\s+TO\s*:\s*(?<addr>[A-Z0-9/@]+))"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (auto const m = msgToRe.match(trimmedBody); m.hasMatch()) {
+        state.wasMsgCmd    = true;
+        state.msgAddressee = m.captured("addr").toUpper();
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] MSG TO: detected — addressee=" << state.msgAddressee
+            << "(will route to inbox on sendComplete)";
+    } else if (trimmedBody.startsWith(QStringLiteral("MSG "),
+                                       Qt::CaseInsensitive) ||
+               trimmedBody.compare(QStringLiteral("MSG"),
+                                    Qt::CaseInsensitive) == 0) {
+        state.wasMsgCmd = true;
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] MSG (bare) detected — no addressee"
+               "(will route to MY inbox on sendComplete)";
+    }
+
+    if (++m_nextMsgId > MSG_ID_MAX) {
+        m_nextMsgId = MSG_ID_MIN;
+    }
+
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] sendChunked starting: peer=" << peer
+        << "msgId=" << state.msgId << "chunks=" << chunks.size()
+        << "bodyChars=" << body.size()
+        << "wasMsgCmd=" << state.wasMsgCmd;
+
+    sendNextChunk(peer);
+
+    result.ok          = true;
+    result.msgId       = state.msgId;
+    result.totalChunks = chunks.size();
+    return result;
+}
+
+void Manager::sendNextChunk(QString const &peer) {
+    auto sendIt = m_sends.find(peer);
+    if (sendIt == m_sends.end()) {
+        return;
+    }
+    SendState &state = sendIt.value();
+    if (state.nextIdx >= state.chunks.size()) {
+        // All chunks delivered. Emit msgDelivered FIRST so the UI hook
+        // can route to the inbox while the SendState is still live
+        // (preserves originalBody / msgAddressee). Then emit
+        // sendComplete and drop the state.
+        if (state.wasMsgCmd) {
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-TX] sendComplete — routing MSG to inbox: peer="
+                << peer << "addressee=" << state.msgAddressee;
+            emit msgDelivered(peer, state.msgAddressee,
+                              state.originalBody, state.msgId);
+        }
+        emit sendComplete(peer, state.msgId,
+                          state.chunks.size(), state.totalRetries);
+        m_sends.remove(peer);
+        return;
+    }
+    int const cc = state.nextIdx + 1;          // 1-based wire chunk_id
+    int const tt = state.chunks.size();
+    QString const &chunkBody = state.chunks[state.nextIdx];
+    QString const text =
+        encodeChunkedData(m_myCall, peer, chunkBody, state.msgId, cc, tt);
+
+    // DO NOT arm the ACK timer here — we'd burn ~4–7.5 s of the budget
+    // on Subspace (more on slower modes) waiting for our own
+    // cycle-aligned TX to even start. Instead, mark the peer as
+    // awaiting-TX-done and let the idle poller arm the ACK timer once
+    // JS8Call reports the TX has fully drained. Mirrors the Python
+    // prototype's _wait_for_tx_done_then_arm_timer().
+    if (state.ackTimer) {
+        state.ackTimer->stop();   // belt-and-suspenders: prior arming cleared
+    }
+    state.awaitingTxDone   = true;
+    state.awaitingSinceMs  = QDateTime::currentMSecsSinceEpoch();
+
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] sending chunk peer=" << peer
+        << "msgId=" << state.msgId
+        << "chunk=" << cc << "/" << tt
+        << "retries=" << state.retries
+        << "text=" << text;
+
+    emit wantToTransmit(text);
+    ensureTxIdlePolling();
+}
+
+void Manager::ensureTxIdlePolling() {
+    if (!m_txIdlePollTimer) {
+        m_txIdlePollTimer = new QTimer(this);
+        m_txIdlePollTimer->setInterval(TX_IDLE_POLL_INTERVAL_MS);
+        connect(m_txIdlePollTimer, &QTimer::timeout,
+                this, &Manager::onTxIdlePollTick);
+    }
+    if (!m_txIdlePollTimer->isActive()) {
+        m_txIdlePollTimer->start();
+    }
+}
+
+void Manager::armAckTimer(QString const &peer, SendState &state) {
+    if (!state.ackTimer) {
+        state.ackTimer = new QTimer(this);
+        state.ackTimer->setSingleShot(true);
+        state.ackTimer->setProperty("peer", peer);
+        connect(state.ackTimer, &QTimer::timeout,
+                this, &Manager::onAckTimerExpired);
+    }
+    int const timeoutMs = m_ackTimeoutFn ? m_ackTimeoutFn()
+                                         : DEFAULT_ACK_TIMEOUT_MS;
+    state.ackTimer->start(timeoutMs);
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] ACK timer armed post-TX-done: peer=" << peer
+        << "msgId=" << state.msgId
+        << "timeoutMs=" << timeoutMs;
+}
+
+void Manager::onTxIdlePollTick() {
+    // No callback wired → can't tell idle from busy. Fall back to the
+    // pre-Fix-B behaviour: arm immediately (we lose the TX-time
+    // headroom but the state machine doesn't wedge).
+    bool const idleCheckMissing = !m_txIdleCheck;
+    bool const idleNow = idleCheckMissing ? true : m_txIdleCheck();
+    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+
+    bool anyStillAwaiting = false;
+    for (auto it = m_sends.begin(); it != m_sends.end(); ++it) {
+        SendState &st = it.value();
+        if (!st.awaitingTxDone) continue;
+
+        bool const sanityCapHit =
+            (nowMs - st.awaitingSinceMs) >= TX_IDLE_MAX_WAIT_MS;
+
+        if (idleNow || sanityCapHit) {
+            if (sanityCapHit && !idleNow) {
+                qCWarning(chunkedarq_js8)
+                    << "[ARQ-TX] TX-idle safety cap hit: peer=" << it.key()
+                    << "ms=" << (nowMs - st.awaitingSinceMs)
+                    << "— arming ACK timer anyway";
+            }
+            st.awaitingTxDone = false;
+            armAckTimer(it.key(), st);
+        } else {
+            anyStillAwaiting = true;
+        }
+    }
+
+    if (!anyStillAwaiting && m_txIdlePollTimer) {
+        m_txIdlePollTimer->stop();
+    }
+}
+
+void Manager::onAckReceived(QString const &fromCall, int seq) {
+    auto sendIt = m_sends.find(fromCall);
+    if (sendIt == m_sends.end()) {
+        return;  // no in-flight send for this peer
+    }
+    SendState &state = sendIt.value();
+    int const expectedCc = state.nextIdx + 1;
+    if (seq != expectedCc) {
+        qCDebug(chunkedarq_js8)
+            << "[ARQ-TX] stale ACK ignored: peer=" << fromCall
+            << "seq=" << seq << "expected=" << expectedCc;
+        return;
+    }
+    // Chunk delivered. Cancel ACK timer, advance index, fire progress,
+    // send next chunk.
+    if (state.ackTimer) {
+        state.ackTimer->stop();
+    }
+    state.retries = 0;
+    state.nextIdx += 1;
+    emit sendProgress(fromCall, state.msgId, state.nextIdx, state.chunks.size());
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] ACK received peer=" << fromCall
+        << "chunk=" << seq << "/" << state.chunks.size()
+        << "next=" << state.nextIdx;
+    sendNextChunk(fromCall);
+}
+
+void Manager::onNackReceived(QString const &fromCall, int seq) {
+    auto sendIt = m_sends.find(fromCall);
+    if (sendIt == m_sends.end()) {
+        return;
+    }
+    SendState &state = sendIt.value();
+    int const expectedCc = state.nextIdx + 1;
+    if (seq != expectedCc) {
+        qCDebug(chunkedarq_js8)
+            << "[ARQ-TX] stale NACK ignored: peer=" << fromCall
+            << "seq=" << seq << "expected=" << expectedCc;
+        return;
+    }
+    // Receiver explicitly NACKed our in-flight chunk. Retransmit
+    // immediately (no need to wait for ACK timeout).
+    if (state.ackTimer) {
+        state.ackTimer->stop();
+    }
+    if (state.retries >= DEFAULT_MAX_RETRIES) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] giving up after NACK: peer=" << fromCall
+            << "msgId=" << state.msgId
+            << "chunk=" << expectedCc << "/" << state.chunks.size();
+        emit sendFailed(fromCall, state.msgId, state.nextIdx,
+                        state.chunks.size(),
+                        state.totalRetries,
+                        QStringLiteral("nack_exhausted"));
+        m_sends.remove(fromCall);
+        return;
+    }
+    state.retries += 1;
+    state.totalRetries += 1;
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] NACK -> retransmit: peer=" << fromCall
+        << "chunk=" << expectedCc << "/" << state.chunks.size()
+        << "retry=" << state.retries;
+    sendNextChunk(fromCall);
+}
+
+void Manager::onAckTimerExpired() {
+    auto *timer = qobject_cast<QTimer *>(sender());
+    if (!timer) return;
+    QString const peer = timer->property("peer").toString();
+    auto sendIt = m_sends.find(peer);
+    if (sendIt == m_sends.end()) {
+        return;
+    }
+    SendState &state = sendIt.value();
+    if (state.retries >= DEFAULT_MAX_RETRIES) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] giving up after timeout: peer=" << peer
+            << "msgId=" << state.msgId
+            << "chunk=" << (state.nextIdx + 1) << "/" << state.chunks.size();
+        emit sendFailed(peer, state.msgId, state.nextIdx,
+                        state.chunks.size(),
+                        state.totalRetries,
+                        QStringLiteral("timeout_exhausted"));
+        m_sends.remove(peer);
+        return;
+    }
+    state.retries += 1;
+    state.totalRetries += 1;
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] ACK timeout -> retransmit: peer=" << peer
+        << "chunk=" << (state.nextIdx + 1) << "/" << state.chunks.size()
+        << "retry=" << state.retries;
+    sendNextChunk(peer);
+}
+
+void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk) {
+    markSessionActive(fromCall);
+
+    auto &rx = getOrCreateRx(fromCall);
+
+    // Mid-session-join guard (2026-06-07): if this is the FIRST time
+    // we're seeing this peer's msgId AND the chunk is not chunkId == 1,
+    // drop silently — we missed the start of the super-message and
+    // can't assemble it without chunk 1. Common causes: program restart
+    // mid-session, mode switch that flushed our state, or chunk 1 lost
+    // to decode failure that we'll never see again. No ACK and no
+    // buffering — the sender's ACK timer will expire for the chunk(s)
+    // we ignore, retransmits will hit the same drop, and after
+    // MAX_RETRIES the sender's `nack_exhausted` cleanup runs cleanly.
+    // The peer was never going to deliver this super-message to us
+    // anyway; failing fast is the correct behavior.
+    //
+    // Already-delivered messages take the dedup path below (re-ACK,
+    // no re-buffer); this guard fires only for genuinely new sessions.
+    bool const haveSession = rx.assemblies.contains(chunk.msgId) ||
+                             rx.deliveredMsgs.contains(chunk.msgId);
+    if (!haveSession && chunk.chunkId != 1) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-RX] mid-session join ignored: peer=" << fromCall
+            << "msgId=" << chunk.msgId << "chunk=" << chunk.chunkId
+            << "of" << chunk.total
+            << "(no chunk 1, dropping silently — sender will retry/give up)";
+        return;
+    }
+
+    // CRC integrity check — catches silent body corruption that left
+    // the marker intact (one of the three RX corruption paths the
+    // Python prototype proved load-bearing).
+    QString const computed = bodyCrcHex(chunk.body);
+    if (computed != chunk.crcHex) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-RX] CRC mismatch peer=" << fromCall
+            << "msgId=" << chunk.msgId << "chunk=" << chunk.chunkId
+            << "advertised=" << chunk.crcHex << "computed=" << computed
+            << "body=" << chunk.body;
+        tryNack(fromCall, chunk.chunkId);
+        return;
+    }
+
+    // ACK the chunk (always — duplicates need re-ACK or sender retries forever).
+    sendAck(fromCall, chunk.chunkId);
+
+    // Already-delivered msg? Skip re-buffering (sender retransmitted
+    // chunks of a message we already completed). The re-ACK above
+    // tells them to stop retrying.
+    if (rx.deliveredMsgs.contains(chunk.msgId)) {
+        return;
+    }
+
+    // Add to assembly buffer.
+    auto &asm_ = rx.assemblies[chunk.msgId];
+    asm_[chunk.chunkId] = chunk.body;
+    rx.totals[chunk.msgId] = chunk.total;
+
+    // MSG-cmd detection at chunk 1. JS8 uppercases all wire text, so
+    // match case-insensitively to be safe. Two recognized prefixes:
+    //   - "MSG TO: <addr> <rest>"  → capture addressee (route to inbox
+    //                                 on full assembly, dest=<addr>)
+    //   - bare "MSG <rest>"        → no addressee; treated as a self-
+    //                                 directed inbox deposit on
+    //                                 completion.
+    // Stash both on rx.msgCmdDetected/msgCmdAddressee keyed by msgId so
+    // the assembly-complete branch below can emit inboxMessageReceived
+    // with the original cmd context. Chunk 1 retransmits don't re-stash
+    // (the if-not-contains gate keeps the original detection sticky).
+    if (chunk.chunkId == 1 && !rx.msgCmdDetected.contains(chunk.msgId)) {
+        static QRegularExpression const msgToRe(
+            QStringLiteral(R"(^\s*MSG\s+TO\s*:\s*(?<addr>[A-Z0-9/@]+))"),
+            QRegularExpression::CaseInsensitiveOption);
+        QString const probe = chunk.body.trimmed();
+        if (auto const m = msgToRe.match(probe); m.hasMatch()) {
+            rx.msgCmdDetected[chunk.msgId]  = true;
+            rx.msgCmdAddressee[chunk.msgId] = m.captured("addr").toUpper();
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] MSG TO: detected on chunk 1 — peer=" << fromCall
+                << "msgId=" << chunk.msgId
+                << "addressee=" << rx.msgCmdAddressee[chunk.msgId];
+        } else if (probe.startsWith(QStringLiteral("MSG "),
+                                     Qt::CaseInsensitive) ||
+                   probe.compare(QStringLiteral("MSG"),
+                                  Qt::CaseInsensitive) == 0) {
+            rx.msgCmdDetected[chunk.msgId]  = true;
+            rx.msgCmdAddressee[chunk.msgId].clear();
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] bare MSG detected on chunk 1 — peer=" << fromCall
+                << "msgId=" << chunk.msgId;
+        }
+    }
+
+    // (Re-)arm stale-evict timer for this msg_id.
+    QTimer *&evict = rx.evictTimers[chunk.msgId];
+    if (!evict) {
+        evict = new QTimer(this);
+        evict->setSingleShot(true);
+        evict->setProperty("peer", fromCall);
+        evict->setProperty("msgId", chunk.msgId);
+        connect(evict, &QTimer::timeout,
+                this, &Manager::onAssemblyEvictTimerExpired);
+    }
+    evict->start(ASSEMBLY_EVICT_TIMEOUT_MS);
+
+    // UI: progressive display of this chunk.
+    emit chunkAdded(fromCall, chunk.body, chunk.chunkId, chunk.total);
+
+    // Complete? Concatenate in chunk-id order, deliver, evict.
+    if (asm_.size() == chunk.total) {
+        QStringList parts;
+        for (int i = 1; i <= chunk.total; ++i) {
+            parts << asm_.value(i);
+        }
+        QString const assembled = parts.join(QLatin1Char(' '));
+
+        rx.deliveredMsgs.insert(chunk.msgId);
+        // Cap dedup set to bound memory (arbitrary FIFO — fine for
+        // dup suppression).
+        if (rx.deliveredMsgs.size() > (MSG_ID_MAX - MSG_ID_MIN + 1)) {
+            for (int i = 0; i < (MSG_ID_MAX - MSG_ID_MIN + 1) / 2; ++i) {
+                auto first = rx.deliveredMsgs.begin();
+                if (first == rx.deliveredMsgs.end()) break;
+                rx.deliveredMsgs.erase(first);
+            }
+        }
+        if (evict) {
+            evict->stop();
+            evict->deleteLater();
+        }
+        rx.evictTimers.remove(chunk.msgId);
+        rx.assemblies.remove(chunk.msgId);
+        rx.totals.remove(chunk.msgId);
+
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-RX] message delivered peer=" << fromCall
+            << "msgId=" << chunk.msgId << "chunks=" << chunk.total
+            << "bodyChars=" << assembled.size();
+
+        // Detach the MSG-cmd stash BEFORE emitting so the slot has
+        // room to mutate state safely if needed. Take a local copy
+        // of detection flag + addressee, then prune the maps.
+        bool const wasMsg = rx.msgCmdDetected.value(chunk.msgId, false);
+        QString const addressee = rx.msgCmdAddressee.value(chunk.msgId);
+        rx.msgCmdDetected.remove(chunk.msgId);
+        rx.msgCmdAddressee.remove(chunk.msgId);
+
+        emit messageDelivered(fromCall, m_myCall, assembled, chunk.msgId);
+
+        // If chunk 1's body indicated this super-message is a MSG
+        // directive, fire the inbox-deposit signal AFTER
+        // messageDelivered so the conversation panel still gets its
+        // assembled-body summary line first (then the operator sees
+        // the modeless "saved to inbox" dialog).
+        if (wasMsg) {
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] inbox deposit — peer=" << fromCall
+                << "msgId=" << chunk.msgId
+                << "addressee=" << (addressee.isEmpty() ? "(bare MSG)" : addressee);
+            emit inboxMessageReceived(fromCall, addressee, assembled, chunk.msgId);
+        }
+    }
+}
+
+void Manager::tryNack(QString const &peer, int seq) {
+    auto &rx = getOrCreateRx(peer);
+    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (nowMs - rx.lastNackMonoMs < MIN_NACK_INTERVAL_MS) {
+        qCDebug(chunkedarq_js8)
+            << "[ARQ-RX] NACK rate-limited peer=" << peer << "seq=" << seq;
+        return;
+    }
+    rx.lastNackMonoMs = nowMs;
+    QString const text = QStringLiteral("%1 NACK %2").arg(peer).arg(seq);
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-RX] sending NACK peer=" << peer << "seq=" << seq;
+    emit wantToTransmit(text);
+}
+
+void Manager::sendAck(QString const &peer, int seq) {
+    QString const text = QStringLiteral("%1 ACK %2").arg(peer).arg(seq);
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-RX] sending ACK peer=" << peer << "seq=" << seq;
+    emit wantToTransmit(text);
+}
+
+void Manager::markSessionActive(QString const &peer) {
+    auto &rx = getOrCreateRx(peer);
+    rx.sessionActive = true;
+    if (!rx.quietTimer) {
+        rx.quietTimer = new QTimer(this);
+        rx.quietTimer->setSingleShot(true);
+        rx.quietTimer->setProperty("peer", peer);
+        connect(rx.quietTimer, &QTimer::timeout,
+                this, &Manager::onQuietTimerExpired);
+    }
+    rx.quietTimer->start(SESSION_QUIET_TIMEOUT_MS);
+}
+
+void Manager::onQuietTimerExpired() {
+    auto *timer = qobject_cast<QTimer *>(sender());
+    if (!timer) return;
+    QString const peer = timer->property("peer").toString();
+    auto rxIt = m_recv.find(peer);
+    if (rxIt != m_recv.end()) {
+        rxIt.value().sessionActive = false;
+        qCDebug(chunkedarq_js8)
+            << "[ARQ-RX] session quiet timeout peer=" << peer;
+    }
+}
+
+void Manager::onAssemblyEvictTimerExpired() {
+    auto *timer = qobject_cast<QTimer *>(sender());
+    if (!timer) return;
+    QString const peer = timer->property("peer").toString();
+    int const msgId = timer->property("msgId").toInt();
+    auto rxIt = m_recv.find(peer);
+    if (rxIt == m_recv.end()) return;
+    RxState &rx = rxIt.value();
+    if (rx.assemblies.contains(msgId)) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-RX] stale assembly evicted peer=" << peer
+            << "msgId=" << msgId
+            << "haveChunks=" << rx.assemblies[msgId].size()
+            << "expected=" << rx.totals.value(msgId);
+        rx.assemblies.remove(msgId);
+        rx.totals.remove(msgId);
+    }
+    rx.evictTimers.remove(msgId);
+    timer->deleteLater();
+}
+
+SendState &Manager::getOrCreateSend(QString const &peer) {
+    return m_sends[peer];
+}
+
+RxState &Manager::getOrCreateRx(QString const &peer) {
+    return m_recv[peer];
+}
+
+}  // namespace ChunkedArq

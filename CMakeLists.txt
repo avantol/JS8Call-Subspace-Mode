@@ -232,6 +232,7 @@ target_sources(
   JS8_Main/Bands.cpp
   JS8_Main/CallsignValidator.cpp
   JS8_Main/CandidateKeyFilter.cpp
+  JS8_Main/ChunkedArq.cpp
   JS8_Main/CPlotter.cpp
   JS8_Main/DriftingDateTime.cpp
   JS8_Main/Flatten.cpp
@@ -272,6 +273,7 @@ target_sources(
   JS8_Main/Varicode.cpp
   JS8_Mainwindow/buildQueryMenu.cpp
   JS8_Mainwindow/checkVersion.cpp
+  JS8_Mainwindow/chunkedArqHooks.cpp
   JS8_Mainwindow/dataSink.cpp
   JS8_Mainwindow/displayBandActivity.cpp
   JS8_Mainwindow/displayCallActivity.cpp

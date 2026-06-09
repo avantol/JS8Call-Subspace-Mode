@@ -143,6 +143,63 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(&m_networkThread, &QThread::finished, m_messageServer,
             &QObject::deleteLater);
 
+    // ChunkedArq manager — owns all per-peer chunked-ARQ state
+    // (outbound sends, inbound reassembly, ACK/NACK timers). Lives on
+    // the main thread; receives RX events from processCommandActivity
+    // and emits wantToTransmit when it has outgoing chunks/ACKs/NACKs.
+    m_chunkedArq = new ChunkedArq::Manager(this);
+    // Use the FULL callsign (e.g. "WM8Q/P"), not m_baseCall — the
+    // ARQ wire format puts the from-call into the chunk marker line
+    // "<myCall>: <peer> <body> #NN.CC/TT.HHHH" verbatim, and stripping
+    // the /P (or /MM, etc.) suffix sends the wrong identifier on-air
+    // (operator observed 2026-06-08: WM8Q/P showed as WM8Q in
+    // received chunks). General rule per operator: when extracting
+    // callsigns for use on-air, remember prefixes and suffixes.
+    m_chunkedArq->setMyCall(m_config.my_callsign().trimmed());
+    // ARQ-relax state is driven by the ARQ menu action (its
+    // internal Qt name is still actionModeReplicatorProtocol and
+    // its QSettings key is still "ReplicatorProtocol" — historical
+    // names preserved so existing settings load). The settings
+    // load later in UI bring-up (readSettings in mainwindow.cpp)
+    // fires on_actionModeReplicatorProtocol_toggled, which pushes
+    // the persisted state to Manager + Modulator. Init defensively
+    // to false so the audio thread sees a defined value if any TX
+    // fires before settings load.
+    m_chunkedArq->setArqEnabled(false);
+    m_modulator->setArqRelax(false);
+    // Idle predicate: mirrors Python prototype's TX.GET_QUEUE_DEPTH +
+    // TX.GET_TEXT check. Manager polls this between wantToTransmit and
+    // ACK-timer-arm so the timer doesn't burn down during our own
+    // cycle-aligned TX (~4-7.5 s on Subspace, ~16 s on Normal).
+    m_chunkedArq->setTxIdleCheck([this]() {
+        return !m_transmitting
+            && m_txMessageQueue.isEmpty()
+            && ui->extFreeTextMsgEdit->toPlainText().trimmed().isEmpty();
+    });
+    // ACK timeout scales with the currently active JS8 submode so the
+    // budget tracks cycle length (Subspace 3.75 s → 12 s, Normal 15 s
+    // → 36 s, etc.). Evaluated at arm time, so mid-QSO mode switches
+    // take effect on the next chunk's timer.
+    m_chunkedArq->setAckTimeoutFn([this]() {
+        return ChunkedArq::ackTimeoutMsForSubmode(m_nSubMode);
+    });
+    connect(m_chunkedArq, &ChunkedArq::Manager::wantToTransmit,
+            this, &UI_Constructor::onChunkedWantToTransmit);
+    connect(m_chunkedArq, &ChunkedArq::Manager::chunkAdded,
+            this, &UI_Constructor::onChunkedChunkAdded);
+    connect(m_chunkedArq, &ChunkedArq::Manager::messageDelivered,
+            this, &UI_Constructor::onChunkedMessageDelivered);
+    connect(m_chunkedArq, &ChunkedArq::Manager::sendProgress,
+            this, &UI_Constructor::onChunkedSendProgress);
+    connect(m_chunkedArq, &ChunkedArq::Manager::sendComplete,
+            this, &UI_Constructor::onChunkedSendComplete);
+    connect(m_chunkedArq, &ChunkedArq::Manager::sendFailed,
+            this, &UI_Constructor::onChunkedSendFailed);
+    connect(m_chunkedArq, &ChunkedArq::Manager::msgDelivered,
+            this, &UI_Constructor::onChunkedMsgDelivered);
+    connect(m_chunkedArq, &ChunkedArq::Manager::inboxMessageReceived,
+            this, &UI_Constructor::onChunkedInboxMessageReceived);
+
     m_aprsInboundRelay = new AprsInboundRelay(
         &m_config,
         [this](QString const &call) {
@@ -1571,11 +1628,46 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             m_modeBtnFT2    = makeBtn(QString::fromUtf8("\xe2\x9a\xa1"), "Subspace mode", Varicode::JS8CallFT2);
             m_modeBtnFT2->setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; } QPushButton:checked { background-color: #6699ff; font-size: 16px; font-weight: bold; }");
 
+            // ARQ enable toggle. Proxies the existing
+            // actionModeReplicatorProtocol menu action so the on/off
+            // state stays single-sourced (settings persistence,
+            // ChunkedArq plumbing, mode_label/+ARQ suffix, and the
+            // canChangeMode gate all already key off the QAction).
+            m_arqButton = new QPushButton("ARQ", parentWidget);
+            m_arqButton->setCheckable(true);
+            m_arqButton->setFixedWidth(38);
+            m_arqButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            m_arqButton->setMinimumHeight(30);
+            m_arqButton->setToolTip("Auto Repeat Request: Transmit with reliable message delivery, requires a selected call sign");
+            m_arqButton->setCursor(QCursor(Qt::PointingHandCursor));
+            // Initial stylesheet is empty — updateButtonDisplay() (which
+            // runs on every callsign-selection change AND on a periodic
+            // tick) decides the actual look: blue (#6699ff, matching
+            // the top-right mode-summary button) ONLY when ARQ is
+            // enabled AND a callsign is selected (i.e. an ARQ send
+            // would actually fire). Otherwise leave the default Qt
+            // look — the checked state shows as a subtle recessed
+            // gray to signal "ARQ is on but won't fire without a
+            // peer."
+            m_arqButton->setStyleSheet(QString());
+            if (ui->actionModeReplicatorProtocol) {
+                m_arqButton->setChecked(ui->actionModeReplicatorProtocol->isChecked());
+                connect(m_arqButton, &QPushButton::clicked, this, [this]() {
+                    ui->actionModeReplicatorProtocol->toggle();
+                });
+                connect(ui->actionModeReplicatorProtocol, &QAction::toggled,
+                        m_arqButton, &QPushButton::setChecked);
+            }
+
             // Build a single container for mode buttons + Send + Halt
             auto *rightContainer = new QWidget(parentWidget);
             auto *rightLayout = new QHBoxLayout(rightContainer);
             rightLayout->setContentsMargins(0, 0, 0, 0);
             rightLayout->setSpacing(2);
+            rightLayout->addWidget(m_arqButton, 0);
+            // Small visual break between ARQ (a capability toggle)
+            // and the mode-selection group that follows.
+            rightLayout->addSpacing(8);
             rightLayout->addWidget(m_modeBtnSlow, 0);
             rightLayout->addWidget(m_modeBtnNormal, 0);
             rightLayout->addWidget(m_modeBtnFast, 0);
@@ -1602,12 +1694,34 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // Allow the first action buttons to shrink proportionally
             // Set minimum width based on text content + padding
             for (auto *btn : {ui->hbMacroButton, ui->cqMacroButton,
-                              ui->replyMacroButton, ui->snrMacroButton,
-                              ui->infoMacroButton, ui->macrosMacroButton,
+                              ui->macrosMacroButton,
                               ui->queryButton, ui->deselectButton}) {
                 auto fm = btn->fontMetrics();
                 btn->setMinimumWidth(fm.horizontalAdvance(btn->text()) + 12);
                 btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+            }
+
+            // Pinned narrower than natural text+padding width to free
+            // horizontal space for the new ARQ button on the mode bar.
+            // REPLY / SNR / INFO stay at 90%; STATUS / TYPING relax
+            // to 95% (only 5% trim) because their text is the
+            // longest in the group and a full 10% trim was visibly
+            // tight. Min == max so the grid can't stretch them back.
+            auto pinScaled = [](QPushButton *btn, double scale) {
+                auto fm = btn->fontMetrics();
+                int const w = static_cast<int>(
+                    (fm.horizontalAdvance(btn->text()) + 12) * scale);
+                btn->setMinimumWidth(w);
+                btn->setMaximumWidth(w);
+                btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            };
+            for (auto *btn : {ui->replyMacroButton, ui->snrMacroButton,
+                              ui->infoMacroButton}) {
+                pinScaled(btn, 0.9);
+            }
+            for (auto *btn : {ui->statusMacroButton,
+                              ui->typingMacroButton}) {
+                pinScaled(btn, 0.95);
             }
 
             // Set initial checked state

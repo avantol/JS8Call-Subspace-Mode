@@ -7,6 +7,8 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include "JS8_Main/ChunkedArq.h"
+
 void UI_Constructor::displayBandActivity() {
     auto now = DriftingDateTime::currentDateTimeUtc();
 
@@ -344,6 +346,13 @@ void UI_Constructor::displayBandActivity() {
                 if (joined.isEmpty()) {
                     continue;
                 }
+                // Chunked-DATA wire markers ("#NN.CC/TT.HHHH") are
+                // intentionally left in the band activity row.
+                // Operator-call 2026-06-04: ham operators are used to
+                // coded protocol traffic on JS8; the marker is
+                // diagnostic in the live-decode stream view. The
+                // assembled-message summary in the conversation panel
+                // (♦ line) is the operator-friendly readout.
 
                 ui->tableWidgetRXAll->insertRow(
                     ui->tableWidgetRXAll->rowCount());

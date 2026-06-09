@@ -403,6 +403,8 @@ void UI_Constructor::writeSettings() {
                          ui->actionHeartbeatAcknowledgements->isChecked());
     m_settings->setValue("SubModeMultiDecode",
                          ui->actionModeMultiDecoder->isChecked());
+    m_settings->setValue("ReplicatorProtocol",
+                         ui->actionModeReplicatorProtocol->isChecked());
     m_settings->setValue("DialFreq",
                          QVariant::fromValue(m_lastMonitoredFrequency));
     m_settings->setValue("OutAttenuation", ui->outAttenuation->value());
@@ -533,6 +535,8 @@ void UI_Constructor::readSettings() {
         m_settings->value("SubModeHBAck", false).toBool());
     ui->actionModeMultiDecoder->setChecked(
         m_settings->value("SubModeMultiDecode", true).toBool());
+    ui->actionModeReplicatorProtocol->setChecked(
+        m_settings->value("ReplicatorProtocol", false).toBool());
 
     m_lastMonitoredFrequency =
         m_settings
@@ -713,16 +717,26 @@ void UI_Constructor::showStatusMessage(const QString &statusMsg) {
 }
 
 void UI_Constructor::on_menuModeJS8_aboutToShow() {
-    bool canChangeMode =
+    // Two-tier gate, mirrors the periodic-poll logic:
+    //   canChangeSpeed — speed-mode actions stay usable BETWEEN
+    //     chunks during an ARQ session (operator can adapt to
+    //     changing band conditions mid-super-message).
+    //   canChangeMode — ARQ toggle action stays locked for the full
+    //     session (flipping ARQ mid-protocol breaks the state
+    //     machine).
+    bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveSession());
+    bool const canChangeSpeed =
         !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
-    ui->actionModeJS8Normal->setEnabled(canChangeMode);
-    ui->actionModeJS8Fast->setEnabled(canChangeMode);
-    ui->actionModeJS8Turbo->setEnabled(canChangeMode);
-    ui->actionModeJS8Slow->setEnabled(canChangeMode);
-    ui->actionModeJS8Ultra->setEnabled(canChangeMode);
+    bool const canChangeMode = canChangeSpeed && !arqBusy;
+    ui->actionModeJS8Normal->setEnabled(canChangeSpeed);
+    ui->actionModeJS8Fast->setEnabled(canChangeSpeed);
+    ui->actionModeJS8Turbo->setEnabled(canChangeSpeed);
+    ui->actionModeJS8Slow->setEnabled(canChangeSpeed);
+    ui->actionModeJS8Ultra->setEnabled(canChangeSpeed);
 #ifdef JS8_ENABLE_FT2
-    ui->actionModeFT2->setEnabled(canChangeMode);
+    ui->actionModeFT2->setEnabled(canChangeSpeed);
 #endif
+    ui->actionModeReplicatorProtocol->setEnabled(canChangeMode);
 
     // dynamically replace the autoreply menu item text
     auto autoreplyText = ui->actionModeAutoreply->text();
@@ -1273,10 +1287,21 @@ void UI_Constructor::setSubmode(int submode) {
     ui->actionModeFT2->setChecked(submode == Varicode::JS8CallFT2);
 #endif
 
-    // Update status bar mode label
-    mode_label.setText(submode == Varicode::JS8CallFT2
+    // Update status-bar mode label. Submode name, with " + ARQ"
+    // appended when Auto Repeat Request is active (operator-requested
+    // 2026-06-06 — they want the ARQ indicator visible at the bottom
+    // of the screen too, not just on the top-right modeButton). Other
+    // mode-flag summaries (+MULTI, +AUTO, +HAIL, +HB+ACK) stay on the
+    // modeButton — only ARQ surfaces in both places, as the visibility
+    // of the reliability mode is most safety-relevant for the operator.
+    QString modeText = (submode == Varicode::JS8CallFT2
         ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
         : JS8::Submode::name(submode));
+    if (ui->actionModeReplicatorProtocol &&
+        ui->actionModeReplicatorProtocol->isChecked()) {
+        modeText += QStringLiteral(" + ARQ");
+    }
+    mode_label.setText(modeText);
 
     // Update mode switch buttons — block signals to prevent re-triggering
     if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); }
@@ -1447,7 +1472,7 @@ void UI_Constructor::createStatusBar() // createStatusBar
     config_label.hide(); // only shown for non-default configuration
 
     mode_label.setAlignment(Qt::AlignCenter);
-    mode_label.setMinimumSize(QSize{80, 18});
+    mode_label.setMinimumSize(QSize{160, 18}); // wide enough for "⚡ Subspace"
     mode_label.setStyleSheet("QLabel{background-color: #6699ff}");
     mode_label.setFrameStyle(QFrame::Panel | QFrame::Sunken);
     mode_label.setText("JS8");
@@ -2681,18 +2706,109 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
                     << "msg=" << m_nextFreeTextMsg.left(20);
     }
 
+    // Subspace + ARQ TX-gate FULL relax (authorized 2026-06-05,
+    // re-refined 2026-06-05 after operator observed ACK-triggered chunk
+    // TX still slipping to the next period boundary): when we're in
+    // Subspace mode AND ARQ messaging is in flight, ignore BOTH
+    // m_timeToSend (the tx_duration sliver of each cycle) AND the
+    // fraction_of_tx_slot/lateThreshold check. ACK-triggered chunks
+    // come in at arbitrary moments in the cycle — the previous 0.1×
+    // cycle clamp meant any ACK landing past 375 ms into the cycle
+    // had to wait for the next boundary (3+ s wasted). For ARQ the
+    // back-to-back risk that motivated the clamp is moot — each chunk
+    // is separated by a full ACK round-trip anyway. Modulator's own
+    // ARQ-RELAX path already inserts only the minimum startDelayMS
+    // pad on this side of the boundary, so an arbitrary-time start
+    // is air-safe.
+    // Gate the relax on an actually-in-flight session, not on the
+    // toggle alone (2026-06-08 tightening, per operator request).
+    // Earlier code keyed on m_chunkedArq->arqInProgress() — which is
+    // really just the menu/button toggle state. With ARQ enabled and
+    // no session in flight, even a plain HAIL would TX via the
+    // arbitrary-time arqFullRelax path; while that's air-safe per the
+    // earlier audit, it widens the window for unwanted interactions
+    // with the receiver's dedup layers and (theoretically) leaves no
+    // period-aligned-spacing safety net for non-ARQ traffic. Now: the
+    // relax only kicks in when there's an actual chunked super-message
+    // in flight (m_sends or m_recv.assemblies non-empty). All other
+    // FT2 TX (HAILs, autoreplies, plain directed messages) goes the
+    // period-aligned path even when ARQ is enabled but idle.
+    // [ARQ TX TIMING TEST — conditional compilation 2026-06-09]
+    // Defined  = async TX path (PTT fires immediately on ACK arrival,
+    //            no period-boundary wait — current default behaviour)
+    // Undefined = period-aligned TX path (PTT only fires at period
+    //            boundary, like legacy synchronous modes)
+    // Toggle here AND in JS8_Mode/Modulator.cpp must match. Recompile
+    // required (this is intentional — runtime certainty about which
+    // path is in the binary).
+    //
+#define ARQ_TX_ASYNC 1
+    //
+    // ^^ Comment-out the #define line above for the period-aligned
+    //    test build. Uncomment for the async build.
+#ifdef ARQ_TX_ASYNC
+    bool const arqFullRelax = (m_nSubMode == Varicode::JS8CallFT2) &&
+                              m_chunkedArq && m_chunkedArq->hasActiveSession();
+#else
+    // Period-aligned ARQ TX: arqFullRelax forced false, so the PTT
+    // condition falls through to the standard period-aligned path
+    // (m_timeToSend && fraction<lateThreshold || time_is_in_tx_delay).
+    bool const arqFullRelax = false;
+#endif
+
+    // Per-PTT interval gate (2026-06-06, build arq-interval). The
+    // earlier 100 ms cooldown produced occasional cut-short cycles
+    // (PTT at sec 3.618 → next PTT 2.83 s later, only 312 ms of on-
+    // air silence between waveforms). Earlier 750 ms post-stopTx
+    // cooldown drove τ to the tx_delay window but per-cycle length
+    // still depended on τ via the period-anchored stopTx.
+    //
+    // Operator spec: "nominal 3.75 s period, no lengthening, no cut-
+    // shorts." The clean way to enforce that is to gate on the
+    // interval since the LAST PTT, not since the last stopTx. Every
+    // cycle becomes ≥ 3.75 s (one Subspace period), regardless of
+    // where in the period the previous frame landed. Air silence
+    // becomes a consistent ~1.13 s every frame, matching the natural
+    // period-aligned non-ARQ cadence the operator confirmed decodes
+    // reliably.
+    constexpr qint64 MIN_ARQ_PTT_INTERVAL_MS = 3750;  // = FT2 T/R period
+    bool const arqIntervalOK = !m_lastTxStartTime.isValid() ||
+        m_lastTxStartTime.msecsTo(DriftingDateTime::currentDateTimeUtc())
+            >= MIN_ARQ_PTT_INTERVAL_MS;
+
+    // Floor-loophole fix (2026-06-09): when arqFullRelax is in effect,
+    // the second OR-clause (period-aligned via m_timeToSend +
+    // time_is_in_tx_delay) MUST also respect arqIntervalOK. Without
+    // this, every other PTT in an ARQ session lands ~60-700ms below
+    // the 3750ms floor because the period boundary races ahead of the
+    // interval gate. Observed sawtooth pattern 2026-06-09: ~3690ms /
+    // ~3795ms alternation, worst case 2997ms (~750ms under floor).
+    // Non-ARQ TX (arqFullRelax=false) keeps original period-aligned
+    // behaviour unchanged — the AND-with-arqIntervalOK only short-
+    // circuits the floor enforcement when ARQ is active anyway.
     if (m_iptt == 0 &&
-        ((m_timeToSend &&
-          (fraction_of_tx_slot < lateThreshold or time_is_in_tx_delay) &&
-          0 < msgLength) ||
-         m_tune)) {
+        (m_tune || (arqFullRelax && msgLength > 0 && arqIntervalOK) ||
+         (m_timeToSend &&
+          (fraction_of_tx_slot < lateThreshold || time_is_in_tx_delay) &&
+          0 < msgLength &&
+          (!arqFullRelax || arqIntervalOK)))) {
         // This signals the transmitter to switch to sending.
         // When that has happened, we get a callback from
         // handle_transceiver_update, which will start the audio.
-        if (m_nSubMode == Varicode::JS8CallFT2)
+        if (m_nSubMode == Varicode::JS8CallFT2) {
+            qint64 const msSinceLastTx =
+                m_lastTxStartTime.isValid()
+                    ? m_lastTxStartTime.msecsTo(
+                        DriftingDateTime::currentDateTimeUtc())
+                    : qint64{-1};
             qWarning() << "[FT2-TX] prepareSending: m_iptt 0→1, emitPTT(true)"
                         << "secInPeriod=" << seconds_into_the_period
-                        << "txDelay=" << time_is_in_tx_delay;
+                        << "txDelay=" << time_is_in_tx_delay
+                        << "lateThreshold=" << lateThreshold
+                        << "arqFullRelax=" << arqFullRelax
+                        << "arqIntervalOK=" << arqIntervalOK
+                        << "msSinceLastTx=" << msSinceLastTx;
+        }
         m_iptt = 1;
         m_generateAudioWhenPttConfirmedByTX = true;
         setRig();
@@ -3094,12 +3210,86 @@ void UI_Constructor::guiUpdate() {
     // This automatically hits close to the start of each second
     // Update mode button enable state (disable during TX)
     {
-        bool canChangeMode = !m_transmitting && !m_tune && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
-        if (m_modeBtnNormal && m_modeBtnNormal->isEnabled() != canChangeMode) m_modeBtnNormal->setEnabled(canChangeMode);
-        if (m_modeBtnFast && m_modeBtnFast->isEnabled() != canChangeMode) m_modeBtnFast->setEnabled(canChangeMode);
-        if (m_modeBtnTurbo && m_modeBtnTurbo->isEnabled() != canChangeMode) m_modeBtnTurbo->setEnabled(canChangeMode);
-        if (m_modeBtnSlow && m_modeBtnSlow->isEnabled() != canChangeMode) m_modeBtnSlow->setEnabled(canChangeMode);
-        if (m_modeBtnFT2 && m_modeBtnFT2->isEnabled() != canChangeMode) m_modeBtnFT2->setEnabled(canChangeMode);
+        // arqBusy treats an in-flight chunked super-message as one
+        // continuous TX for UI purposes. Between chunks m_transmitting
+        // drops momentarily — without the arqBusy gate, buttons would
+        // flicker enabled→disabled with each chunk. Holding them
+        // disabled for the entire session prevents the operator from
+        // changing mode / toggling ARQ / typing into the outgoing box
+        // mid-protocol. Cleared by sendComplete / sendFailed /
+        // messageDelivered / halt.
+        bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveSession());
+        // Two-tier gate (2026-06-08, follow-up):
+        //   canChangeSpeed — speed mode buttons (S/N/F/T/⚡). Re-
+        //     enabled BETWEEN chunks during an ARQ session so the
+        //     operator can adapt to changing band conditions mid-
+        //     super-message (genuinely useful — drop to Slow if SNR
+        //     tanks, bump to Turbo if it's clean).
+        //   canChangeMode — ARQ button + menu action. Stays locked
+        //     for the full session: flipping ARQ mid-protocol would
+        //     yank the state machine out from under itself, which
+        //     IS unsafe.
+        bool const canChangeSpeed =
+            !m_transmitting && !m_tune &&
+            m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+        bool const canChangeMode = canChangeSpeed && !arqBusy;
+        if (m_modeBtnNormal && m_modeBtnNormal->isEnabled() != canChangeSpeed) m_modeBtnNormal->setEnabled(canChangeSpeed);
+        if (m_modeBtnFast && m_modeBtnFast->isEnabled() != canChangeSpeed) m_modeBtnFast->setEnabled(canChangeSpeed);
+        if (m_modeBtnTurbo && m_modeBtnTurbo->isEnabled() != canChangeSpeed) m_modeBtnTurbo->setEnabled(canChangeSpeed);
+        if (m_modeBtnSlow && m_modeBtnSlow->isEnabled() != canChangeSpeed) m_modeBtnSlow->setEnabled(canChangeSpeed);
+        if (m_modeBtnFT2 && m_modeBtnFT2->isEnabled() != canChangeSpeed) m_modeBtnFT2->setEnabled(canChangeSpeed);
+
+        if (m_arqButton && m_arqButton->isEnabled() != canChangeMode) {
+            m_arqButton->setEnabled(canChangeMode);
+        }
+        if (ui->actionModeReplicatorProtocol &&
+            ui->actionModeReplicatorProtocol->isEnabled() != canChangeMode) {
+            ui->actionModeReplicatorProtocol->setEnabled(canChangeMode);
+        }
+        // Control menu items locked for the full ARQ session too —
+        // operator can't fire a HAIL / CQ broadcast through the menu
+        // mid-protocol. Natural state for actionHeartbeat is
+        // m_hbModeAvailable (set by setHeartbeatEnabled). Natural for
+        // actionCQ is always enabled. AND with !arqBusy to add the
+        // session-lock without losing the underlying gating.
+        if (ui->actionHeartbeat) {
+            bool const wantHb = m_hbModeAvailable && !arqBusy;
+            if (ui->actionHeartbeat->isEnabled() != wantHb) {
+                ui->actionHeartbeat->setEnabled(wantHb);
+            }
+        }
+        if (ui->actionCQ) {
+            bool const wantCq = !arqBusy;
+            if (ui->actionCQ->isEnabled() != wantCq) {
+                ui->actionCQ->setEnabled(wantCq);
+            }
+        }
+
+        // Outgoing-text widget mirrors the same lock: read-only +
+        // "transmitting" visual property for the duration of the ARQ
+        // session, so the operator can't edit between chunks (the
+        // protocol layer is filling it with chunk bodies). The
+        // existing per-frame readOnly toggling at prepareNextMessageFrame
+        // already handles single-frame TX; this extends to span
+        // chunk-to-chunk gaps inside an ARQ super-message.
+        if (ui->extFreeTextMsgEdit) {
+            bool const wantReadOnly = arqBusy;
+            if (arqBusy && !ui->extFreeTextMsgEdit->isReadOnly()) {
+                ui->extFreeTextMsgEdit->setReadOnly(true);
+                update_dynamic_property(ui->extFreeTextMsgEdit,
+                                        "transmitting", true);
+            } else if (!arqBusy && !m_transmitting &&
+                       ui->extFreeTextMsgEdit->isReadOnly() &&
+                       m_txFrameQueue.isEmpty()) {
+                // Only clear when BOTH ARQ session is over AND no
+                // normal TX is in flight. Don't fight the per-frame
+                // readOnly toggling that startTxNonArq / prepareNextMessageFrame
+                // own for plain TXes.
+                ui->extFreeTextMsgEdit->setReadOnly(false);
+                update_dynamic_property(ui->extFreeTextMsgEdit,
+                                        "transmitting", false);
+            }
+        }
     }
 
     // and hence close to the start of each transmit period.
@@ -3119,6 +3309,244 @@ void UI_Constructor::startTx() {
 #endif
 
     auto text = ui->extFreeTextMsgEdit->toPlainText();
+
+    // ARQ intercept: when ARQ is enabled AND the
+    // operator has selected a target callsign, hand the FULL outgoing
+    // text to ChunkedArq::Manager::sendChunked instead of the normal
+    // TX queue. The Manager splits, tags (#NN.CC/TT.HHHH), and feeds
+    // chunked sub-frames back through wantToTransmit →
+    // onChunkedWantToTransmit one at a time. Each sub-frame is what
+    // the operator sees in the edit widget while it's TXing. Falls
+    // through to normal TX if the peer / toggle gates don't line up.
+    //
+    // Mode-agnostic: ARQ runs in ANY submode (Normal, Fast, Turbo,
+    // Slow, Subspace). In Subspace (FT2) the prepareSending +
+    // Modulator FT2 bypass paths give async cycle-independent TX; in
+    // synchronous modes (Normal/Fast/Turbo/Slow) ARQ falls back to
+    // period-aligned cadence — slower per-chunk wall clock, but the
+    // protocol is identical and ACK/NACK semantics work the same.
+    // Resolve the ARQ peer. Priority order:
+    //   1. callsignSelected() — operator's explicit Call Activity pick
+    //   2. Leading callsign of the typed widget text — handles the
+    //      common case where the operator types "<peer> body..." or
+    //      the JS8 self-prefixed form "WM8Q: <peer> body..." without
+    //      first double-clicking Call Activity. Skips the leading
+    //      "<mycall>:" if present (JS8's typeahead prepends it).
+    //
+    // Reject @-prefixed targets (ALLCALL, groups, APRSIS) for ARQ —
+    // ARQ needs a single peer that can ACK. Group sends fall through
+    // to normal directed TX.
+    QString arqPeer = callsignSelected().trimmed();
+    if (arqPeer.isEmpty()) {
+        QString const myCall = m_config.my_callsign().trimmed().toUpper();
+        QString probe = text.toUpper().trimmed();
+        if (!myCall.isEmpty() && probe.startsWith(myCall + ":")) {
+            probe = probe.mid(myCall.length() + 1).trimmed();
+        }
+        static QRegularExpression const leadingCallRe(
+            QStringLiteral(R"(^\s*(@?[A-Z0-9/]+))"));
+        auto const m = leadingCallRe.match(probe);
+        if (m.hasMatch()) {
+            arqPeer = m.captured(1);
+        }
+    }
+    bool const arqHasMgr    = (m_chunkedArq != nullptr);
+    bool const arqEnabled   = arqHasMgr && m_chunkedArq->arqInProgress();
+    // Validate the resolved peer is an actual amateur callsign.
+    // Without this gate, free-text sends that don't parse as directed
+    // (e.g. "TESTING MY RIG" with ARQ enabled) extract "TESTING" as
+    // the peer and wrap the whole line in chunked-ARQ wire format
+    // (#NN.CC/TT.HHHH), going on-air as free text with visible
+    // "magic" markers but no ACKable destination. Radio::is_callsign
+    // checks the full callsign-shape regex; @-prefixed targets
+    // (ALLCALL, groups) are also rejected because they're group calls
+    // with no single peer to ACK.
+    bool const arqHasPeer   = !arqPeer.isEmpty() &&
+                              !arqPeer.startsWith('@') &&
+                              Radio::is_callsign(arqPeer);
+    bool const arqHasText   = !text.trimmed().isEmpty();
+
+    // Directed-command detection. Structured single-frame JS8 queries
+    // and commands (SNR?, INFO?, STATUS?, MSG, MSG TO:, ACK, NACK,
+    // AGN?, GRID?, HEARING?, QUERY ..., etc.) MUST go on-air as their
+    // native directed-message form, not ARQ-wrapped. Wrapping them
+    // would embed the command inside a chunked-DATA payload with the
+    // #NN.CC/TT.HHHH marker — the recipient's directed-cmd parser
+    // wouldn't recognize it, so the autoreply (SNR reply, INFO reply,
+    // etc.) would never fire and the operator's query would silently
+    // succeed in delivery but fail in purpose. Per Andy 2026-06-08:
+    // source can be user-typed, pasted, or recalled saved message.
+    //
+    // Detection uses Varicode::packDirectedMessage on the line minus
+    // the optional "<mycall>: " self-prefix (JS8 typeahead form).
+    // The packer returns non-empty ONLY when the line parses as a
+    // valid directed message with a known command AND a valid
+    // callsign in the TO field — false positives are essentially
+    // impossible on free-text bodies that just happen to start with
+    // a callsign-like token (the cmd_pattern requires a recognized
+    // keyword from directed_cmds).
+    bool arqBodyIsDirectedCmd = false;
+    {
+        QString const myCallUp = m_config.my_callsign().trimmed().toUpper();
+        QString probe = text.trimmed();
+        if (!myCallUp.isEmpty() &&
+            probe.toUpper().startsWith(myCallUp + ":")) {
+            probe = probe.mid(myCallUp.length() + 1).trimmed();
+        }
+        QString dirTo, dirCmd, dirNum;
+        bool dirToCompound = false;
+        int dirN = 0;
+        QString dirFrame = Varicode::packDirectedMessage(
+            probe, myCallUp, &dirTo, &dirToCompound, &dirCmd, &dirNum,
+            &dirN);
+        // If the bare text doesn't pack (no leading callsign), try
+        // again with the selected peer prepended — mirrors JS8's own
+        // AUTO_PREPEND_DIRECTED logic in Varicode.cpp:2114. This
+        // catches the case where the operator clicks the STATUS /
+        // INFO / TYPING (or any other directed-cmd) macro while a
+        // peer is selected: the macro writes "STATUS …" alone into
+        // the widget, JS8 will auto-prepend the peer at TX time to
+        // form "K9AVT STATUS …" — which IS a directed message that
+        // must not get ARQ-wrapped. Without this second try the ARQ
+        // gate would see the bare "STATUS …" as un-packable, the
+        // selected peer as valid, and (wrongly) wrap the whole macro
+        // output as a chunked super-message (operator observed
+        // 2026-06-08).
+        QString triedProbeWithPeer;
+        if (dirFrame.isEmpty() && !arqPeer.isEmpty() &&
+            !arqPeer.startsWith('@') &&
+            Radio::is_callsign(arqPeer)) {
+            triedProbeWithPeer = arqPeer + QStringLiteral(" ") + probe;
+            dirFrame = Varicode::packDirectedMessage(
+                triedProbeWithPeer, myCallUp, &dirTo, &dirToCompound,
+                &dirCmd, &dirNum, &dirN);
+        }
+        // packDirectedMessage returns non-empty for ANY line that
+        // parses as a directed frame — INCLUDING the slot-31 "send
+        // freetext" marker (literal " " or "  "). That marker is
+        // exactly the case ARQ exists to handle: long free-text to a
+        // specific peer. Treating it as "directed cmd, skip ARQ"
+        // (Build 208 bug, exposed at full strength by Build 215's
+        // peer-prepend retry) made every "K9AVT <anything>" body
+        // bypass ARQ wrapping and ship as plain freetext. Now: skip
+        // ARQ only when the matched cmd is a structured query/
+        // command (SNR?, INFO?, STATUS?, MSG, ACK, NACK, AGN?, GRID?,
+        // HEARING?, QUERY..., etc. — anything BUT the freetext
+        // marker).
+        QString const cmdTrimmed = dirCmd.trimmed();
+        bool const isFreetextCmd = cmdTrimmed.isEmpty();
+        arqBodyIsDirectedCmd = !dirFrame.isEmpty() && !isFreetextCmd;
+
+        // JS8-specific macros not in directed_cmds. TYPING is the
+        // typing-indicator emitted by the TYPING... button — it has
+        // no directed_cmds entry so packDirectedMessage can't match
+        // it even with peer prepended, but it must not get ARQ-
+        // wrapped (Subspace-only, must go on-air as the raw "TYPING..."
+        // pattern the peer recognizes).
+        if (!arqBodyIsDirectedCmd) {
+            QString const upperProbe = probe.toUpper();
+            QString bodyAfterPeer = upperProbe;
+            if (!arqPeer.isEmpty()) {
+                QString const peerPrefix = arqPeer.toUpper() + QStringLiteral(" ");
+                if (upperProbe.startsWith(peerPrefix)) {
+                    bodyAfterPeer = upperProbe.mid(peerPrefix.length()).trimmed();
+                }
+            }
+            if (bodyAfterPeer.startsWith(QStringLiteral("TYPING"))) {
+                arqBodyIsDirectedCmd = true;
+            }
+        }
+    }
+
+    bool const arqGateOpen  = arqEnabled && arqHasPeer && arqHasText &&
+                              !arqBodyIsDirectedCmd;
+    qWarning() << "[ARQ] startTx gate:"
+               << "hasMgr=" << arqHasMgr
+               << "enabled=" << arqEnabled
+               << "peer=" << arqPeer
+               << "validPeer=" << arqHasPeer
+               << "hasText=" << arqHasText
+               << "isDirectedCmd=" << arqBodyIsDirectedCmd
+               << "→ arqGateOpen=" << arqGateOpen;
+    if (arqGateOpen) {
+        // Strip both forms of leading addressing from the body before
+        // handing to ChunkedArq. encodeChunkedData re-prepends
+        // "<myCall>: <peer> " so without stripping the wire would
+        // double-prefix (the symptom flagged in todo #38). Two layers:
+        //   1. Optional "<myCall>:" self-prefix (JS8 typeahead form)
+        //   2. Optional leading "<peer> " token
+        QString arqBody = text.trimmed();
+        QString const myCallUp = m_config.my_callsign().trimmed().toUpper();
+        if (!myCallUp.isEmpty() &&
+            arqBody.toUpper().startsWith(myCallUp + ":")) {
+            arqBody = arqBody.mid(myCallUp.length() + 1).trimmed();
+        }
+        QString const peerPrefix = arqPeer.toUpper() + " ";
+        if (arqBody.toUpper().startsWith(peerPrefix)) {
+            arqBody = arqBody.mid(peerPrefix.length()).trimmed();
+        }
+        qWarning() << "[ARQ] startTx: routing through ChunkedArq"
+                   << "peer=" << arqPeer
+                   << "bodyChars=" << arqBody.size()
+                   << "(was" << text.size() << "incl prefix)";
+        auto const result = m_chunkedArq->sendChunked(arqPeer, arqBody);
+        if (!result.ok) {
+            qWarning() << "[ARQ] sendChunked rejected:" << result.error;
+            // 2026-06-07 operator request: when the super-message is
+            // rejected as too long for ARQ, CANCEL the TX entirely
+            // rather than falling through to plain (non-ARQ) directed
+            // send. Same treatment for "too_long" and any other hard-
+            // failure reason — the failure dialog already pops via
+            // onChunkedSendFailed (connected to sendFailed signal), so
+            // the operator sees the message; we just don't ALSO send
+            // the body as a non-chunked directed blast.
+            //
+            // "busy" is the one fall-through-worthy case: the operator
+            // hit Send while a prior ARQ session was still in flight.
+            // For now we treat it identically (cancel). If a future use
+            // case wants busy → plain-TX fallthrough, branch on result.
+            // error here.
+            ui->extFreeTextMsgEdit->clear();
+            return;
+        } else {
+            // sendChunked already emitted wantToTransmit for chunk 1,
+            // which the onChunkedWantToTransmit slot pre-filled into
+            // extFreeTextMsgEdit + enqueued. Leave startTxButton
+            // CHECKED — same as normal multi-frame TX. Toggling it
+            // off here would re-trigger on_startTxButton_toggled(false)
+            // → resetMessage → on_stopTxButton_clicked → haltAll(),
+            // killing the ARQ session we just started.
+            return;
+        }
+    }
+
+    // ARQ gate fell through. Dispatch to the shared non-ARQ TX entry,
+    // which is also what processTxQueue calls for auto-replies / bot
+    // traffic — single chokepoint for the plain TX path.
+    startTxNonArq();
+}
+
+// Non-ARQ TX entry. Used by:
+//   - startTx (when the operator clicks Send and the ARQ gate is closed)
+//   - processTxQueue (auto-replies, HB/CQ loop traffic, TCP API sends,
+//     relay messages — anything that didn't originate from the operator
+//     directly typing into extFreeTextMsgEdit and hitting Send)
+//
+// This function MUST NOT consult the ARQ gate. The whole point of
+// having it separate from startTx is that the auto-reply / queue
+// drain path can reach TX without any risk of accidentally wrapping
+// a system-built reply in chunked-ARQ wire format. See ARQ provenance
+// design note (todo #46, locked 2026-06-08): "ARQ wrapping is a thing
+// that can only happen on the Send-button path, by construction."
+void UI_Constructor::startTxNonArq() {
+#if IDLE_BLOCKS_TX
+    if (m_tx_watchdog) {
+        return;
+    }
+#endif
+
+    auto text = ui->extFreeTextMsgEdit->toPlainText();
+
     if (!ensureCreateMessageReady(text)) {
         return;
     }
@@ -3166,11 +3594,51 @@ void UI_Constructor::transmit() {
 }
 
 void UI_Constructor::stopTx() {
+    // [TX-CADENCE 2026-06-09] capture timestamp on every stopTx so
+    // we can correlate with the next PTT-up's msSinceLastTx to find
+    // where the 1.4 s slack lives in the
+    // stopTx → prepareNextMessageFrame → next-PTT chain. Observed
+    // single chunk where PTT #3 was 5189 ms after PTT #2 instead of
+    // the steady-state 3790 ms — RX missed exactly one decode.
+    qint64 const nowMsCadence = QDateTime::currentMSecsSinceEpoch();
+    qint64 const msSincePtt = m_lastTxStartTime.isValid()
+        ? m_lastTxStartTime.msecsTo(DriftingDateTime::currentDateTimeUtc())
+        : qint64{-1};
+    qWarning() << "[TX-CADENCE] stopTx entered: msSincePtt=" << msSincePtt
+               << "nowMs=" << nowMsCadence;
     qWarning() << "[FT2-TX] stopTx(): m_iptt=" << m_iptt
                 << "m_iptt0=" << m_iptt0
                 << "m_transmitting=" << m_transmitting
                 << "submode=" << m_nSubMode
                 << "m_TRperiod=" << m_TRperiod;
+
+    // [AUDIO-CADENCE PROBE 2026-06-09] Read the timestamps captured
+    // inside Modulator::readData() for this cycle. Hand-back tells us
+    // when the Modulator wrote the first/last waveform sample into the
+    // audio device's buffer. msSincePttToAudioStart = how long after
+    // PTT the Modulator actually began emitting waveform samples (vs
+    // silence). msAudioDuration = how long it took to emit the whole
+    // waveform on the Modulator side (should be ~2520ms if not gated
+    // by buffer back-pressure from the audio device).
+    if (m_modulator && m_nSubMode == Varicode::JS8CallFT2) {
+        qint64 const ttsPtt = m_lastTxStartTime.isValid()
+            ? m_lastTxStartTime.toMSecsSinceEpoch()
+            : qint64{-1};
+        qint64 const tAudioStart = m_modulator->audioStartedMs();
+        qint64 const tAudioEnd = m_modulator->audioEndedMs();
+        qint64 const msPttToAudioStart =
+            (ttsPtt > 0 && tAudioStart > 0) ? (tAudioStart - ttsPtt) : -1;
+        qint64 const msAudioDuration =
+            (tAudioStart > 0 && tAudioEnd > 0) ? (tAudioEnd - tAudioStart) : -1;
+        qint64 const msAudioEndToStopTx =
+            (tAudioEnd > 0) ? (nowMsCadence - tAudioEnd) : -1;
+        qWarning() << "[AUDIO-CADENCE] tPtt=" << ttsPtt
+                   << "tAudioStart=" << tAudioStart
+                   << "tAudioEnd=" << tAudioEnd
+                   << "msPttToAudioStart=" << msPttToAudioStart
+                   << "msAudioDuration=" << msAudioDuration
+                   << "msAudioEndToStopTx=" << msAudioEndToStopTx;
+    }
 
     auto dt = DecodedText(m_currentMessage.trimmed(), m_currentMessageBits,
                           m_nSubMode);
@@ -3420,6 +3888,28 @@ void UI_Constructor::createGroupCallsignTableRows(QTableWidget *table,
 void UI_Constructor::displayTextForFreq(QString text, int freq, QDateTime date,
                                         bool isTx, bool isNewLine,
                                         bool isLast, int submode) {
+    // ChunkedArq filter: suppress raw chunked-DATA wire-form text from
+    // ever reaching the conversation panel. Multiple code paths feed
+    // this function (processCommandActivity, processRxActivity,
+    // buffered/incremental display); intercepting at each was leaking
+    // raw markers in one corner or another. Filtering at the single
+    // chokepoint guarantees suppression. The chunkAdded slot's clean
+    // "<peer>: <body> (CC/TT)" line and the messageDelivered slot's
+    // final " body ♦" summary have no `#NN.CC/TT.HHHH` marker, so
+    // they pass through unaffected.
+    //
+    // Cheap fast-path check: only run the full regex if the text
+    // contains `#` and a digit. Saves regex cost on the >99% of frames
+    // that aren't chunked.
+    // NOTE: prior versions tried to suppress raw chunked-DATA wire
+    // markers ("#NN.CC/TT.HHHH") here. Backed out 2026-06-04: by the
+    // time a marker-bearing frame reaches displayTextForFreq, earlier
+    // body-fragment frames have already painted via typeahead. Erasing
+    // the prior block looked clean per-chunk but stripped legitimate
+    // typeahead content. Per operator call: let the in-band markers
+    // ride — ham operators are already used to seeing coded protocol
+    // traffic on JS8. The clean assembled summary at messageDelivered
+    // (the "♦" line) is what matters for post-QSO readback.
     int lowFreq = freq / 10 * 10;
     int highFreq = lowFreq + 10;
 
@@ -4010,6 +4500,15 @@ bool UI_Constructor::prepareNextMessageFrame() {
     m_nextFreeTextMsg = frame;
     m_i3bit = bits;
 
+    // [TX-CADENCE 2026-06-09] log when m_nextFreeTextMsg becomes
+    // non-empty — this is the moment the PTT gate's
+    // "msgLength > 0" condition flips true. Paired with the stopTx
+    // entry log and the next [FT2-TX] PTT-up log, we get the full
+    // timing chain: stopTx → prepareNextMessageFrame → next PTT.
+    qWarning() << "[TX-CADENCE] prepareNextMessageFrame set"
+               << "msgLength=" << QStringView(frame).trimmed().length()
+               << "nowMs=" << QDateTime::currentMSecsSinceEpoch();
+
     updateTxButtonDisplay();
 
     return true;
@@ -4427,6 +4926,40 @@ void UI_Constructor::on_actionModeMultiDecoder_toggled(bool checked) {
     setupJS8();
 }
 
+void UI_Constructor::on_actionModeReplicatorProtocol_toggled(bool checked) {
+    // Single source of truth lives on ChunkedArq::Manager. Modulator
+    // mirrors it via setArqRelax so the audio-thread side sees the
+    // change atomically. prepareSending reads arqInProgress() directly
+    // and combines with mode check.
+    if (m_chunkedArq) {
+        m_chunkedArq->setArqEnabled(checked);
+    }
+    if (m_modulator) {
+        m_modulator->setArqRelax(checked);
+    }
+    // Refresh the comprehensive mode-flag summary on the top-right
+    // modeButton so the "+ARQ" suffix appears / disappears immediately
+    // without waiting for the next setSubmode / updateButtonDisplay
+    // pass.
+    updateModeButtonText();
+    // Also refresh the status-bar mode_label so its " + ARQ" suffix
+    // toggles in sync (setSubmode is the other write site and only
+    // fires on actual submode change).
+    QString modeText = (m_nSubMode == Varicode::JS8CallFT2
+        ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
+        : JS8::Submode::name(m_nSubMode));
+    if (checked) {
+        modeText += QStringLiteral(" + ARQ");
+    }
+    mode_label.setText(modeText);
+    // Repaint the ARQ button so its background reflects the new
+    // toggle state combined with the current callsign selection
+    // (blue when both hold, gray otherwise). updateButtonDisplay is
+    // the single source of truth for that two-input style decision.
+    updateButtonDisplay();
+    qWarning() << "[ARQ] Auto Repeat Request" << (checked ? "ENABLED" : "DISABLED");
+}
+
 void UI_Constructor::on_actionModeJS8Normal_triggered() { setupJS8(); }
 
 void UI_Constructor::on_actionModeJS8Fast_triggered() { setupJS8(); }
@@ -4576,15 +5109,33 @@ void UI_Constructor::setupJS8() {
 
     // Update mode switch buttons and status bar label
     // Block signals to prevent setChecked() from re-triggering setSubmode()
-    mode_label.setText(m_nSubMode == Varicode::JS8CallFT2
+    // 2026-06-07 (arq-statusfix): preserve the " + ARQ" suffix the
+    // setSubmode + toggle handlers carry. This setupJS8 path was the
+    // third mode_label write site and was missing the suffix — it
+    // overwrote the indicator at startup and on mode change, so even
+    // when ARQ was persisted-on, the status line stayed bare.
+    QString modeText = (m_nSubMode == Varicode::JS8CallFT2
         ? QString::fromUtf8("\xe2\x9a\xa1 Subspace")
         : JS8::Submode::name(m_nSubMode));
-    bool canChangeMode = !m_transmitting && !m_tune && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
-    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); m_modeBtnNormal->setEnabled(canChangeMode); }
-    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false);   m_modeBtnFast->setEnabled(canChangeMode); }
-    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false);  m_modeBtnTurbo->setEnabled(canChangeMode); }
-    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false);   m_modeBtnSlow->setEnabled(canChangeMode); }
-    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false);    m_modeBtnFT2->setEnabled(canChangeMode); }
+    if (ui->actionModeReplicatorProtocol &&
+        ui->actionModeReplicatorProtocol->isChecked()) {
+        modeText += QStringLiteral(" + ARQ");
+    }
+    mode_label.setText(modeText);
+    // Speed-mode buttons use canChangeSpeed (NO arqBusy gate) so the
+    // operator can switch speed BETWEEN chunks during an ARQ session
+    // to adapt to changing band conditions mid-super-message
+    // (operator request 2026-06-08 — drop to Slow if SNR tanks, bump
+    // to Turbo if it's clean). The ARQ-toggle stays locked the full
+    // session via the periodic poll's canChangeMode; setupJS8 doesn't
+    // touch the ARQ button.
+    bool const canChangeSpeed = !m_transmitting && !m_tune &&
+                                m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); m_modeBtnNormal->setEnabled(canChangeSpeed); }
+    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false);   m_modeBtnFast->setEnabled(canChangeSpeed); }
+    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false);  m_modeBtnTurbo->setEnabled(canChangeSpeed); }
+    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false);   m_modeBtnSlow->setEnabled(canChangeSpeed); }
+    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false);    m_modeBtnFT2->setEnabled(canChangeSpeed); }
 
     updateTextDisplay();
     refreshTextDisplay();
@@ -5830,6 +6381,25 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
 
     resetMessage();
 
+    // Operator-initiated halt aborts any in-flight chunked-ARQ
+    // session and clears all per-peer state (incl. MSG-cmd flags).
+    // Done after resetMessage so the TX queue is already empty when
+    // Manager fires its sendFailed("halted") for each pending send.
+    //
+    // GATED on m_stopTxButtonIsLongterm: this slot is reached by THREE
+    // different paths, only one of which is the operator pressing Halt:
+    //   (a) Halt button click — m_stopTxButtonIsLongterm = true (default)
+    //   (b) stopTx() after a TX frame completes — toggles longterm to
+    //       false before calling us (mainwindow.cpp:3278), restores after
+    //   (c) auto_tx_mode(false) → us — same toggle pattern (line 1230-33)
+    // Paths (b) and (c) are routine inter-chunk cleanup; killing the ARQ
+    // session there means chunk 1 finishes, we tear down state, the ACK
+    // arrives a few seconds later, and onAckReceived finds no SendState
+    // to advance — the message stalls at one chunk forever.
+    if (m_chunkedArq && m_stopTxButtonIsLongterm) {
+        m_chunkedArq->haltAll();
+    }
+
     if (m_stopTxButtonIsLongterm) {
         if (m_hb_loop->isActive())
             qWarning() << "[HAIL-DIAG] loop cancelled: stop button (longterm)";
@@ -6227,11 +6797,33 @@ void UI_Constructor::updateModeButtonText() {
     }
 
     if (heartbeat) {
-        if (presentlyWantHBReplies()) {
-            modeText += QString("+HB+ACK");
+        // FT2/Subspace renames the HB cadence to "HAIL" — same wire
+        // semantics (presence beacon) but matches the button label
+        // the operator already sees in Subspace mode and the
+        // "Enable HAIL Presence Beacon" menu wording at line 4665-4668.
+        // HAIL is a non-reply protocol (presence broadcast, no ACK
+        // expected), so we never decorate it with "+ACK" even when
+        // presentlyWantHBReplies() is true — that ACK toggle only
+        // affects classic HB cadence in Normal/Fast/Turbo/Slow.
+        bool const isHail = (m_nSubMode == Varicode::JS8CallFT2);
+        if (isHail) {
+            modeText += QStringLiteral("+HAIL");
+        } else if (presentlyWantHBReplies()) {
+            modeText += QStringLiteral("+HB+ACK");
         } else {
-            modeText += QString("+HB");
+            modeText += QStringLiteral("+HB");
         }
+    }
+
+    // Auto Repeat Request (ARQ) status — drives ChunkedArq routing in
+    // any submode; visible here so the operator sees it alongside the
+    // other mode flags (+MULTI, +AUTO, +HAIL/+HB). The toggle action
+    // keeps its legacy internal name `actionModeReplicatorProtocol`
+    // to preserve QSettings keys and Qt auto-slot-connection; the
+    // operator-visible text is "Enable Auto Repeat Request (ARQ)".
+    if (ui->actionModeReplicatorProtocol &&
+        ui->actionModeReplicatorProtocol->isChecked()) {
+        modeText += QStringLiteral("+ARQ");
     }
 
     ui->modeButton->setText(modeText);
@@ -6244,7 +6836,17 @@ static void setDisabledIfChanged(QWidget *w, bool disabled) {
 }
 
 void UI_Constructor::updateButtonDisplay() {
-    bool isTransmitting = isMessageQueuedForTransmit();
+    // Treat an in-flight chunked-ARQ super-message as "transmitting"
+    // for ALL the macro-button gates below. Between chunks
+    // m_transmitting drops momentarily and isMessageQueuedForTransmit
+    // returns false, which re-enabled REPLY / SNR / INFO / STATUS /
+    // TYPING / HB / CQ / macros / query / deselect after each sub-
+    // message (operator observed 2026-06-08, arq-uiLockSetup follow-up).
+    // Baking arqBusy into the local isTransmitting flag holds them
+    // all disabled for the entire ARQ session in one stroke without
+    // touching each setDisabledIfChanged call.
+    bool isTransmitting = isMessageQueuedForTransmit() ||
+                          (m_chunkedArq && m_chunkedArq->hasActiveSession());
 
     auto selectedCallsign = callsignSelected(true);
     bool emptyCallsign = selectedCallsign.isEmpty();
@@ -6265,6 +6867,34 @@ void UI_Constructor::updateButtonDisplay() {
     setDisabledIfChanged(ui->snrMacroButton, isTransmitting || emptyCallsign);
     setDisabledIfChanged(ui->infoMacroButton, isTransmitting || emptyInfo);
     setDisabledIfChanged(ui->statusMacroButton, isTransmitting || emptyStatus);
+
+    // ARQ button background tracks the "would this send actually
+    // use ARQ?" state. ARQ requires both the toggle and a selected
+    // peer to fire — when both hold, paint #6699ff to match the
+    // top-right mode-summary button (visual cue that the next send
+    // is reliable-delivery). When ARQ is on but no callsign is
+    // selected, fall back to the default Qt look so the operator
+    // sees at a glance that ARQ won't engage on the next Send.
+    if (m_arqButton) {
+        bool const arqOn = ui->actionModeReplicatorProtocol &&
+                           ui->actionModeReplicatorProtocol->isChecked();
+        bool const arqArmed = arqOn && !emptyCallsign;
+        // Stylesheet matches the speed-mode buttons' shape exactly:
+        // only set background-color on :checked, no explicit color.
+        // That lets Qt's built-in :disabled pseudo-state gray ONLY
+        // the foreground text (per platform palette) while leaving
+        // the #6699ff bg in place — same as the "T" button when
+        // disabled mid-TX (operator spec 2026-06-08). The earlier
+        // version explicitly set `color: black` which overrode Qt's
+        // disabled-text graying and made the button look identical
+        // enabled vs disabled.
+        QString const wantStyle = arqArmed
+            ? QStringLiteral("QPushButton:checked { background-color: #6699ff; font-weight: bold; }")
+            : QString();
+        if (m_arqButton->styleSheet() != wantStyle) {
+            m_arqButton->setStyleSheet(wantStyle);
+        }
+    }
     {
         // TYPING enabled if: Subspace mode, not transmitting, and either
         // a callsign is selected OR cursor is on the last decoded signal freq
@@ -7320,8 +7950,21 @@ void UI_Constructor::processTxQueue() {
         // then try to set the frequency...
         setFreqOffsetForRestore(f, true);
 
-        // then prepare to transmit...
-        toggleTx(true);
+        // Then prepare to transmit. CRUCIAL: bypass toggleTx(true) so we
+        // don't route through on_startTxButton_toggled → startTx → ARQ
+        // gate. Auto-replies / queue-drained traffic (autoreply, HB/CQ
+        // loops, TCP API, relay) must NEVER get ARQ-wrapped no matter
+        // what mode is enabled — that wrapping is reserved for messages
+        // the operator places in the outgoing box and Sends manually.
+        // The button visual still flips to "checked" so the UI matches
+        // the in-flight state; QSignalBlocker prevents the toggle slot
+        // (which would call startTx and re-enter the ARQ gate) from
+        // firing.
+        {
+            QSignalBlocker const block(ui->startTxButton);
+            ui->startTxButton->setChecked(true);
+        }
+        startTxNonArq();
     }
 
     if (message.callback) {
@@ -7848,7 +8491,12 @@ void UI_Constructor::l2TryDecode(char const *source) {
                             &syncBest, &syncFreq, &syncIbest, &syncIdf);
             auto syncMs = QDateTime::currentMSecsSinceEpoch() - tSync;
 
-            qCDebug(mainwindow_js8) << "[FT2-L2] sync scan:" << syncMs << "ms"
+            // [RX-PROBE 2026-06-09] bumped to qWarning to diagnose
+            // missed-frame events under chunked-ARQ on wired-loopback
+            // audio at +3 dB SNR. Need to see every sync-scan pass'
+            // best score to determine if the decoder even SAW the
+            // frame's Costas tones, or if sync detection failed.
+            qWarning() << "[RX-PROBE] L2 sync scan:" << syncMs << "ms"
                        << "nfreqs=" << nScanFreqs
                        << "sync=" << syncBest << "freq=" << syncFreq
                        << "ibest=" << syncIbest << "idf=" << syncIdf;
@@ -7877,7 +8525,11 @@ void UI_Constructor::l2TryDecode(char const *source) {
             useNfqsoOnly, &decodedFreq,
             syncBest);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        qCDebug(mainwindow_js8) << "[FT2-L2] decode took" << elapsed << "ms"
+        // [RX-PROBE 2026-06-09] bumped to qWarning — paired with sync
+        // scan probe above so we can see which decode passes found
+        // a frame vs which missed. Critical: ndecoded=0 with high
+        // syncBest means sync detected the frame but LDPC failed.
+        qWarning() << "[RX-PROBE] L2 decode took" << elapsed << "ms"
                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
                    << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
                    << "sync=" << syncBest;

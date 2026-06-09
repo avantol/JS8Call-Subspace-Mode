@@ -19,6 +19,7 @@
 #include "JS8_Main/DriftingDateTime.h"
 #include "JS8_Main/FrequencyList.h"
 #include "JS8_Main/Geodesic.h"
+#include "JS8_Main/ChunkedArq.h"
 #include "JS8_Main/HelpTextWindow.h"
 #include "JS8_Main/Inbox.h"
 #include "JS8_Main/JS8MessageBox.h"
@@ -299,6 +300,33 @@ class UI_Constructor : public QMainWindow {
     bool eventFilter(QObject *, QEvent *) override;
 
   private slots:
+    // ChunkedArq integration: TX-side relay + RX-side UI rendering.
+    void onChunkedWantToTransmit(QString const &text);
+    void onChunkedChunkAdded(QString const &fromCall,
+                             QString const &chunkBody,
+                             int            chunkId,
+                             int            total);
+    void onChunkedMessageDelivered(QString const &fromCall,
+                                   QString const &toCall,
+                                   QString const &assembledBody,
+                                   int            msgId);
+    void onChunkedSendProgress(QString const &peer, int msgId,
+                               int delivered, int total);
+    void onChunkedSendComplete(QString const &peer, int msgId,
+                               int total, int totalRetries);
+    void onChunkedSendFailed(QString const &peer, int msgId,
+                             int delivered, int total,
+                             int totalRetries,
+                             QString const &reason);
+    void onChunkedMsgDelivered(QString const &peer,
+                               QString const &addressee,
+                               QString const &body,
+                               int            msgId);
+    void onChunkedInboxMessageReceived(QString const &fromCall,
+                                       QString const &addressee,
+                                       QString const &body,
+                                       int            msgId);
+
     void initialize_fonts();
     void on_menuModeJS8_aboutToShow();
     void on_menuControl_aboutToShow();
@@ -363,6 +391,7 @@ class UI_Constructor : public QMainWindow {
     void on_actionModeFT2_triggered();
     void on_actionHeartbeatAcknowledgements_toggled(bool checked);
     void on_actionModeMultiDecoder_toggled(bool checked);
+    void on_actionModeReplicatorProtocol_toggled(bool checked);
     void on_actionModeAutoreply_toggled(bool checked);
     bool canCurrentModeSendHeartbeat() const;
     bool canCurrentModeAckHeartbeat() const;
@@ -372,6 +401,7 @@ class UI_Constructor : public QMainWindow {
     void on_actionErase_ALL_TXT_triggered();
     void on_actionErase_js8call_log_adi_triggered();
     void startTx();
+    void startTxNonArq();
     void stopTx();
     void stopTx2();
     void buildFrequencyMenu(QMenu *menu);
@@ -574,6 +604,7 @@ class UI_Constructor : public QMainWindow {
     QPushButton *m_modeBtnTurbo{nullptr};
     QPushButton *m_modeBtnSlow{nullptr};
     QPushButton *m_modeBtnFT2{nullptr};
+    QPushButton *m_arqButton{nullptr};
     QSettings *m_settings;
     bool m_settings_read;
     QScopedPointer<Ui::UI_Constructor> ui;
@@ -1008,6 +1039,7 @@ class UI_Constructor : public QMainWindow {
     Frequency m_lastMonitoredFrequency = 0;
     MessageClient *m_messageClient;
     MessageServer *m_messageServer;
+    ChunkedArq::Manager *m_chunkedArq{nullptr};
     WSJTXMessageClient *m_wsjtxMessageClient;
     WSJTXMessageMapper *m_wsjtxMessageMapper;
     TCPClient *m_n3fjpClient;

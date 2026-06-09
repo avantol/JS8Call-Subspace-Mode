@@ -78,6 +78,11 @@ void Modulator::start(double const frequency, int const submode,
     m_silentFrames = 0;
     m_ic = 0;
 
+    // [AUDIO-CADENCE PROBE 2026-06-09] Reset capture sentinels for this
+    // cycle. Stores happen inside readData() on transitions.
+    m_audioStartedMs.store(-1);
+    m_audioEndedMs.store(-1);
+
     // If we're not tuning, then we'll need to figure out exactly when we
     // should start transmitting; this will depend on the submode in play.
 
@@ -98,6 +103,48 @@ void Modulator::start(double const frequency, int const submode,
         // If we have hit the nominal start time for the period, adjust for late
         // start if we're not exactly at the nominal start time.
 
+        // ARQ-relax override (authorized 2026-06-05, refined twice):
+        // when ARQ messaging is in flight, start immediately with
+        // only the minimum startDelay pad — NO period-offset gate.
+        // Subspace's continuous-frame decoder is offset-tolerant
+        // BY DESIGN, so cross-cycle starts are safe at the air
+        // interface. Build 224 (arq-modPeriodAlign) briefly removed
+        // this branch on the assumption that period-aligned audio
+        // was required for reliable RX — REVERTED 2026-06-09 per
+        // operator: the design intent is full async for ALL frames
+        // during ARQ, not just the first. Missed frames under this
+        // path are a decoder-side defect to diagnose, not a reason
+        // to abandon the async spec.
+        // Mode-gated: m_arqRelax alone isn't enough — it stays true
+        // for the whole session under the current stub. Require
+        // m_ft2Mode too so the bypass only applies to Subspace TX'es,
+        // matching the prepareSending side gate
+        // (m_nSubMode == JS8CallFT2 && arqInProgress()). Without the
+        // mode gate, switching to Normal/Fast/Turbo/Slow mid-session
+        // would also drop period-aligned padding for those TXs —
+        // synchronous-decode modes would silently mis-time.
+        // [ARQ TX TIMING TEST — conditional compilation 2026-06-09]
+        // Defined  = ARQ-RELAX silent_frames (100ms pad, no period align)
+        // Undefined = period-aligned silent_frames (same as non-ARQ)
+        // Toggle here AND in JS8_UI/mainwindow.cpp must match.
+        // The mainwindow.cpp #define is the master; see the comment
+        // block there.
+        //
+#define ARQ_TX_ASYNC 1
+        //
+        // ^^ Comment-out for period-aligned test build; uncomment for
+        //    async build.
+#ifdef ARQ_TX_ASYNC
+        if (m_arqRelax.load() && m_ft2Mode) {
+            m_silentFrames = startDelayMS * FRAME_RATE / MS_PER_SEC;
+            qWarning() << "[TX-CADENCE] Modulator path: ARQ-RELAX"
+                << "periodOffsetMS=" << periodOffsetMS
+                << "startDelayMS=" << startDelayMS
+                << "silentFrames=" << m_silentFrames
+                << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
+        } else
+#endif
+        {
         bool const inTxDelayBeforePeriodStart =
             periodMS <= periodOffsetMS + txDelay * MS_PER_SEC;
         if (inTxDelayBeforePeriodStart) {
@@ -105,7 +152,7 @@ void Modulator::start(double const frequency, int const submode,
                 periodMS - periodOffsetMS;
             m_silentFrames = (startDelayMS + additionalMSNeededForTxDelay) *
                              FRAME_RATE / MS_PER_SEC;
-            qCDebug(modulator_js8) << "[FT2-TX] Modulator timing: TX-DELAY path"
+            qWarning() << "[TX-CADENCE] Modulator path: TX-DELAY"
                         << "periodOffsetMS=" << periodOffsetMS
                         << "additionalMS=" << additionalMSNeededForTxDelay
                         << "silentFrames=" << m_silentFrames
@@ -113,7 +160,7 @@ void Modulator::start(double const frequency, int const submode,
         } else if (startDelayMS > periodOffsetMS) {
             m_silentFrames =
                 (startDelayMS - periodOffsetMS) * FRAME_RATE / MS_PER_SEC;
-            qCDebug(modulator_js8) << "[FT2-TX] Modulator timing: EARLY-START path"
+            qWarning() << "[TX-CADENCE] Modulator path: EARLY-START"
                         << "periodOffsetMS=" << periodOffsetMS
                         << "startDelayMS=" << startDelayMS
                         << "silentFrames=" << m_silentFrames
@@ -125,13 +172,14 @@ void Modulator::start(double const frequency, int const submode,
             unsigned const msToNextBoundary = periodMS - periodOffsetMS;
             m_silentFrames = (msToNextBoundary + startDelayMS) *
                              FRAME_RATE / MS_PER_SEC;
-            qCDebug(modulator_js8) << "[FT2-TX] Modulator timing: WAIT-NEXT-PERIOD path"
+            qWarning() << "[TX-CADENCE] Modulator path: WAIT-NEXT-PERIOD"
                         << "periodOffsetMS=" << periodOffsetMS
                         << "startDelayMS=" << startDelayMS
                         << "msToNextBoundary=" << msToNextBoundary
                         << "silentFrames=" << m_silentFrames
                         << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
         }
+        } // end ARQ-relax outer else
     } else {
         qCDebug(modulator_js8) << "Modulator finds it is tuning.";
     }
@@ -295,6 +343,20 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
                            << m_ft2Wave[0] << m_ft2Wave[1] << m_ft2Wave[2]
                            << "maxSize=" << maxSize
                            << "bytesPerFrame=" << bytesPerFrame();
+            // [AUDIO-CADENCE PROBE 2026-06-09] Capture the wall-clock
+            // moment we're about to write the FIRST waveform sample
+            // into the buffer. One atomic store, then never again this
+            // cycle (the -1 check short-circuits subsequent calls).
+            // Tells us when the Modulator HANDED the first sample to
+            // the audio device — not the same as when it played on the
+            // wire, but the gap between them is the diagnostic value
+            // we're hunting (suspected ~1 s of device buffering).
+            if (m_ic == 0 && samples != samplesEnd &&
+                m_audioStartedMs.load(std::memory_order_relaxed) == -1) {
+                m_audioStartedMs.store(
+                    QDateTime::currentMSecsSinceEpoch(),
+                    std::memory_order_relaxed);
+            }
             while (samples != samplesEnd &&
                    m_ic < static_cast<unsigned>(m_ft2WaveLen)) {
                 auto sample = static_cast<qint16>(std::clamp(
@@ -307,6 +369,16 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
                     qCDebug(modulator_js8) << "[FT2-TX] readData: mid-waveform sample[2000]"
                                << "float=" << m_ft2Wave[2000]
                                << "qint16=" << sample;
+            }
+            // [AUDIO-CADENCE PROBE 2026-06-09] Capture the wall-clock
+            // moment the LAST waveform sample left the Modulator. Once
+            // m_ic catches up to m_ft2WaveLen, the waveform is fully
+            // emitted into the buffer.
+            if (m_ic >= static_cast<unsigned>(m_ft2WaveLen) &&
+                m_audioEndedMs.load(std::memory_order_relaxed) == -1) {
+                m_audioEndedMs.store(
+                    QDateTime::currentMSecsSinceEpoch(),
+                    std::memory_order_relaxed);
             }
             // After waveform ends, stay Active and feed silence until
             // stop() is called by stopTx(). Don't set State::Idle here —

@@ -297,6 +297,20 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
                        true);
     });
 
+    auto qsoQueryArqAction = menu->addAction(
+        QString("%1 QUERY ARQ? - Do you support Auto Repeat Request, "
+                "and at what protocol level?")
+            .arg(call)
+            .trimmed());
+    connect(qsoQueryArqAction, &QAction::triggered, this, [this]() {
+        QString selectedCall = callsignSelected();
+        if (selectedCall.isEmpty()) {
+            return;
+        }
+
+        addMessageText(QString("%1 QUERY ARQ?").arg(selectedCall), true, true);
+    });
+
     menu->addSeparator();
 
     auto agnAction = menu->addAction(

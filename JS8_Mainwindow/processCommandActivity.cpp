@@ -7,6 +7,8 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include "JS8_Main/ChunkedArq.h"
+
 void UI_Constructor::processCommandActivity() {
 #if 0
     if (!m_txFrameQueue.isEmpty()) {
@@ -196,6 +198,122 @@ void UI_Constructor::processCommandActivity() {
                  {"SPEED", QVariant(d.submode)},
                  {"TDRIFT", QVariant(d.tdrift)},
                  {"UTC", QVariant(d.utcTimestamp.toMSecsSinceEpoch())}});
+        }
+
+        // ChunkedArq intercept — chunked-DATA frames addressed to us,
+        // with body matching the wire format "<from>: <to> <body>
+        // #NN.CC/TT.HHHH". Route them to the manager (CRC, reassembly,
+        // ACK, progressive display); skip the rest of this iteration
+        // so the raw marker doesn't leak AND so the standard directed-
+        // cmd handler (e.g. MSG TO: → addCommandToMyInbox on chunk 1)
+        // doesn't fire prematurely. The receiver-side MSG detection
+        // now happens inside ChunkedArq::onChunkReceived on the full
+        // assembled body. NOTE: we used to gate this on d.cmd == " "
+        // (freetext) but that missed multi-chunk MSG-TO sends because
+        // JS8 parses the leading "MSG TO:" of the first chunk's body
+        // as a directed cmd. Now we accept any d.cmd as long as the
+        // text matches the chunked-DATA wire format — false positives
+        // are vanishingly unlikely (parseChunkedData validates msg_id,
+        // chunk_id, total, and CRC field placement). Vanilla traffic
+        // that doesn't match falls through unchanged.
+        if (toMe && m_chunkedArq) {
+            ChunkedArq::ParsedChunk parsed;
+            if (ChunkedArq::parseChunkedData(text, parsed)) {
+                // Auto-enable ARQ on first sight of any chunked-DATA
+                // wire frame addressed to us (2026-06-07, build arq-
+                // autoEnable).
+                if (ui->actionModeReplicatorProtocol &&
+                    !ui->actionModeReplicatorProtocol->isChecked()) {
+                    qWarning() << "[ARQ-RX] auto-enabling ARQ on first"
+                               << "chunked-DATA frame from" << d.from
+                               << "msgId=" << parsed.msgId;
+                    ui->actionModeReplicatorProtocol->setChecked(true);
+                }
+                // Auto-match submode to sender per the table approved
+                // 2026-06-07 (build arq-modeFollow4):
+                //
+                //   • First chunk OR Subspace involved on either side
+                //     → match sender exactly. Subspace↔legacy is a hard
+                //     decoder boundary (multi-decoder doesn't bridge it
+                //     in the Subspace direction per operator), so the
+                //     receiver MUST match the sender's mode to decode
+                //     subsequent chunks AND emit ACKs the sender can
+                //     decode.
+                //   • Subsequent chunks + both-legacy mismatch
+                //     → "at minimum sender's speed": only switch DOWN
+                //     to sender's mode if our current mode is slower.
+                //     If we're already faster (e.g. operator switched
+                //     up Normal→Fast mid-session and the sender stayed
+                //     on Normal), keep our faster mode — the sender's
+                //     decoder can still copy it via multi-decoder.
+                //
+                // First-chunk heuristic: parsed.chunkId == 1. This also
+                // re-fires the exact-match policy on retransmits of
+                // chunk 1, which is harmless (idempotent when we're
+                // already matched, correct when we're not).
+                bool const isFirstChunk = (parsed.chunkId == 1);
+                bool const subspaceInvolved =
+                    (m_nSubMode == Varicode::JS8CallFT2) ||
+                    (d.submode    == Varicode::JS8CallFT2);
+
+                int targetMode = m_nSubMode;
+                if (isFirstChunk || subspaceInvolved) {
+                    // Cases 1–4, 7, 8 → exact match
+                    targetMode = d.submode;
+                } else {
+                    // Case 9 → "at minimum sender's speed"
+                    unsigned const senderPeriod =
+                        JS8::Submode::periodMS(d.submode);
+                    unsigned const currentPeriod =
+                        JS8::Submode::periodMS(m_nSubMode);
+                    if (senderPeriod < currentPeriod) {
+                        // sender is faster — we'd be slower, match it
+                        targetMode = d.submode;
+                    }
+                    // else keep current (we're already at-or-faster)
+                }
+
+                if (targetMode != m_nSubMode) {
+                    qWarning() << "[ARQ-RX] auto-mode:"
+                               << (isFirstChunk ? "first" : "subseq")
+                               << "chunk; was=" << m_nSubMode
+                               << "sender=" << d.submode
+                               << "→ now=" << targetMode
+                               << "(peer=" << d.from
+                               << "msgId=" << parsed.msgId
+                               << "chunk=" << parsed.chunkId << ")";
+                    setSubmode(targetMode);
+                }
+                m_chunkedArq->onChunkReceived(d.from, parsed);
+                continue;
+            }
+        }
+
+        // ChunkedArq ACK/NACK dispatch — vanilla manual ACKs (no
+        // EXTRA payload) still flow through the existing handler
+        // below; ARQ ACK/NACK carry a non-empty EXTRA with the chunk
+        // ID and we route those to the manager for sender FSM update.
+        if (m_chunkedArq && !d.extra.isEmpty()) {
+            bool extraOk = false;
+            int const seq = d.extra.toInt(&extraOk);
+            if (extraOk) {
+                if (d.cmd == " ACK") {
+                    m_chunkedArq->onAckReceived(d.from, seq);
+                    // Fall through — the existing ACK handler below
+                    // does notification (tryNotify) and we want that
+                    // to fire as the operator-visible cue too.
+                } else if (d.cmd == " NACK") {
+                    m_chunkedArq->onNackReceived(d.from, seq);
+                    // Fall through — operator-visible cue in the
+                    // conversation window matters for NACK too;
+                    // without the display we only saw NACKs in the
+                    // band-activity panel. The dedicated NACK skip
+                    // block (mirroring " ACK" at the bottom of the
+                    // autoreply if/else chain) prevents NACK — which
+                    // sits in autoreply_cmds at slot 2 — from
+                    // triggering an unintended auto-response.
+                }
+            }
         }
 
         // we're only responding to allcalls if we are participating in the
@@ -862,6 +980,18 @@ void UI_Constructor::processCommandActivity() {
             continue;
         }
 
+        // PROCESS NACKS — mirror the ACK block so chunked-ARQ NACKs
+        // that fell through the early dispatch (for conversation-
+        // window visibility) don't trigger an unintended autoreply.
+        // NACK lives at slot 2 in directed_cmds and IS a member of
+        // autoreply_cmds, so without this explicit skip the
+        // reply-construction chain below could fire.
+        else if (d.cmd == " NACK" && !isAllCall) {
+            qCDebug(mainwindow_js8) << "skipping incoming nack" << d.text;
+            tryNotify("ack", d.submode);
+            continue;
+        }
+
         // PROCESS BUFFERED CMD
         else if (d.cmd == " CMD" && !isAllCall) {
             qCDebug(mainwindow_js8) << "skipping incoming command" << d.text;
@@ -871,7 +1001,17 @@ void UI_Constructor::processCommandActivity() {
         }
 
         // PROCESS BUFFERED QUERY
-        else if (d.cmd == " QUERY" && !isAllCall) {
+        //
+        // 2026-06-07 (arq-queryAll): dropped the `!isAllCall` gate so
+        // "@ALLCALL QUERY ARQ?" and "@CUSTOM_GROUP QUERY ARQ?" reach
+        // this handler. The MSG sub-handler below re-gates on !isAllCall
+        // (delivering inbox content to an indeterminate audience makes
+        // no sense), but ARQ? capability replies are safe to send to
+        // any addressee — the response is identical for every querier.
+        // The existing m_txAllcallCommandCache 15-minute per-station
+        // rate-limit (line ~411) keeps us from flooding when many
+        // stations probe the band with @ALLCALL QUERY ARQ?.
+        else if (d.cmd == " QUERY") {
             auto who = d.from; // keep in mind, this is the sender, not the
                                // original requestor if relayed
             auto replyPath = d.from;
@@ -890,7 +1030,7 @@ void UI_Constructor::processCommandActivity() {
             auto cmd = segs.first();
             segs.removeFirst();
 
-            if (cmd == "MSG" && !segs.isEmpty()) {
+            if (cmd == "MSG" && !segs.isEmpty() && !isAllCall) {
                 auto inbox = Inbox(inboxPath());
                 if (!inbox.open()) {
                     continue;
@@ -986,6 +1126,21 @@ void UI_Constructor::processCommandActivity() {
                     reply = reply.arg(text);
                     reply = reply.arg(from);
                 }
+            }
+
+            // QUERY ARQ? — capability interrogation. Wire form
+            // "<peer> QUERY ARQ?" parses as cmd=" QUERY" + body="ARQ?"
+            // (the regex's bare-QUERY alternation, with the trailing
+            // "ARQ?" landing in d.text). Reply with "<peer> YES <level>"
+            // where level is the ARQ_PROTOCOL_LEVEL constant. The peer
+            // already knows the response is ARQ-related from sending
+            // the query; future builds may bump the level when wire
+            // semantics change so they can decide whether to use ARQ
+            // with us.
+            else if (cmd == "ARQ?") {
+                reply = QString("%1 YES %2")
+                            .arg(replyPath)
+                            .arg(ChunkedArq::ARQ_PROTOCOL_LEVEL);
             }
         }
 

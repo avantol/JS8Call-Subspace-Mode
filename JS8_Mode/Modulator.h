@@ -4,6 +4,7 @@
 #include "JS8_Audio/AudioDevice.h"
 
 #include <QPointer>
+#include <atomic>
 
 class SoundOutput;
 
@@ -43,6 +44,17 @@ class Modulator final : public AudioDevice {
             || (m_ft2Mode && m_ic >= static_cast<unsigned>(m_ft2WaveLen));
     }
 
+    // [AUDIO-CADENCE PROBE 2026-06-09] Wall-clock timestamps captured
+    // INSIDE readData() at the moment we WRITE the first waveform sample
+    // into the audio-device buffer and the moment we WRITE the last one.
+    // These tell us when the Modulator handed samples to the device,
+    // not when the device actually played them on the wire — that's
+    // typically later by ~one buffer fill (suspected ~1 s for our setup).
+    // Sentinel -1 = not yet captured for this cycle. Cleared by start().
+    // Both stores are once-per-cycle on transitions; no per-sample cost.
+    qint64 audioStartedMs() const { return m_audioStartedMs.load(); }
+    qint64 audioEndedMs() const { return m_audioEndedMs.load(); }
+
     // Manipulators
 
     void close() override;
@@ -63,6 +75,16 @@ class Modulator final : public AudioDevice {
                       SoundOutput *stream, Channel channel);
     Q_SLOT void stop(bool quick = false);
     Q_SLOT void tune(bool state = true);
+
+    // Set by main thread (UI_Constructor) when ARQ messaging is in
+    // flight. Modulator's silent-frames decision branch checks this
+    // flag and bypasses the period-aligned WAIT-NEXT-PERIOD pad —
+    // start immediately, no boundary wait, no SV1UY-style silent TX
+    // (the bypass is bounded because m_arqRelax only goes true when
+    // ARQ is in flight, and ARQ only runs in FT2 / Subspace where
+    // continuous-frame TX makes the relaxed start safe). Atomic so
+    // the audio-thread read is well-defined.
+    void setArqRelax(bool relax) { m_arqRelax.store(relax); }
 
   signals:
     /// Emitted when FT2 waveform finishes playing (transitions to KeepAlive).
@@ -101,6 +123,7 @@ class Modulator final : public AudioDevice {
     double m_amp;
     double m_nsps;
     qint64 m_silentFrames;
+    std::atomic<bool> m_arqRelax{false};
     unsigned m_ic;
     unsigned m_isym0;
 #ifdef JS8_ENABLE_FT2
@@ -109,6 +132,12 @@ class Modulator final : public AudioDevice {
     int m_ft2WaveLen = 0;          // Length of pre-generated waveform
 #endif
     unsigned m_txCycleCount = 0;   // TX cycle counter for diagnostics
+
+    // [AUDIO-CADENCE PROBE 2026-06-09] see audioStartedMs/audioEndedMs
+    // public accessors above. Atomics because written from audio thread
+    // (readData) and read from GUI thread (stopTx). Sentinel -1 = unset.
+    std::atomic<qint64> m_audioStartedMs{-1};
+    std::atomic<qint64> m_audioEndedMs{-1};
 };
 
 #endif

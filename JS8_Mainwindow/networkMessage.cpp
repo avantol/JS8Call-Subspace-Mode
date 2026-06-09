@@ -8,6 +8,8 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include "JS8_Main/ChunkedArq.h"
+
 /**
  * @brief Processes an incoming API network message
  * This function acts as the primary router for the JS8Call API. It handles
@@ -554,6 +556,59 @@ if(type == "STATION.SET_SPOT") {
                                {"OK", err.isEmpty()},
                                {"ERROR", err},
                                {"COMPOSED", built},
+                           });
+        return;
+    }
+    /** @brief TX.SEND_CHUNKED: Send a reliable chunked message to a peer
+     * via the Phase 1 ARQ protocol (stop-and-wait, per-chunk CRC, retries).
+     *
+     * Params:
+     *   PEER  — destination callsign (required, must be a real station call,
+     *           not @GROUP — Phase 1 is unicast only)
+     *   value — the message body (required, any length; will be split into
+     *           ~60-char chunks on whitespace boundaries)
+     *
+     * Response:
+     *   TX.SEND_CHUNKED with OK / ERROR / PEER / MSG_ID / TOTAL params.
+     *   Asynchronous progress: RX.CHUNKED_PROGRESS pushes per ACK.
+     *   Final: RX.CHUNKED_DELIVERED or RX.CHUNKED_FAILED.
+     */
+    if (type == "TX.SEND_CHUNKED") {
+        auto peer = message.params().value("PEER").toString().trimmed().toUpper();
+        auto text = message.value();
+
+        // Same callsign gate as TX.SEND_DIRECTED, minus the @GROUP branch —
+        // Phase 1 ARQ is point-to-point.
+        static const QRegularExpression peerRe(R"(^[A-Z0-9/]{3,15}$)");
+        bool okPeer = peerRe.match(peer).hasMatch();
+
+        QString err;
+        int msgId = 0;
+        int total = 0;
+        if (!okPeer || peer.isEmpty()) {
+            err = QString("invalid PEER '%1'").arg(peer);
+        } else if (text.isEmpty()) {
+            err = "empty message body";
+        } else if (!m_chunkedArq) {
+            err = "chunked-ARQ manager not initialised";
+        } else {
+            auto const result = m_chunkedArq->sendChunked(peer, text);
+            if (!result.ok) {
+                err = result.error;
+            } else {
+                msgId = result.msgId;
+                total = result.totalChunks;
+            }
+        }
+
+        sendNetworkMessage("TX.SEND_CHUNKED", text,
+                           {
+                               {"_ID", id},
+                               {"OK", err.isEmpty()},
+                               {"ERROR", err},
+                               {"PEER", peer},
+                               {"MSG_ID", msgId},
+                               {"TOTAL", total},
                            });
         return;
     }

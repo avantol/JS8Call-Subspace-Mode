@@ -2098,6 +2098,8 @@ background-color: #22ff22;
     <addaction name="separator"/>
     <addaction name="actionModeMultiDecoder"/>
     <addaction name="separator"/>
+    <addaction name="actionModeReplicatorProtocol"/>
+    <addaction name="separator"/>
     <addaction name="actionModeAutoreply"/>
     <addaction name="actionModeJS8HB"/>
     <addaction name="actionHeartbeatAcknowledgements"/>
@@ -2430,6 +2432,20 @@ background-color: #22ff22;
    </property>
    <property name="text">
     <string>Enable Simultaneous Decoding of S/N/F/T Speeds (&amp;MULTI)</string>
+   </property>
+  </action>
+  <action name="actionModeReplicatorProtocol">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Enable Auto Repeat Request (AR&amp;Q)</string>
+   </property>
+   <property name="toolTip">
+    <string>Enable chunked-ARQ reliable messaging in any mode. In Subspace the cycle-aligned TX gate is relaxed for short per-chunk turnaround; in Normal/Fast/Turbo/Slow ARQ falls back to period-aligned cadence (same protocol, slower wall clock).</string>
    </property>
   </action>
   <action name="actionModeAutoreply">

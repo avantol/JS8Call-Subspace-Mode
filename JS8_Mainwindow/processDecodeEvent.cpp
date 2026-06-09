@@ -668,6 +668,50 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     }
                 }
 #endif
+
+                // [todo #31] Waterfall label for FROM-only broadcasts:
+                // STATUS / INFO / free-text broadcasts go on-air as plain
+                // FrameData / FrameFastData frames with the from-call
+                // embedded in the message body ("WM8Q: STATUS …", "WM8Q:
+                // INFO …", "WM8Q: free text"). Neither the compound
+                // branch (compoundCall is empty) nor the directed branch
+                // (isDirectedMessage is false) fires for these, so the
+                // waterfall never gets a label. Probed 2026-06-08 with
+                // [LABEL-PROBE]: confirmed frameType=4, isCompound=false,
+                // isDirected=false, compoundCall="" for all three cases.
+                //
+                // Fix: regex-extract a leading "<call>:" from the message
+                // text. Validate via Radio::is_callsign so continuation
+                // frames (no callsign prefix) and bogus words ("STATUS")
+                // don't paint. CPlotter::annotateCall's recent-labels
+                // collision suppression handles any dedup against the
+                // compound/directed paints upstream.
+                {
+                    auto const ft = decodedtext.frameType();
+                    bool const isDataFrame =
+                        (ft == Varicode::FrameData ||
+                         ft == Varicode::FrameDataCompressed);
+                    if (isDataFrame) {
+                        static QRegularExpression const leadingCallRe(
+                            QStringLiteral(R"(^\s*([A-Z0-9/]+)\s*:\s+)"));
+                        auto const m = leadingCallRe.match(
+                            decodedtext.message().toUpper());
+                        if (m.hasMatch()) {
+                            QString const fromCall = m.captured(1);
+                            if (Radio::is_callsign(fromCall)) {
+                                m_wideGraph->setCallsignOverlayEnabled(
+                                    m_config.show_calls_on_waterfall());
+                                m_wideGraph->annotateCall(
+                                    fromCall,
+                                    decodedtext.frequencyOffset(),
+                                    decodedtext.submode(),
+                                    /*inMyGroup=*/false,
+                                    /*destIsSubspaceGroup=*/false,
+                                    /*isUpgrade=*/false);
+                            }
+                        }
+                    }
+                }
             }
         },
         event);

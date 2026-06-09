@@ -145,8 +145,24 @@ QString optional_cmd_pattern =
 QString optional_grid_pattern = QString("(?<grid>\\s?[A-R]{2}[0-9]{2})?");
 QString optional_extended_grid_pattern =
     QString("^(?<grid>\\s?(?:[A-R]{2}[0-9]{2}(?:[A-X]{2}(?:[0-9]{2})?)*))?");
+// Re-tightened 2026-06-07 (arq-numbug). The earlier "accept any digits
+// after any directed cmd" form caught a chunk body of digits-only
+// (e.g. "K9AVT 56789 #01.03/03.5EB6") as cmd=" " + num=56789, then
+// packNum clamped 56789 → +31 and the on-air encoding became
+// "K9AVT 31 ..." — the receiver decoded "31", which mismatched the
+// ARQ-layer CRC for "56789" and triggered NACK loops.
+//
+// New form: only capture <num> when it's preceded by SNR, ACK, or
+// NACK (the only cmds that legitimately carry a numeric value).
+// Free-text bodies starting with digits no longer get swallowed.
+// PCRE2 (Qt 6) supports variable-length lookbehind so the alternation
+// in (?<=SNR|ACK|NACK) is allowed.
+// Still preserves the side benefits the earlier widening was meant
+// to enable:
+//   • SNRs > +31 saturate cleanly to "+31" (packNum clamps).
+//   • ACK/NACK carry a num (e.g. "K1JT ACK 5") for ARQ seq tracking.
 QString optional_num_pattern =
-    QString("(?<num>(?<=SNR)\\s?[-+]?(?:3[01]|[0-2]?[0-9]))?");
+    QString("(?<num>(?<=SNR|ACK|NACK)\\s?[-+]?\\d+)?");
 
 QRegularExpression directed_re("^" + callsign_pattern + optional_cmd_pattern +
                                optional_num_pattern);
@@ -2047,10 +2063,21 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
 
     QList<QPair<QString, int>> allFrames;
 
+    // Sanitize CR/LF runs in the input before any per-character
+    // encoding. JS8's 41/72-char alphabets don't include '\r' or '\n',
+    // so leaving them in the text causes alphabet72.indexOf() == -1
+    // downstream → cast to quint64 → garbled frame on-air (or worse
+    // depending on the call site). Collapsing every CR/LF run to a
+    // single space lets pasted multi-paragraph text encode cleanly;
+    // paragraph structure isn't preserved over the wire either way.
+    QString sanitizedText = text;
+    static QRegularExpression const crlfRunRe(QStringLiteral(R"([\r\n]+)"));
+    sanitizedText.replace(crlfRunRe, QStringLiteral(" "));
+
 #if JS8_NO_MULTILINE
-    // auto lines = text.split(QRegExp("[\\r\\n]"), QString::SkipEmptyParts);
+    // auto lines = sanitizedText.split(QRegExp("[\\r\\n]"), QString::SkipEmptyParts);
 #else
-    QStringList lines = {text};
+    QStringList lines = {sanitizedText};
 #endif
 
     foreach (QString line, lines) {
@@ -2159,17 +2186,26 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
             }
 #endif
             int m = 0;
-            bool fastDataFrame = false;
-            QString datFrame;
-            // TODO: DEPRECATED in 2.2 (the following release will remove
-            // transmission of these frames)
-            if (submode == Varicode::JS8CallNormal) {
-                datFrame = Varicode::packDataMessage(line, &m);
-                fastDataFrame = false;
-            } else {
-                datFrame = Varicode::packFastDataMessage(line, &m);
-                fastDataFrame = true;
-            }
+            // 2026-06-07 (arq-normaldata): always use the fast packer,
+            // including in Normal mode. The legacy packDataMessage path
+            // (Normal-mode-only) carved 2 bits out of the 72-bit payload
+            // for inline isData+compressed flags, leaving 70 bits for
+            // data. Its unpackDataMessage counterpart recovers the data
+            // boundary via `bits.lastIndexOf(0)`, which silently eats
+            // any data char whose final encoded bit is a 0 when the pad
+            // is small — most visibly on chunked-DATA wires ending in a
+            // hex CRC digit like "C" (drops the last char of the body).
+            // The fast packer uses all 72 bits, flags the frame via
+            // JS8CallFlag (JS8CallData bit) instead of inline bits, and
+            // doesn't have the small-pad ambiguity. It's been used by
+            // Fast/Turbo/Slow/Subspace all along; the upstream comment
+            // tagged the legacy path "DEPRECATED in 2.2" — this removes
+            // it on the TX side. Vanilla pre-2.2 clients receiving
+            // Normal-mode frames from us will see the JS8CallData bit
+            // and dispatch to tryUnpackFastData, same as for any other
+            // mode. JS8Call 2.2+ handled this path already.
+            bool fastDataFrame = true;
+            QString datFrame = Varicode::packFastDataMessage(line, &m);
 
             // if this parses to a standard FT8 free text message
             // but it can be parsed as a directed message, then we
@@ -2294,8 +2330,25 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
 #if 1
                     bool skipAprsChecksum =
                         (dirTo.compare("@APRSIS", Qt::CaseInsensitive) == 0);
+                    // ARQ chunked-DATA wire frames carry their own per-
+                    // chunk CRC in the trailing #NN.CC/TT.HHHH marker.
+                    // The JS8 MSG-TO buffered-cmd checksum (added below)
+                    // would (a) inflate the frame past its natural chunk
+                    // size and (b) corrupt the body that the receiver's
+                    // ARQ CRC checks against, because the appended
+                    // checksum lands after the marker. Detect the marker
+                    // and skip JS8's auto-checksum for this case. Only
+                    // the FIRST chunk of an ARQ MSG super-message hits
+                    // this path (only chunk 1 has the "MSG TO:" prefix
+                    // that makes it a buffered cmd); other chunks fall
+                    // through as freetext and don't get checksummed.
+                    static QRegularExpression const arqMarkerRe(
+                        QStringLiteral(
+                            "#\\d{2}\\.\\d{2}/\\d{2}\\.[0-9A-F]{4}"));
+                    bool const skipArqMarkerChecksum =
+                        arqMarkerRe.match(line).hasMatch();
                     int checksumSize =
-                        skipAprsChecksum
+                        (skipAprsChecksum || skipArqMarkerChecksum)
                             ? 0
                             : Varicode::isCommandChecksumed(dirCmd);
 #else
