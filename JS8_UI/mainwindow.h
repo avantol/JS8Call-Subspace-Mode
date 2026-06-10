@@ -318,6 +318,12 @@ class UI_Constructor : public QMainWindow {
                              int delivered, int total,
                              int totalRetries,
                              QString const &reason);
+    // [TODO #51 2026-06-10 build 235] Restore original outbound body
+    // to the outgoing-text widget on terminal-failure paths so the
+    // operator can retry without re-typing. Connected to
+    // ChunkedArq::Manager::sendRestoreRequested.
+    void onChunkedSendRestoreRequested(QString const &body,
+                                       QString const &reason);
     void onChunkedMsgDelivered(QString const &peer,
                                QString const &addressee,
                                QString const &body,

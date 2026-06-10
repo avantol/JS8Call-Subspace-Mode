@@ -6,6 +6,8 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include <QRegularExpression>
+
 void UI_Constructor::processBufferedActivity() {
     if (m_messageBuffer.isEmpty())
         return;
@@ -64,7 +66,28 @@ void UI_Constructor::processBufferedActivity() {
         if (Varicode::isCommandBuffered(buffer.cmd.cmd)) {
             int checksumSize = Varicode::isCommandChecksumed(buffer.cmd.cmd);
 
-            if (checksumSize == 32) {
+            // [ARQ-MARKER RX CHECKSUM SKIP 2026-06-10 build 242]
+            // Symmetric partner to the sender-side skip in
+            // Varicode.cpp::packMessage (skipArqMarkerChecksum). When a
+            // buffered cmd (MSG, MSG TO:, QUERY, etc.) carries an
+            // ARQ-chunk payload, the body ends with the chunked-DATA
+            // marker "#NN.CC/TT.HHHH" — the trailing 4 hex chars are
+            // the per-chunk CRC, NOT a JS8 cmd-level checksum. The
+            // sender does not add a cmd checksum in this case, so the
+            // receiver must not look for one — otherwise the strip-3
+            // / strip-6 logic below shaves off the marker tail and
+            // the bogus "checksum" never matches. Bypass the cmd
+            // checksum check entirely; the ChunkedArq intercept (run
+            // earlier in processCommandActivity) does its own CRC
+            // verification on the assembled chunk body.
+            static QRegularExpression const arqMarkerRe(
+                QStringLiteral("#\\d{2}\\.\\d{2}/\\d{2}\\.[0-9A-F]{4}\\s*$"));
+            bool const isArqChunk =
+                arqMarkerRe.match(message).hasMatch();
+
+            if (isArqChunk) {
+                valid = true;
+            } else if (checksumSize == 32) {
                 message = Varicode::lstrip(message);
                 checksum = message.right(6);
                 message = message.left(message.length() - 7);

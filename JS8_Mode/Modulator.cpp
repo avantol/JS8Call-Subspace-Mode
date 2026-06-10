@@ -446,13 +446,38 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
         [[fallthrough]];
 
     case State::KeepAlive:
-        // Feed near-zero samples to keep USB audio codec awake.
-        // Actual zeros cause Qt/PipeWire to treat stream as empty
-        // and transition to Idle→Stopped. Amplitude 1 is inaudible
-        // (-90 dBFS) but keeps the sink in Active state.
-        while (samples != samplesEnd) {
-            samples = load(1, samples);
-            ++framesGenerated;
+        // Feed near-zero dithered samples to keep USB audio codec
+        // (and PipeWire userspace) treating the stream as active.
+        //
+        // [KEEPALIVE-DITHER 2026-06-10 build 234]
+        // Constant +1 DC samples satisfied PipeWire's userspace
+        // suspend-on-idle (samples are flowing) but NOT hardware
+        // codec silence-detect that counts bit transitions (constant
+        // value-1 is bit-identically silent to constant zero from a
+        // transition-count perspective; the device clock can get
+        // suspended despite our intent).
+        //
+        // PipeWire's client.conf(5) docs explicitly recommend 1-2 LSB
+        // of RANDOM noise (`dither.method = wannamaker3, dither.noise
+        // = 2`) for this exact case: "Some devices implement their
+        // own detection of silence and suspension... a workaround
+        // involves adding a small amount of noise."
+        //
+        // 1-bit dither alternating in {-1, +1} via fast inline
+        // xorshift gives a bit transition on every sample at minimum
+        // amplitude (-90 dBFS, inaudible). Single-threaded (audio
+        // thread only calls readData), so the static seed needs no
+        // atomic. Zero allocation, ~5 ns per sample.
+        {
+            static uint32_t rngState = 0xCAFEBABE;
+            while (samples != samplesEnd) {
+                rngState ^= rngState << 13;
+                rngState ^= rngState >> 17;
+                rngState ^= rngState << 5;
+                samples = load((rngState & 1u) ? qint16{1} : qint16{-1},
+                               samples);
+                ++framesGenerated;
+            }
         }
         return framesGenerated * bytesPerFrame();
 

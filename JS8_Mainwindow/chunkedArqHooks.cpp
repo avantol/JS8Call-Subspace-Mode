@@ -242,6 +242,38 @@ void UI_Constructor::onChunkedSendFailed(QString const &peer, int msgId,
     box->show();
 }
 
+// [TODO #51 2026-06-10 build 235]
+// Restore the original outbound body to the outgoing-text widget on
+// non-success terminal paths (halted, nack_exhausted, timeout_exhausted,
+// too_long, busy). Operator sees their text reappear so they can edit
+// and retry. The status-bar tip names the failure reason briefly.
+//
+// Fires AFTER onChunkedSendFailed in normal Qt signal ordering (both
+// signals come from the same Manager call). The failure dialog from
+// onChunkedSendFailed and the restored text from this slot do not
+// race — they happen in deterministic sequence on the GUI thread.
+void UI_Constructor::onChunkedSendRestoreRequested(QString const &body,
+                                                   QString const &reason) {
+    if (!ui->extFreeTextMsgEdit) {
+        return;
+    }
+    if (body.isEmpty()) {
+        return;
+    }
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] restoring outgoing text after fail reason="
+        << reason << "chars=" << body.size();
+    // Replace whatever is currently in the box (probably a partially-
+    // sent chunk's wrapped text) with the original super-msg text.
+    ui->extFreeTextMsgEdit->blockSignals(true);
+    ui->extFreeTextMsgEdit->setPlainText(body);
+    ui->extFreeTextMsgEdit->blockSignals(false);
+    // Brief status hint so the operator understands why the text
+    // reappeared. Translatable; reason token is for the log only.
+    QString const tip = tr("ARQ send failed — text restored for retry");
+    statusBar()->showMessage(tip, 5000);
+}
+
 void UI_Constructor::onChunkedMsgDelivered(QString const &peer,
                                            QString const &addressee,
                                            QString const &body,

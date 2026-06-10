@@ -94,6 +94,16 @@ constexpr int    TX_IDLE_MAX_WAIT_MS      = 90000;
 constexpr int    MIN_NACK_INTERVAL_MS    = 8000;  // per-peer NACK rate limit
 constexpr int    SESSION_QUIET_TIMEOUT_MS = 60000; // session-active flag decay
 constexpr int    ASSEMBLY_EVICT_TIMEOUT_MS = 300000; // drop incomplete reassemblies
+// [ACK-TX-DELAY 2026-06-10 build 237] Brief delay between chunk
+// completion and ACK fire. Operator observation: the ACK's leading
+// Costas tones appeared abrupt with no ramp-up at the sender's
+// receiver, suggesting the audio output device needed more time to
+// reach steady state before tone generation began. The Modulator's
+// silent_frames pad (100 ms in async mode) alone wasn't enough after
+// a long idle gap. 250 ms of additional pre-emit silence gives the
+// output device a clean ramp-up window. Applied to ACK only;
+// NACK frames are rare and the same logic could be extended there.
+constexpr int    ACK_TX_DELAY_MS         = 250;
 
 // --- Wire format helpers ----------------------------------------------------
 
@@ -364,6 +374,22 @@ class Manager : public QObject {
     bool hasActiveSession() const;
 
     /**
+     * @brief True if WE are actively transmitting a chunked super-msg
+     *        (any entry in m_sends). Distinct from hasActiveSession():
+     *        does NOT return true when we are only RECEIVING chunks
+     *        from someone else. Used by the UI-lock paths so the
+     *        operator's buttons / menus stay USABLE when we are the
+     *        receiver, even mid-session. UI lock fires only when WE
+     *        are the originator of an in-flight super-msg.
+     *
+     *        (TX-side timing paths — prepareSending's arqFullRelax,
+     *        the stopTx async-finish bypass — still use
+     *        hasActiveSession(), so the ACKs we send during RX still
+     *        get the async-timing treatment.)
+     */
+    bool hasActiveTxSession() const { return !m_sends.isEmpty(); }
+
+    /**
      * @brief Set by UI_Constructor in response to the operator
      *        toggling the ARQ menu action. The actual gate (mode +
      *        this flag) lives in prepareSending and Modulator; this
@@ -517,6 +543,30 @@ class Manager : public QObject {
                     int            total,
                     int            totalRetries,
                     QString const &reason);
+
+    /**
+     * @brief Emitted alongside sendFailed when the original outbound
+     *        super-message text should be RESTORED to the operator's
+     *        outgoing-text widget so they can retry without re-typing.
+     *
+     *        Fires on non-success terminal paths:
+     *          - reason="halted"            (operator pressed Halt)
+     *          - reason="nack_exhausted"    (NACKs exceeded max retries)
+     *          - reason="timeout_exhausted" (ACK timer expired N times)
+     *          - reason="too_long"          (message would exceed chunk cap)
+     *          - reason="busy"              (a send was already in flight)
+     *
+     *        Does NOT fire on sendComplete — the message was delivered,
+     *        there's nothing to restore.
+     *
+     *        UI hook receives the body and writes it back to
+     *        ui->extFreeTextMsgEdit so the operator sees their original
+     *        text in the outgoing box and can edit / resend.
+     *
+     *        TODO #51 (2026-06-10 build 235).
+     */
+    void sendRestoreRequested(QString const &body,
+                              QString const &reason);
 
   private slots:
     void onAckTimerExpired();

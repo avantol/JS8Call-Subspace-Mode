@@ -229,6 +229,11 @@ void Manager::haltAll() {
                         it.value().chunks.size(),
                         it.value().totalRetries,
                         QStringLiteral("halted"));
+        // [TODO #51 2026-06-10 build 235] restore original body
+        if (!it.value().originalBody.isEmpty()) {
+            emit sendRestoreRequested(it.value().originalBody,
+                                      QStringLiteral("halted"));
+        }
     }
     m_sends.clear();
 
@@ -255,6 +260,9 @@ SendResult Manager::sendChunked(QString const &peer, QString const &body) {
             << "[ARQ-TX] sendChunked rejected: send already in flight for"
             << peer;
         emit sendFailed(peer, 0, 0, 0, 0, QStringLiteral("busy"));
+        // [TODO #51 2026-06-10 build 235] restore caller's body —
+        // even on "busy" reject, the operator's text should reappear.
+        emit sendRestoreRequested(body, QStringLiteral("busy"));
         result.error = QStringLiteral("busy");
         return result;
     }
@@ -265,6 +273,8 @@ SendResult Manager::sendChunked(QString const &peer, QString const &body) {
             << chunks.size() << "chunks; max is" << MAX_CHUNKS_PER_MESSAGE;
         emit sendFailed(peer, 0, 0, chunks.size(), 0,
                         QStringLiteral("too_long"));
+        // [TODO #51 2026-06-10 build 235] restore on too_long
+        emit sendRestoreRequested(body, QStringLiteral("too_long"));
         result.error = QStringLiteral("too_long");
         result.totalChunks = chunks.size();
         return result;
@@ -492,6 +502,11 @@ void Manager::onNackReceived(QString const &fromCall, int seq) {
                         state.chunks.size(),
                         state.totalRetries,
                         QStringLiteral("nack_exhausted"));
+        // [TODO #51 2026-06-10 build 235] restore on nack_exhausted
+        if (!state.originalBody.isEmpty()) {
+            emit sendRestoreRequested(state.originalBody,
+                                      QStringLiteral("nack_exhausted"));
+        }
         m_sends.remove(fromCall);
         return;
     }
@@ -522,6 +537,11 @@ void Manager::onAckTimerExpired() {
                         state.chunks.size(),
                         state.totalRetries,
                         QStringLiteral("timeout_exhausted"));
+        // [TODO #51 2026-06-10 build 235] restore on timeout_exhausted
+        if (!state.originalBody.isEmpty()) {
+            emit sendRestoreRequested(state.originalBody,
+                                      QStringLiteral("timeout_exhausted"));
+        }
         m_sends.remove(peer);
         return;
     }
@@ -710,15 +730,34 @@ void Manager::tryNack(QString const &peer, int seq) {
     rx.lastNackMonoMs = nowMs;
     QString const text = QStringLiteral("%1 NACK %2").arg(peer).arg(seq);
     qCWarning(chunkedarq_js8)
-        << "[ARQ-RX] sending NACK peer=" << peer << "seq=" << seq;
-    emit wantToTransmit(text);
+        << "[ARQ-RX] sending NACK peer=" << peer << "seq=" << seq
+        << "delayed by" << ACK_TX_DELAY_MS << "ms for output ramp-up";
+    // [NACK-TX-DELAY 2026-06-10 build 238]
+    // Same 250 ms delay as ACK (see ACK_TX_DELAY_MS commentary in
+    // ChunkedArq.h). Operator noted NACK frames are NOT rare in
+    // practice, so apply the same audio-output ramp-up window so the
+    // NACK's leading Costas tones don't appear abrupt on the wire.
+    QTimer::singleShot(ACK_TX_DELAY_MS, this, [this, text]() {
+        emit wantToTransmit(text);
+    });
 }
 
 void Manager::sendAck(QString const &peer, int seq) {
     QString const text = QStringLiteral("%1 ACK %2").arg(peer).arg(seq);
     qCWarning(chunkedarq_js8)
-        << "[ARQ-RX] sending ACK peer=" << peer << "seq=" << seq;
-    emit wantToTransmit(text);
+        << "[ARQ-RX] sending ACK peer=" << peer << "seq=" << seq
+        << "delayed by" << ACK_TX_DELAY_MS << "ms for output ramp-up";
+    // [ACK-TX-DELAY 2026-06-10 build 237]
+    // 250 ms delay before emitting wantToTransmit so the audio output
+    // device has time to settle into a clean ramp-up window before
+    // the Modulator generates the ACK's Costas tones. Without this
+    // the leading edge of the ACK looks abrupt at the sender's
+    // receiver, suggesting the output device wasn't fully ready.
+    // QTimer::singleShot's `this` parented variant cleans up if the
+    // Manager is destroyed before the delay expires.
+    QTimer::singleShot(ACK_TX_DELAY_MS, this, [this, text]() {
+        emit wantToTransmit(text);
+    });
 }
 
 void Manager::markSessionActive(QString const &peer) {

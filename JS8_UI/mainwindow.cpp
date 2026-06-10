@@ -724,7 +724,11 @@ void UI_Constructor::on_menuModeJS8_aboutToShow() {
     //   canChangeMode — ARQ toggle action stays locked for the full
     //     session (flipping ARQ mid-protocol breaks the state
     //     machine).
-    bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveSession());
+    // [RX-SIDE NO-LOCK 2026-06-10] arqBusy uses hasActiveTxSession()
+    // — fires only when WE are sending an ARQ super-msg, NOT when
+    // we are receiving one. Receiver-side menus stay usable mid-RX
+    // (operator can keep working while chunks arrive).
+    bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveTxSession());
     bool const canChangeSpeed =
         !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
     bool const canChangeMode = canChangeSpeed && !arqBusy;
@@ -1058,6 +1062,32 @@ void UI_Constructor::openSettings(int tab) {
     if (QDialog::Accepted == m_config.exec()) {
         if (m_config.my_callsign() != callsign) {
             m_baseCall = Radio::base_callsign(m_config.my_callsign());
+            // [TODO #50 FIX 2026-06-10 build 235]
+            // Refresh ChunkedArqManager's cached callsign so outgoing
+            // ARQ super-msg frames carry the NEW callsign in the
+            // <FROM>: field. Without this, frames continue carrying
+            // the stale (startup-time) callsign until app restart —
+            // on-air identity mismatch.
+            //
+            // FULL callsign (includes /P, /M, /MM etc.) per
+            // feedback_callsign_preserve_affixes. NOT base_callsign().
+            //
+            // Also halt any in-flight ARQ sessions: changing on-air
+            // identity mid-transmission is operator-unfriendly and
+            // would leave receivers confused (the first N chunks were
+            // marked from old callsign; the rest from new). Operator
+            // should re-send after settling on a callsign.
+            if (m_chunkedArq) {
+                if (m_chunkedArq->hasActiveSession()) {
+                    qWarning() << "[ARQ] halting in-flight session(s) "
+                                  "on callsign change from"
+                               << callsign << "to"
+                               << m_config.my_callsign();
+                    m_chunkedArq->haltAll();
+                }
+                m_chunkedArq->setMyCall(
+                    m_config.my_callsign().trimmed());
+            }
         }
         if (m_config.my_callsign() != callsign ||
             m_config.my_grid() != my_grid) {
@@ -2814,6 +2844,19 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         setRig();
         setXIT(freq());
         emitPTT(true);
+        // [ARQ TX TIMING ASYNC-FINISH STALE-SENTINEL FIX 2026-06-10 (build 231)]
+        // Reset the Modulator's audio-cadence sentinels SYNCHRONOUSLY at
+        // PTT-up so the next guiUpdate poll sees -1 (not started) for the
+        // new cycle. Otherwise the previous frame's stale audioStartedMs
+        // value (>0) causes stopTx to fire instantly on every-other PTT,
+        // producing "transmit, skip period, transmit, skip period" —
+        // protocol thinks each skipped frame was sent and advances the
+        // queue, so receiver gets every OTHER frame. (Modulator::start()
+        // also resets these inside the queued slot — this synchronous
+        // call ensures the reset happens BEFORE the poll, not after.)
+        if (m_modulator) {
+            m_modulator->resetCadenceCapture();
+        }
     }
 
     // Stop transmitting when the time window expires.
@@ -3012,9 +3055,67 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
     // FT2: poll for waveform completion every guiUpdate tick.
     // The btxok edge check above is a one-shot — if the waveform wasn't
     // done at that instant, this continuous check catches it.
+    //
+    // [ARQ TX TIMING ASYNC-FINISH 2026-06-09]
+    // Under arqFullRelax (defined ARQ_TX_ASYNC + active ARQ session +
+    // Subspace mode), stopTx fires the instant `isFT2WaveformDone()`
+    // returns true — WITHOUT waiting for `m_btxok` to flip false.
+    //
+    // m_btxok is derived from period-aligned `m_timeToSend`, so under
+    // truly async TX (PTT-fire bypasses period at mainwindow.cpp:2770),
+    // gating stopTx on `!m_btxok` reintroduces a period-aligned wait
+    // at the END of every frame. That wait extends PTT-to-stopTx up
+    // to a full period (~3.75 s) after Modulator finishes writing the
+    // last waveform sample, which then trips the 5 s SAFETY force-stop
+    // (see line ~3032 below). Net: a half-async design where TX-start
+    // is async but TX-end is period-aligned. Frames extend past their
+    // expected window, the next frame's PTT gets delayed, and the
+    // receiver sees ill-timed or mid-period TX activity.
+    //
+    // This makes the async design symmetric: PTT-fire bypasses period
+    // AND stopTx bypasses period when arqFullRelax is in effect. The
+    // non-arqFullRelax branch (legacy synchronous modes, plain FT2 TX
+    // outside ARQ) keeps its original `!m_btxok` gate exactly as
+    // before.
+    //
+    // Conditional-compilation parity with the PTT-fire side: when
+    // ARQ_TX_ASYNC is UNDEFINED (period-aligned test build), arqFullRelax
+    // is forced false everywhere and this stopTx-side bypass also
+    // becomes false. The two sides stay consistent — never one async
+    // and the other not.
+#ifdef ARQ_TX_ASYNC
+    bool const arqFullRelaxStopTx = (m_nSubMode == Varicode::JS8CallFT2) &&
+                                    m_chunkedArq && m_chunkedArq->hasActiveSession();
+#else
+    bool const arqFullRelaxStopTx = false;
+#endif
+    // [ARQ TX TIMING ASYNC-FINISH RACE FIX 2026-06-10 (build 230)]
+    // The original bypass `arqFullRelaxStopTx || !m_btxok` exposed a
+    // race: at PTT-up, the Modulator's state is briefly still KeepAlive
+    // (the transition to Synchronizing/Active happens inside the
+    // queued Modulator::start() call). isFT2WaveformDone() returns
+    // true under that state, so the poll fires stopTx 11 ms after
+    // PTT-up — instant TX abort. The OLD `!m_btxok` gate accidentally
+    // prevented this because m_btxok was just set true.
+    //
+    // Fix: under arqFullRelaxStopTx, additionally require that the
+    // Modulator has actually started emitting waveform samples
+    // (audioStartedMs() > 0). The Modulator sets that sentinel inside
+    // readData() the moment it writes the first waveform sample. If
+    // it's still -1, the waveform hasn't begun yet and isFT2WaveformDone
+    // is reading the stale KeepAlive state.
+    //
+    // Non-arqFullRelax path is unchanged: legacy m_btxok gate applies.
+    bool const audioActuallyStarted = m_modulator->audioStartedMs() > 0;
+    bool const okToStopTx = arqFullRelaxStopTx
+        ? (audioActuallyStarted && m_modulator->isFT2WaveformDone())
+        : (!m_btxok && m_modulator->isFT2WaveformDone());
     if (m_nSubMode == Varicode::JS8CallFT2 && m_transmitting && m_iptt == 1
-        && !m_tune && !m_btxok && m_modulator->isFT2WaveformDone()) {
-        qWarning() << "[FT2-TX] waveform poll: done, triggering stopTx()";
+        && !m_tune
+        && okToStopTx) {
+        qWarning() << "[FT2-TX] waveform poll: done, triggering stopTx()"
+                   << "arqFullRelaxStopTx=" << arqFullRelaxStopTx
+                   << "audioActuallyStarted=" << audioActuallyStarted;
         stopTx();
     }
 
@@ -3218,7 +3319,10 @@ void UI_Constructor::guiUpdate() {
         // changing mode / toggling ARQ / typing into the outgoing box
         // mid-protocol. Cleared by sendComplete / sendFailed /
         // messageDelivered / halt.
-        bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveSession());
+        // [RX-SIDE NO-LOCK 2026-06-10] hasActiveTxSession() —
+        // fires only when WE are sending. Receiver-side buttons
+        // stay usable mid-RX.
+        bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveTxSession());
         // Two-tier gate (2026-06-08, follow-up):
         //   canChangeSpeed — speed mode buttons (S/N/F/T/⚡). Re-
         //     enabled BETWEEN chunks during an ARQ session so the
@@ -3435,7 +3539,24 @@ void UI_Constructor::startTx() {
         // marker).
         QString const cmdTrimmed = dirCmd.trimmed();
         bool const isFreetextCmd = cmdTrimmed.isEmpty();
-        arqBodyIsDirectedCmd = !dirFrame.isEmpty() && !isFreetextCmd;
+        // [MSG-VIA-ARQ 2026-06-10 build 241]
+        // MSG and MSG TO: must NOT short-circuit ARQ — they're
+        // exactly what ARQ exists to wrap. ChunkedArq.cpp:286-304
+        // already detects MSG / MSG TO: bodies on sendChunked() and
+        // sets `wasMsgCmd = true` so the assembled body gets routed
+        // to the receiver's inbox on sendComplete. Letting the gate
+        // flag MSG as "directed cmd → skip ARQ" defeats that path:
+        // the MSG goes out as plain freetext, never gets chunked,
+        // never gets reliable delivery, and the receiver never
+        // deposits it in their inbox. Treat MSG / MSG TO: as
+        // ARQ-bound regardless of the directed-cmd match.
+        bool const isMsgCmd =
+            (cmdTrimmed.compare(QStringLiteral("MSG"),
+                                Qt::CaseInsensitive) == 0) ||
+            (cmdTrimmed.compare(QStringLiteral("MSG TO:"),
+                                Qt::CaseInsensitive) == 0);
+        arqBodyIsDirectedCmd =
+            !dirFrame.isEmpty() && !isFreetextCmd && !isMsgCmd;
 
         // JS8-specific macros not in directed_cmds. TYPING is the
         // typing-indicator emitted by the TYPING... button — it has
@@ -3460,6 +3581,12 @@ void UI_Constructor::startTx() {
 
     bool const arqGateOpen  = arqEnabled && arqHasPeer && arqHasText &&
                               !arqBodyIsDirectedCmd;
+    // [GATE-LOG-VERBOSE 2026-06-10 build 240]
+    // Operator reported regular free text being misclassified as a
+    // directed cmd → ARQ skipped → TX goes as plain freetext when
+    // it should be ARQ-wrapped. The gate log alone doesn't show
+    // which packer matched the text or what cmd was extracted, so
+    // include the text body and parsed cmd here.
     qWarning() << "[ARQ] startTx gate:"
                << "hasMgr=" << arqHasMgr
                << "enabled=" << arqEnabled
@@ -3467,6 +3594,8 @@ void UI_Constructor::startTx() {
                << "validPeer=" << arqHasPeer
                << "hasText=" << arqHasText
                << "isDirectedCmd=" << arqBodyIsDirectedCmd
+               << "textLen=" << text.length()
+               << "textHead=" << text.left(40)
                << "→ arqGateOpen=" << arqGateOpen;
     if (arqGateOpen) {
         // Strip both forms of leading addressing from the body before
@@ -6713,8 +6842,43 @@ void UI_Constructor::transmitDisplay(bool transmitting) {
     if (transmitting == m_transmitting) {
         if (transmitting) {
             ui->signal_meter_widget->setValue(0, 0);
-            if (m_monitoring)
-                monitor(false);
+            // [MONITOR-DURING-TX 2026-06-10 build 236]
+            // Subspace (FT2) mode: keep monitor ON during our own TX
+            // so the audio capture pipeline doesn't go through a
+            // wake-up transient at stopTx → monitor-on transition.
+            // Incoming ACKs arriving right after our chunk's TX-end
+            // would otherwise lose their leading Costas sync samples
+            // during the wake-up window (ARQ-style back-to-back
+            // TX→RX timing exposes that gap).
+            //
+            // Legacy modes (Normal/Fast/Turbo/Slow): keep the
+            // original behaviour — pause audio capture during own TX.
+            // These modes have 15-30 s period cycles with the next
+            // RX expected at the next period boundary; the wake-up
+            // window after TX-end is negligible compared to the gap
+            // before the next RX. Operator observation 2026-06-10:
+            // keeping monitor on during TX is "not necessary or
+            // desirable" for legacy modes.
+            // [MONITOR-DURING-TX 2026-06-10 build 238]
+            // Operator reported legacy-speed TXes "still leaving
+            // recv on" after build 236's submode gate was added.
+            // Log every TX-start so we can verify in the diag log
+            // whether this branch is being reached and what the
+            // submode value is at that moment. Two scenarios to
+            // distinguish: (a) submode is somehow FT2 even when
+            // operator is in a legacy mode (UI/state desync), or
+            // (b) monitor pause is firing but something is re-
+            // enabling capture elsewhere.
+            if (m_nSubMode != Varicode::JS8CallFT2) {
+                qWarning() << "[MONITOR] legacy-mode TX: pausing audio"
+                              " capture; submode=" << m_nSubMode
+                           << "m_monitoring=" << m_monitoring;
+                if (m_monitoring)
+                    monitor(false);
+            } else {
+                qWarning() << "[MONITOR] FT2-mode TX: keeping audio"
+                              " capture ON; m_monitoring=" << m_monitoring;
+            }
             m_btxok = true;
         }
     }
@@ -6845,8 +7009,11 @@ void UI_Constructor::updateButtonDisplay() {
     // Baking arqBusy into the local isTransmitting flag holds them
     // all disabled for the entire ARQ session in one stroke without
     // touching each setDisabledIfChanged call.
+    // [RX-SIDE NO-LOCK 2026-06-10] hasActiveTxSession() — macro
+    // buttons stay usable on the receiver side mid-RX (operator can
+    // type STATUS / INFO / HB / etc. while chunks arrive from a peer).
     bool isTransmitting = isMessageQueuedForTransmit() ||
-                          (m_chunkedArq && m_chunkedArq->hasActiveSession());
+                          (m_chunkedArq && m_chunkedArq->hasActiveTxSession());
 
     auto selectedCallsign = callsignSelected(true);
     bool emptyCallsign = selectedCallsign.isEmpty();

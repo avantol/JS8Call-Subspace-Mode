@@ -195,6 +195,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             this, &UI_Constructor::onChunkedSendComplete);
     connect(m_chunkedArq, &ChunkedArq::Manager::sendFailed,
             this, &UI_Constructor::onChunkedSendFailed);
+    // [TODO #51 2026-06-10 build 235]
+    connect(m_chunkedArq, &ChunkedArq::Manager::sendRestoreRequested,
+            this, &UI_Constructor::onChunkedSendRestoreRequested);
     connect(m_chunkedArq, &ChunkedArq::Manager::msgDelivered,
             this, &UI_Constructor::onChunkedMsgDelivered);
     connect(m_chunkedArq, &ChunkedArq::Manager::inboxMessageReceived,

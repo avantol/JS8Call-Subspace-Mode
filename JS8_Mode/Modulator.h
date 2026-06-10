@@ -55,6 +55,18 @@ class Modulator final : public AudioDevice {
     qint64 audioStartedMs() const { return m_audioStartedMs.load(); }
     qint64 audioEndedMs() const { return m_audioEndedMs.load(); }
 
+    // [ARQ TX TIMING ASYNC-FINISH STALE-SENTINEL FIX 2026-06-10 (build 231)]
+    // Called synchronously by mainwindow.cpp at PTT-up to clear the audio
+    // sentinels BEFORE the queued Modulator::start() runs. Without this
+    // synchronous reset, the guiUpdate poll could see the previous
+    // frame's stale audioStartedMs value (>0) and fire stopTx instantly,
+    // producing the "transmit, skip, transmit, skip" pattern observed in
+    // build 230. Always safe to call (idempotent); does not affect audio.
+    void resetCadenceCapture() {
+        m_audioStartedMs.store(-1);
+        m_audioEndedMs.store(-1);
+    }
+
     // Manipulators
 
     void close() override;

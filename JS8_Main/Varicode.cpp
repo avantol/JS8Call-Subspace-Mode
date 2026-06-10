@@ -2347,8 +2347,29 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
                             "#\\d{2}\\.\\d{2}/\\d{2}\\.[0-9A-F]{4}"));
                     bool const skipArqMarkerChecksum =
                         arqMarkerRe.match(line).hasMatch();
+                    // [QUERY ARQ NO-CHECKSUM 2026-06-10 build 239]
+                    // The ARQ-capability probe "QUERY ARQ?" /
+                    // "QUERY ARQ" is a 3-character body that should
+                    // go on-air verbatim. JS8's auto-checksum for
+                    // the QUERY directed-cmd would append e.g.
+                    // "9OR" after the body — observed 2026-06-10 as
+                    // "@ALLCALL QUERY ARQ? 9OR" — confusing the
+                    // receiver's QUERY ARQ handler and burning
+                    // 4 chars of frame budget on data nobody needs.
+                    // The receiver doesn't validate this body via
+                    // checksum anyway (the cmd itself carries the
+                    // semantic). Skip the checksum.
+                    bool const skipQueryArqChecksum =
+                        (dirCmd.compare(QStringLiteral(" QUERY"),
+                                         Qt::CaseInsensitive) == 0) &&
+                        (line.compare(QStringLiteral("ARQ"),
+                                       Qt::CaseInsensitive) == 0 ||
+                         line.compare(QStringLiteral("ARQ?"),
+                                       Qt::CaseInsensitive) == 0);
                     int checksumSize =
-                        (skipAprsChecksum || skipArqMarkerChecksum)
+                        (skipAprsChecksum ||
+                         skipArqMarkerChecksum ||
+                         skipQueryArqChecksum)
                             ? 0
                             : Varicode::isCommandChecksumed(dirCmd);
 #else
