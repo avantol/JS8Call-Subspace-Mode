@@ -355,3 +355,99 @@ void UI_Constructor::onChunkedInboxMessageReceived(QString const &fromCall,
     box->setModal(false);
     box->show();
 }
+
+void UI_Constructor::onChunkedProgressUpdate(int chunkId, int total,
+                                             int retries) {
+    // [STATUS-BAR ARQ PROGRESS 2026-06-11 build 252]
+    // Override the leftmost status-bar widget (last_tx_label) with
+    // "ARQ: #x/y (z repeats)". On the FIRST update of a session, cache
+    // whatever was there so onChunkedProgressEnd can restore it.
+    // Refreshed on each chunk-send / retransmit.
+    if (!m_lastTxLabelCacheValid) {
+        m_lastTxLabelCache = last_tx_label.text();
+        m_lastTxLabelCacheValid = true;
+    }
+    last_tx_label.setText(QString("ARQ: #%1/%2 (%3 repeats)")
+                              .arg(chunkId)
+                              .arg(total)
+                              .arg(retries));
+}
+
+void UI_Constructor::onChunkedProgressEnd() {
+    if (m_lastTxLabelCacheValid) {
+        last_tx_label.setText(m_lastTxLabelCache);
+        m_lastTxLabelCache.clear();
+        m_lastTxLabelCacheValid = false;
+    }
+}
+
+void UI_Constructor::onChunkedRelayMessageReceived(QString const &fromCall,
+                                                   QString const &body,
+                                                   int            msgId) {
+    // [RELAY-VIA-ARQ RX hook 2026-06-10 build 243]
+    // Assembled super-msg body shape: "<targetCall>> <inner text> <CRC>"
+    // where <CRC> is the 3-char 16-bit checksum the sender computed
+    // over <inner text>. Populate m_messageBuffer to look like a
+    // freshly-arrived multi-frame on-air ">" cmd; processBufferedActivity
+    // will validate the checksum, then the existing relay handler at
+    // processCommandActivity.cpp:561 fires and TXs the forward.
+    //
+    // We don't strip the checksum here — processBufferedActivity does
+    // that (its message.right(3) / message.left(len-4) logic).
+    // [RELAY REGEX 2026-06-10 build 245] Allow no-space form
+    // "<via>>rest" (matches the send-side regex in mainwindow.cpp).
+    static QRegularExpression const re(
+        QStringLiteral(R"(^\s*(?<via>[A-Z0-9/]+)>\s*(?<rest>\S.*)$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    auto const m = re.match(body);
+    if (!m.hasMatch()) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-RX] relay body parse failed — discarding:" << body;
+        return;
+    }
+
+    QString const via  = m.captured("via").toUpper();
+    QString const rest = m.captured("rest").trimmed();
+
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-RX] relay → injecting into m_messageBuffer: from="
+        << fromCall << "via=" << via << "msgId=" << msgId
+        << "innerLen=" << rest.size();
+
+    int const offset  = freq();
+    auto const nowUtc = DriftingDateTime::currentDateTimeUtc();
+
+    CommandDetail cd = {};
+    cd.from         = fromCall;
+    cd.to           = via;
+    cd.cmd          = QStringLiteral(">");
+    cd.bits         = Varicode::JS8CallFirst;
+    cd.utcTimestamp = nowUtc;
+    cd.submode      = m_nSubMode;
+    cd.offset       = offset;
+    cd.dial         = m_freqNominal;
+    cd.snr          = 0;
+    cd.tdrift       = 0;
+
+    ActivityDetail msg = {};
+    msg.text         = rest;                  // "N7W STATUS? XYZ"
+    msg.bits         = Varicode::JS8CallLast; // closes the buffer
+    msg.utcTimestamp = nowUtc;
+    msg.submode      = m_nSubMode;
+    msg.offset       = offset;
+    msg.dial         = m_freqNominal;
+    msg.snr          = 0;
+    msg.tdrift       = 0;
+    msg.shouldDisplay = false;
+
+    auto &buf = m_messageBuffer[offset];
+    buf.cmd = cd;
+    buf.msgs.clear();
+    buf.msgs.append(msg);
+    // processBufferedActivity runs on the next RX-activity tick; it
+    // concatenates buffer.msgs into "N7W STATUS? XYZ", strips and
+    // validates the 3-char CRC, then appends cd to m_rxCommandQueue.
+    // processCommandActivity then fires the ">" handler at
+    // processCommandActivity.cpp:561, which TXs the forward via the
+    // standard TX queue.
+}

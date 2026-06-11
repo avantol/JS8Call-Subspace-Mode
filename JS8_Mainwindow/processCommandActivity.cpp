@@ -1137,7 +1137,16 @@ void UI_Constructor::processCommandActivity() {
             // the query; future builds may bump the level when wire
             // semantics change so they can decide whether to use ARQ
             // with us.
-            else if (cmd == "ARQ?") {
+            // [QUERY ARQ HANDLER WIDEN 2026-06-11 build 249]
+            // Also match the question-mark-less form. Build 239's TX
+            // checksum-skip and Build 248's RX checksum-skip both
+            // accept "ARQ" and "ARQ?", but until now this handler
+            // matched only "ARQ?" — so a manually-typed
+            // "<peer> QUERY ARQ" would pass through buffered
+            // validation but never produce a YES reply. Now both
+            // forms get the response. Standard menu still sends
+            // "QUERY ARQ?" so the existing flow is unchanged.
+            else if (cmd == "ARQ?" || cmd == "ARQ") {
                 reply = QString("%1 YES %2")
                             .arg(replyPath)
                             .arg(ChunkedArq::ARQ_PROTOCOL_LEVEL);
@@ -1280,11 +1289,28 @@ void UI_Constructor::processCommandActivity() {
 
         // well, if there's no reply, don't do anything...
         if (reply.isEmpty()) {
+            // [REPLY-GATE DIAG 2026-06-10 build 244] track which gate
+            // silently drops the relay-cmd forward TX. Only log when
+            // we KNOW we'd otherwise have sent something.
+            if (d.cmd == QStringLiteral(">")) {
+                qWarning() << "[REPLY-GATE] relay: reply is empty"
+                           << "from=" << d.from << "to=" << d.to
+                           << "text=" << d.text;
+            }
             continue;
+        }
+
+        if (d.cmd == QStringLiteral(">")) {
+            qWarning() << "[REPLY-GATE] relay: reply built"
+                       << "reply=" << reply
+                       << "from=" << d.from << "to=" << d.to;
         }
 
         // do not queue @ALLCALL replies if auto-reply is not checked
         if (!ui->actionModeAutoreply->isChecked() && isAllCall) {
+            if (d.cmd == QStringLiteral(">")) {
+                qWarning() << "[REPLY-GATE] relay: blocked by autoreply-off+allcall";
+            }
             continue;
         }
 
@@ -1297,16 +1323,30 @@ void UI_Constructor::processCommandActivity() {
 #endif
 
         // do not queue for reply if there's text in the window
-        if (!ui->extFreeTextMsgEdit->toPlainText().isEmpty()) {
+        // (exception: relay ">" — the forward is an obligation
+        //  initiated by a remote station, not an autoreply that should
+        //  defer to the local operator's typing. Queue it; the TX
+        //  queue will serialise it after whatever else is pending.)
+        bool const isRelayForward = (d.cmd == QStringLiteral(">"));
+        if (!ui->extFreeTextMsgEdit->toPlainText().isEmpty() &&
+            !isRelayForward) {
             continue;
         }
 
         // do not queue for reply if there's a buffer open to us
+        // (same exception as above)
         int bufferOffset = 0;
-        if (hasExistingMessageBufferToMe(&bufferOffset)) {
+        if (hasExistingMessageBufferToMe(&bufferOffset) &&
+            !isRelayForward) {
             qCDebug(mainwindow_js8) << "skipping reply due to open buffer"
                                     << bufferOffset << m_messageBuffer.count();
             continue;
+        }
+        if (isRelayForward) {
+            qWarning() << "[REPLY-GATE] relay: enqueuing forward"
+                       << "reply=" << reply
+                       << "extEditEmpty=" << ui->extFreeTextMsgEdit->toPlainText().isEmpty()
+                       << "openBufferToMe=" << hasExistingMessageBufferToMe(nullptr);
         }
 
         // add @ALLCALLs to the @ALLCALL cache

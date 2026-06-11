@@ -46,11 +46,22 @@ void DecodeFT2::decodeCallback(float /*sync*/, int snr, float dt, float freq,
     if (msgbits77[73] & 1) frameBits |= Varicode::JS8CallLast;
     if (msgbits77[74] & 1) frameBits |= Varicode::JS8CallData;
 
-    // Filter garbage decodes: reserved bits 75-76 must be 0,
-    // and at least one flag bit must be set (our TX always sets First, Data, or Last)
-    // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup
-    bool garbage = (msgbits77[75] & 1) || (msgbits77[76] & 1)
-                   || frameBits == 0;
+    // Filter garbage decodes: at least one flag bit must be set
+    // (our TX always sets First, Data, or Last). LDPC CRC validates
+    // decode structure; SNR estimate is unreliable at startup so
+    // we don't gate on it.
+    //
+    // [SPARE BIT TOLERANCE 2026-06-11 build 250]
+    // Bits 75-76 were previously included in this garbage filter
+    // ((msgbits77[75] & 1) || (msgbits77[76] & 1)). That made every
+    // currently-deployed Subspace receiver throw away any decode
+    // where a sender had set either of those bits. We're shipping
+    // tolerance NOW so that by the time the user fleet has upgraded,
+    // every receiver in the wild accepts bit-75/76-set decodes
+    // silently. Later (todo #35) we can start using bit 75 for the
+    // ARQ-capability flag; tolerance must be widely deployed first
+    // since stations on builds before this one would still discard.
+    bool garbage = frameBits == 0;
 
     qWarning() << "[FT2-RX] DECODED: snr=" << snr << "dt=" << dt
                << "freq=" << freq << "nap=" << nap

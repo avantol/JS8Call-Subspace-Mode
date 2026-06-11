@@ -3414,6 +3414,25 @@ void UI_Constructor::startTx() {
 
     auto text = ui->extFreeTextMsgEdit->toPlainText();
 
+    // [QUEUE PROVENANCE 2026-06-10 build 247]
+    // If the current edit-box content matches the most recent text
+    // queued in by processTxQueue (autoreply, relay forward, TCP API
+    // send), the operator is just clicking Send on a system-built
+    // reply — NOT typing a fresh ARQ candidate. Route directly to
+    // startTxNonArq so the ARQ gate doesn't get a chance to mis-classify
+    // a relay-marker reply path ("K9AVT>WM8Q STATUS …") as an explicit
+    // ARQ-relay request and wrap it. Mirrors the Build 205 design:
+    // ARQ wrapping is reserved for content the operator typed directly.
+    if (!m_lastQueueInjectedText.isEmpty() &&
+        text == m_lastQueueInjectedText) {
+        qWarning() << "[ARQ] startTx: queue-injected text detected"
+                   << "→ routing to startTxNonArq (no ARQ wrap)"
+                   << "textHead=" << text.left(40);
+        m_lastQueueInjectedText.clear();
+        startTxNonArq();
+        return;
+    }
+
     // ARQ intercept: when ARQ is enabled AND the
     // operator has selected a target callsign, hand the FULL outgoing
     // text to ChunkedArq::Manager::sendChunked instead of the normal
@@ -3555,8 +3574,16 @@ void UI_Constructor::startTx() {
                                 Qt::CaseInsensitive) == 0) ||
             (cmdTrimmed.compare(QStringLiteral("MSG TO:"),
                                 Qt::CaseInsensitive) == 0);
+        // [RELAY-VIA-ARQ 2026-06-10 build 243]
+        // Relay cmd ">" gets the same exemption as MSG: ARQ wraps the
+        // super-message and the receiver-side hook injects into
+        // m_messageBuffer so the existing ">" handler at
+        // processCommandActivity.cpp:561 fires and forwards verbatim.
+        bool const isRelayCmd =
+            (cmdTrimmed == QStringLiteral(">"));
         arqBodyIsDirectedCmd =
-            !dirFrame.isEmpty() && !isFreetextCmd && !isMsgCmd;
+            !dirFrame.isEmpty() && !isFreetextCmd &&
+            !isMsgCmd && !isRelayCmd;
 
         // JS8-specific macros not in directed_cmds. TYPING is the
         // typing-indicator emitted by the TYPING... button — it has
@@ -3613,6 +3640,33 @@ void UI_Constructor::startTx() {
         QString const peerPrefix = arqPeer.toUpper() + " ";
         if (arqBody.toUpper().startsWith(peerPrefix)) {
             arqBody = arqBody.mid(peerPrefix.length()).trimmed();
+        }
+        // [RELAY-VIA-ARQ checksum compute 2026-06-10 build 243]
+        // For checksumed buffered cmds (currently: relay ">"), compute
+        // the 16-bit checksum the on-air pipeline would have added and
+        // bake it into the body BEFORE chunking. The receiver-side hook
+        // (chunkedArqHooks::onChunkedRelayMessageReceived) populates
+        // m_messageBuffer; processBufferedActivity then validates the
+        // checksum just like a regular on-air cmd. No layer punch-
+        // through, no special-case RX checksum-skip — the wire body
+        // looks exactly like the freetext-continuation an on-air sender
+        // would have produced. Same pattern (checksum16, space-prefix,
+        // 3-char hex) as Varicode.cpp:2408 packMessage path.
+        // [RELAY REGEX 2026-06-10 build 245] Accept both "<call>> body"
+        // and "<call>>body" forms — the on-air ">" cmd's callsign
+        // pattern uses type=[> ] where the type is part of the
+        // callsign capture, so no space between ">" and the rest is a
+        // valid wire form. Without this fix the no-space form skipped
+        // the checksum and the receiver couldn't validate.
+        static QRegularExpression const relayBodyRe(
+            QStringLiteral(R"(^\s*[A-Z0-9/]+>\s*(?<inner>\S.*)$)"),
+            QRegularExpression::CaseInsensitiveOption);
+        if (auto const m = relayBodyRe.match(arqBody); m.hasMatch()) {
+            QString const inner = m.captured("inner").trimmed();
+            QString const crc   = Varicode::checksum16(inner);
+            arqBody = QString("%1 %2").arg(arqBody.trimmed(), crc);
+            qWarning() << "[ARQ] relay-cmd: checksum16 appended"
+                       << "inner=" << inner << "crc=" << crc;
         }
         qWarning() << "[ARQ] startTx: routing through ChunkedArq"
                    << "peer=" << arqPeer
@@ -4299,6 +4353,10 @@ void UI_Constructor::resetMessageUI() {
     m_nextFreeTextMsg.clear();
     ui->extFreeTextMsgEdit->clear();
     ui->extFreeTextMsgEdit->setReadOnly(false);
+    // [QUEUE PROVENANCE 2026-06-10 build 247] Edit-box is being
+    // cleared canonically; drop the stale snapshot so it can't ghost-
+    // match if the operator types the same text by coincidence later.
+    m_lastQueueInjectedText.clear();
 
     update_dynamic_property(ui->extFreeTextMsgEdit, "transmitting", false);
 
@@ -8106,6 +8164,18 @@ void UI_Constructor::processTxQueue() {
 
     // add the message to the outgoing message text box
     addMessageText(message.message, true);
+
+    // [QUEUE PROVENANCE 2026-06-10 build 247] Snapshot the post-inject
+    // edit-box content so startTx can detect a queue-injected manual
+    // send and route to startTxNonArq (no ARQ wrapping). Without this,
+    // PriorityNormal autoreplies with autoreply OFF sit in the box
+    // until the operator clicks Send — and that click hits the ARQ
+    // gate, which mis-classifies relay-marker reply paths
+    // (e.g. "K9AVT>WM8Q STATUS …") as explicit ARQ-relay requests and
+    // wraps them. Snapshot the actual edit-box content (not
+    // message.message) because addMessageText may have prefixed a
+    // space or otherwise normalized the text.
+    m_lastQueueInjectedText = ui->extFreeTextMsgEdit->toPlainText();
 
     // check to see if this is a high priority message, or if we have
     // autoreply enabled, or if this is a ping and the ping button is

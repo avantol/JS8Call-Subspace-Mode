@@ -202,6 +202,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             this, &UI_Constructor::onChunkedMsgDelivered);
     connect(m_chunkedArq, &ChunkedArq::Manager::inboxMessageReceived,
             this, &UI_Constructor::onChunkedInboxMessageReceived);
+    connect(m_chunkedArq, &ChunkedArq::Manager::relayMessageReceived,
+            this, &UI_Constructor::onChunkedRelayMessageReceived);
+    connect(m_chunkedArq, &ChunkedArq::Manager::progressUpdate,
+            this, &UI_Constructor::onChunkedProgressUpdate);
+    connect(m_chunkedArq, &ChunkedArq::Manager::progressEnd,
+            this, &UI_Constructor::onChunkedProgressEnd);
 
     m_aprsInboundRelay = new AprsInboundRelay(
         &m_config,

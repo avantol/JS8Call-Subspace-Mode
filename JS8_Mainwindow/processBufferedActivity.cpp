@@ -85,7 +85,35 @@ void UI_Constructor::processBufferedActivity() {
             bool const isArqChunk =
                 arqMarkerRe.match(message).hasMatch();
 
+            // [QUERY-ARQ SYMMETRIC RX SKIP 2026-06-11 build 248]
+            // Symmetric partner to the TX-side skip added in Build 239
+            // (Varicode.cpp:2362). When the sender skips the 16-bit
+            // checksum for a 3-char "ARQ" / 4-char "ARQ?" body in a
+            // QUERY cmd, the wire arrives without a checksum suffix.
+            // The standard strip-last-3-as-checksum logic below would
+            // chop "RQ?" off and fail validation against an empty
+            // body, silently discarding the capability probe. This
+            // branch accepts the bare "ARQ" / "ARQ?" body without
+            // checksum (handler at processCommandActivity.cpp:1140
+            // doesn't need it — the cmd carries the semantic). Old
+            // pre-Build-239 senders that still attach a checksum fall
+            // through to the standard branch unchanged.
+            QString const trimmedMsg = message.trimmed();
+            bool const isQueryArqProbe =
+                buffer.cmd.cmd.compare(QStringLiteral(" QUERY"),
+                                       Qt::CaseInsensitive) == 0 &&
+                (trimmedMsg.compare(QStringLiteral("ARQ"),
+                                    Qt::CaseInsensitive) == 0 ||
+                 trimmedMsg.compare(QStringLiteral("ARQ?"),
+                                    Qt::CaseInsensitive) == 0);
+
             if (isArqChunk) {
+                valid = true;
+            } else if (isQueryArqProbe) {
+                // Accept without checksum; normalize the message to
+                // the trimmed body so the handler's d.text.split(" ")
+                // sees a clean leading token.
+                message = trimmedMsg;
                 valid = true;
             } else if (checksumSize == 32) {
                 message = Varicode::lstrip(message);
@@ -105,15 +133,33 @@ void UI_Constructor::processBufferedActivity() {
         }
 
         if (valid) {
+            // [BUFFERED-DIAG 2026-06-10 build 244] confirm relay-cmd
+            // validation path so we know whether the chunked-ARQ
+            // injection is reaching m_rxCommandQueue.
+            if (buffer.cmd.cmd == QStringLiteral(">")) {
+                qWarning() << "[BUFFERED] relay-cmd valid → queue:"
+                           << "from=" << buffer.cmd.from
+                           << "to=" << buffer.cmd.to
+                           << "text=" << message
+                           << "checksum=" << checksum;
+            }
             buffer.cmd.bits |= Varicode::JS8CallLast;
             buffer.cmd.text = message;
             buffer.cmd.isBuffered = true;
             m_rxCommandQueue.append(buffer.cmd);
         } else {
-            qCDebug(mainwindow_js8)
-                << "Buffered message failed checksum...discarding";
-            qCDebug(mainwindow_js8) << "Checksum:" << checksum;
-            qCDebug(mainwindow_js8) << "Message:" << message;
+            // Promote to qWarning for the relay-cmd case so the log
+            // surfaces it directly during ARQ-relay testing.
+            if (buffer.cmd.cmd == QStringLiteral(">")) {
+                qWarning() << "[BUFFERED] relay-cmd FAILED checksum:"
+                           << "checksum=" << checksum
+                           << "message=" << message;
+            } else {
+                qCDebug(mainwindow_js8)
+                    << "Buffered message failed checksum...discarding";
+                qCDebug(mainwindow_js8) << "Checksum:" << checksum;
+                qCDebug(mainwindow_js8) << "Message:" << message;
+            }
         }
 
         // regardless of valid or not, remove the "complete" buffered message

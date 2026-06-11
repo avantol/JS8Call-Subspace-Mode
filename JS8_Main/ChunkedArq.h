@@ -240,6 +240,11 @@ struct RxState {
     // conversation-panel display.
     QHash<int, QString>             msgCmdAddressee; // msg_id -> addressee (empty for bare MSG)
     QHash<int, bool>                msgCmdDetected;  // msg_id -> first-chunk had a MSG prefix
+    // [RELAY-VIA-ARQ 2026-06-10 build 243] Parallel to msgCmdDetected.
+    // When chunk 1's body starts with "<callsign>>", flag so the
+    // assembly-complete branch emits relayMessageReceived instead of
+    // letting the body display as plain freetext.
+    QHash<int, bool>                relayCmdDetected;
     qint64                          lastNackMonoMs{0};
     QTimer                         *quietTimer{nullptr};
     bool                            sessionActive{false};
@@ -529,6 +534,39 @@ class Manager : public QObject {
                               QString const &addressee,
                               QString const &body,
                               int            msgId);
+
+    /**
+     * @brief Assembled super-message is an ARQ-wrapped relay request.
+     *
+     * Body shape: "<targetCall>> <inner text> <CRC>" — the sender
+     * computed the 16-bit checksum over <inner text> and appended it
+     * (same wire shape an on-air ">" cmd would produce). The hook
+     * (chunkedArqHooks::onChunkedRelayMessageReceived) populates
+     * m_messageBuffer with this so processBufferedActivity validates
+     * the checksum, then the existing ">" handler at
+     * processCommandActivity.cpp:561 fires and TXs the forward.
+     */
+    void relayMessageReceived(QString const &fromCall,
+                              QString const &body,
+                              int            msgId);
+
+    /**
+     * @brief Outbound TX progress update for status-bar display.
+     *
+     * Emitted on each sendNextChunk (new chunk OR retransmit). The UI
+     * status-bar hook overrides the standard "Tx: <text>" label with
+     * "ARQ: #x/y (z repeats)" until progressEnd fires.
+     */
+    void progressUpdate(int chunkId, int total, int retries);
+
+    /**
+     * @brief Outbound ARQ session ended (success or failure).
+     *
+     * Emitted from sendComplete / sendFailed / haltAll paths. The UI
+     * hook clears its progress-override and lets the normal status-bar
+     * update logic resume.
+     */
+    void progressEnd();
 
     /**
      * @brief Outbound send failed after exhausting retries (TCP API push payload).

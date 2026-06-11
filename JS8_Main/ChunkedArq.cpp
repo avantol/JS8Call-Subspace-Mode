@@ -235,6 +235,9 @@ void Manager::haltAll() {
                                       QStringLiteral("halted"));
         }
     }
+    if (!m_sends.isEmpty()) {
+        emit progressEnd();
+    }
     m_sends.clear();
 
     for (auto it = m_recv.begin(); it != m_recv.end(); ++it) {
@@ -351,6 +354,7 @@ void Manager::sendNextChunk(QString const &peer) {
         }
         emit sendComplete(peer, state.msgId,
                           state.chunks.size(), state.totalRetries);
+        emit progressEnd();
         m_sends.remove(peer);
         return;
     }
@@ -378,6 +382,11 @@ void Manager::sendNextChunk(QString const &peer) {
         << "chunk=" << cc << "/" << tt
         << "retries=" << state.retries
         << "text=" << text;
+
+    // [STATUS-BAR PROGRESS 2026-06-11 build 251] UI hook overrides
+    // the "Tx: <message>" status-bar label with the ARQ progress
+    // string until progressEnd fires from a terminal path below.
+    emit progressUpdate(cc, tt, state.retries);
 
     emit wantToTransmit(text);
     ensureTxIdlePolling();
@@ -502,6 +511,7 @@ void Manager::onNackReceived(QString const &fromCall, int seq) {
                         state.chunks.size(),
                         state.totalRetries,
                         QStringLiteral("nack_exhausted"));
+        emit progressEnd();
         // [TODO #51 2026-06-10 build 235] restore on nack_exhausted
         if (!state.originalBody.isEmpty()) {
             emit sendRestoreRequested(state.originalBody,
@@ -542,6 +552,7 @@ void Manager::onAckTimerExpired() {
             emit sendRestoreRequested(state.originalBody,
                                       QStringLiteral("timeout_exhausted"));
         }
+        emit progressEnd();
         m_sends.remove(peer);
         return;
     }
@@ -645,6 +656,25 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
             qCWarning(chunkedarq_js8)
                 << "[ARQ-RX] bare MSG detected on chunk 1 — peer=" << fromCall
                 << "msgId=" << chunk.msgId;
+        } else {
+            // [RELAY-VIA-ARQ RX detect 2026-06-10 build 243]
+            // Body starts with "<callsign>>" → this is an ARQ relay
+            // super-message. The sender computed and appended the
+            // 16-bit checksum just like an on-air ">" cmd; the receiver
+            // hook will populate m_messageBuffer and let
+            // processBufferedActivity validate it.
+            // [RELAY REGEX 2026-06-10 build 245] Allow no-space form
+            // "<call>>body" (see mainwindow.cpp send-side regex).
+            static QRegularExpression const relayRe(
+                QStringLiteral(R"(^\s*(?<call>[A-Z0-9/]+)>\s*\S)"),
+                QRegularExpression::CaseInsensitiveOption);
+            if (auto const m = relayRe.match(probe); m.hasMatch()) {
+                rx.relayCmdDetected[chunk.msgId] = true;
+                qCWarning(chunkedarq_js8)
+                    << "[ARQ-RX] relay-cmd detected on chunk 1 — peer="
+                    << fromCall << "msgId=" << chunk.msgId
+                    << "via=" << m.captured("call").toUpper();
+            }
         }
     }
 
@@ -694,13 +724,14 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
             << "msgId=" << chunk.msgId << "chunks=" << chunk.total
             << "bodyChars=" << assembled.size();
 
-        // Detach the MSG-cmd stash BEFORE emitting so the slot has
-        // room to mutate state safely if needed. Take a local copy
-        // of detection flag + addressee, then prune the maps.
+        // Detach the MSG-cmd / relay-cmd stash BEFORE emitting so the
+        // slot has room to mutate state safely if needed.
         bool const wasMsg = rx.msgCmdDetected.value(chunk.msgId, false);
+        bool const wasRelay = rx.relayCmdDetected.value(chunk.msgId, false);
         QString const addressee = rx.msgCmdAddressee.value(chunk.msgId);
         rx.msgCmdDetected.remove(chunk.msgId);
         rx.msgCmdAddressee.remove(chunk.msgId);
+        rx.relayCmdDetected.remove(chunk.msgId);
 
         emit messageDelivered(fromCall, m_myCall, assembled, chunk.msgId);
 
@@ -715,6 +746,17 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
                 << "msgId=" << chunk.msgId
                 << "addressee=" << (addressee.isEmpty() ? "(bare MSG)" : addressee);
             emit inboxMessageReceived(fromCall, addressee, assembled, chunk.msgId);
+        }
+        // [RELAY-VIA-ARQ assembly emit 2026-06-10 build 243]
+        // Relay super-message: hook (chunkedArqHooks) populates
+        // m_messageBuffer so processBufferedActivity validates the
+        // sender-side-computed checksum and then the existing ">"
+        // handler at processCommandActivity.cpp:561 fires.
+        if (wasRelay) {
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] relay-cmd assembled — peer=" << fromCall
+                << "msgId=" << chunk.msgId;
+            emit relayMessageReceived(fromCall, assembled, chunk.msgId);
         }
     }
 }

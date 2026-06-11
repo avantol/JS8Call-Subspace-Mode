@@ -332,6 +332,11 @@ class UI_Constructor : public QMainWindow {
                                        QString const &addressee,
                                        QString const &body,
                                        int            msgId);
+    void onChunkedRelayMessageReceived(QString const &fromCall,
+                                       QString const &body,
+                                       int            msgId);
+    void onChunkedProgressUpdate(int chunkId, int total, int retries);
+    void onChunkedProgressEnd();
 
     void initialize_fonts();
     void on_menuModeJS8_aboutToShow();
@@ -818,6 +823,23 @@ class UI_Constructor : public QMainWindow {
     QString m_txTextDirtyLastSelectedCall;
     QString m_lastTxMessage;
     QString m_totalTxMessage;
+    // [QUEUE PROVENANCE 2026-06-10 build 247]
+    // Snapshot of extFreeTextMsgEdit's plain-text content RIGHT AFTER
+    // processTxQueue called addMessageText to inject a system-built
+    // reply (autoreply / relay forward / TCP API send). Used by startTx
+    // to decide whether the current Send-button click is on operator-
+    // typed text or queue-injected text. Matches the Build 205 design:
+    // queue-injected text NEVER gets ARQ-wrapped, regardless of body
+    // shape. Cleared at TX completion or once the operator edits the
+    // text away from the snapshot.
+    QString m_lastQueueInjectedText;
+    // [STATUS-BAR ARQ PROGRESS 2026-06-11 build 252]
+    // Cache of the real "Last Tx: <message>" text in the leftmost
+    // status-bar widget (last_tx_label), captured on the FIRST
+    // onChunkedProgressUpdate of an ARQ session so we can restore it
+    // when the session ends. Empty when no ARQ session is in flight.
+    QString m_lastTxLabelCache;
+    bool    m_lastTxLabelCacheValid{false};
 
     // moved from mainwindow.cpp, is used in multiple functions
     QString since(QDateTime const &time) {

@@ -1,5 +1,5 @@
 Package: js8call-subspace
-Version: 4.0.0.242-arq-rxChecksumSkip
+Version: 4.0.0.252-arq-progress-lastTx
 Section: hamradio
 Priority: optional
 Architecture: amd64
