@@ -317,23 +317,97 @@ void UI_Constructor::onChunkedInboxMessageReceived(QString const &fromCall,
         << "addressee=" << addressee << "msgId=" << msgId
         << "bodyChars=" << body.size();
 
-    // Addressee resolution: for "MSG TO: <addr>" use <addr>; for bare
-    // MSG (no addressee field) default to our own callsign — the
-    // sender meant the message for us directly.
-    QString const to = addressee.isEmpty() ? m_baseCall : addressee;
+    // [MSG TO: VIA ARQ 2026-06-12 build 255]
+    // Distinguish bare MSG vs MSG TO: <addr> and route accordingly,
+    // mirroring the on-air handler at processCommandActivity.cpp:675-
+    // 768. Two routing paths and a prefix-strip step:
+    //
+    //   • Bare MSG (addressee empty) → cd.to = m_baseCall,
+    //     addCommandToMyInbox(cd) (our UNREAD slot).
+    //   • MSG TO: <addr> where addr == us → same as bare MSG
+    //     (we're the addressee, so it lands in our UNREAD).
+    //   • MSG TO: <addr> where addr is someone else → cd.to =
+    //     base_callsign(addr), addCommandToStorage("STORE", cd) so
+    //     the addressee can later QUERY-retrieve. Gated on
+    //     !m_config.relay_off() (don't store-and-forward if relaying
+    //     is off).
+    //
+    // Also: strip the "MSG TO: <addr>" or "MSG " prefix from the
+    // assembled body before storing — cd.text should contain only the
+    // actual message content. The on-air pattern at
+    // processCommandActivity.cpp:683-686 strips the addressee from
+    // d.text; ARQ side now does the equivalent on the assembled body.
+    QString const baseAddr = addressee.isEmpty()
+                                 ? QString()
+                                 : Radio::base_callsign(addressee);
+    bool const addressedToUs =
+        baseAddr.isEmpty() || baseAddr == m_baseCall;
+    QString const to = addressedToUs ? m_baseCall : baseAddr;
+
+    // Strip the leading "MSG TO: <addr>" or "MSG " prefix from body.
+    static QRegularExpression const msgToPrefixRe(
+        QStringLiteral(R"(^\s*MSG\s+TO\s*:\s*[A-Z0-9/@]+\s*)"),
+        QRegularExpression::CaseInsensitiveOption);
+    static QRegularExpression const msgPrefixRe(
+        QStringLiteral(R"(^\s*MSG\s+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    QString cleanText = body.trimmed();
+    if (auto const m = msgToPrefixRe.match(cleanText); m.hasMatch()) {
+        cleanText = cleanText.mid(m.capturedLength()).trimmed();
+    } else if (auto const m2 = msgPrefixRe.match(cleanText); m2.hasMatch()) {
+        cleanText = cleanText.mid(m2.capturedLength()).trimmed();
+    }
 
     CommandDetail cd = {};
-    cd.cmd          = QStringLiteral(" MSG ");
+    cd.cmd          = addressee.isEmpty() ? QStringLiteral(" MSG ")
+                                          : QStringLiteral(" MSG TO:");
     cd.from         = fromCall;
     cd.to           = to;
-    cd.text         = body.trimmed();
+    cd.text         = cleanText;
     cd.utcTimestamp = DriftingDateTime::currentDateTimeUtc();
     cd.submode      = m_nSubMode;
     cd.offset       = freq();
     cd.dial         = m_freqNominal;
     cd.snr          = 0;
     cd.tdrift       = 0;
-    addCommandToMyInbox(cd);
+    // [MSG TO: FIELD COVERAGE 2026-06-12 build 259]
+    // Populate the same fields the on-air MSG TO: handler at
+    // processCommandActivity.cpp:749-763 sets, so the inbox display
+    // has every value the on-air store would have produced. Previously
+    // these were left at their default-init values (0/""), which
+    // matches the storage-time params for FROM but apparently breaks
+    // some downstream display logic per operator's report that the
+    // FROM column appears empty for ARQ-deposited entries.
+    cd.bits         = Varicode::JS8CallLast;
+    cd.relayPath    = fromCall;  // single-hop: relay-path = sender
+    // (extra and grid stay empty — they come from on-air wire
+    //  metadata that ARQ chunks don't carry forward)
+
+    QString storageType;
+    if (addressedToUs) {
+        // Land in our own UNREAD inbox.
+        addCommandToMyInbox(cd);
+        storageType = QStringLiteral("UNREAD");
+    } else {
+        // Store-and-forward for the third-party addressee, but only if
+        // relaying is enabled (matches the on-air gate at
+        // processCommandActivity.cpp:742).
+        if (m_config.relay_off()) {
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] MSG TO: addressed to" << baseAddr
+                << "but relay_off=true — DISCARDED, not stored";
+            return;
+        }
+        addCommandToStorage(QStringLiteral("STORE"), cd);
+        storageType = QStringLiteral("STORE");
+    }
+
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-RX] MSG-via-ARQ stored: type=" << storageType
+        << "cd.from=" << cd.from << "cd.to=" << cd.to
+        << "cd.cmd=" << cd.cmd
+        << "cd.text(first40)=" << cd.text.left(40)
+        << "cleanTextChars=" << cleanText.size();
 
     // Operator-visible notification (matches the existing single-frame
     // MSG-TO handler at processCommandActivity.cpp:660 — `tryNotify(
@@ -344,12 +418,15 @@ void UI_Constructor::onChunkedInboxMessageReceived(QString const &fromCall,
                                 tr("ARQ super-message saved to inbox"),
                                 tr("From: %1\n"
                                    "Addressee: %2\n"
-                                   "Super-message #%3\n\n"
-                                   "Reassembled %4 chars; saved to inbox.")
+                                   "Storage: %3\n"
+                                   "Super-message #%4\n\n"
+                                   "Reassembled %5 chars; saved to %6.")
                                     .arg(fromCall)
                                     .arg(to)
+                                    .arg(storageType)
                                     .arg(msgId)
-                                    .arg(body.trimmed().size()),
+                                    .arg(cleanText.size())
+                                    .arg(storageType.toLower()),
                                 QMessageBox::Ok, this);
     box->setAttribute(Qt::WA_DeleteOnClose);
     box->setModal(false);

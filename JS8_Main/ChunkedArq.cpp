@@ -8,6 +8,7 @@
 #include <QElapsedTimer>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
+#include <QSettings>
 
 // CRCpp is header-only; same setup as Varicode.cpp uses.
 #define CRCPP_INCLUDE_ESOTERIC_CRC_DEFINITIONS
@@ -190,7 +191,27 @@ QList<QString> splitIntoChunks(QString const &body, int maxChunkBody) {
 
 // --- Manager ---------------------------------------------------------------
 
-Manager::Manager(QObject *parent) : QObject(parent) {}
+// [PERSIST MSG ID 2026-06-12 build 254]
+// QSettings key for the next ARQ msg id. Persisted across sender
+// restarts so a fresh process doesn't reuse IDs the receiver still
+// has in its deliveredMsgs dedup set. Without this, the receiver
+// silently drops "new" msgIds that happen to collide with previously-
+// delivered ones — diagnosed from 2026-06-12 testing where today's
+// msgId=1 hit the dedup cache from yesterday's session and never
+// fired messageDelivered.
+static constexpr char const *kNextMsgIdSettingsKey = "chunkedArq/nextMsgId";
+
+Manager::Manager(QObject *parent) : QObject(parent) {
+    QSettings settings;
+    int const stored = settings.value(QString::fromLatin1(kNextMsgIdSettingsKey),
+                                      MSG_ID_MIN).toInt();
+    m_nextMsgId = (stored >= MSG_ID_MIN && stored <= MSG_ID_MAX)
+                      ? stored
+                      : MSG_ID_MIN;
+    qCWarning(chunkedarq_js8)
+        << "[ARQ] persistent msg-id counter restored from settings:"
+        << m_nextMsgId;
+}
 
 Manager::~Manager() = default;
 
@@ -255,7 +276,42 @@ void Manager::haltAll() {
     }
 }
 
-SendResult Manager::sendChunked(QString const &peer, QString const &body) {
+// [WIRE-NORMALIZE 2026-06-12 build 257]
+// JS8's Varicode/Huffman freetext encoding inserts a space after the
+// "MSG TO:" directed-cmd marker even when the wire body lacks one.
+// The chunked-ARQ per-chunk CRC is computed by the sender BEFORE the
+// wire encoding sees the body; the receiver's CRC (computed over the
+// post-encoding body) then mismatches whenever the body contains
+// "MSG TO:<non-space>". Pre-normalize that specific pattern here to
+// match what the wire will produce.
+//
+// Build 256 had this too broad — matched ANY ":<non-space>", which
+// would modify arbitrary operator-typed text (timestamps like 10:30,
+// URLs, sentence "Note:foo", etc.). Build 257 narrows it to the only
+// pattern we know JS8 transforms: the "MSG TO:" directed-cmd marker
+// followed immediately by an addressee with no space.
+//
+// Concrete observed case (2026-06-12 ARQ MSG TO: test): sender sent
+// "MSG TO:WM8Q ..."; receiver decoded "MSG TO: WM8Q ..."; CRCs
+// mismatched every chunk; NACK loop on every retry.
+//
+// The directed-frame prefix "<myCall>: <peer> " produced by
+// encodeChunkedData is unaffected — that `:` is always followed by
+// a space anyway.
+static QString normalizeForWireEncoding(QString const &body) {
+    static QRegularExpression const msgToNoSpaceRe(
+        QStringLiteral(R"(\bMSG\s+TO:(?=\S))"),
+        QRegularExpression::CaseInsensitiveOption);
+    return QString(body).replace(msgToNoSpaceRe, QStringLiteral("MSG TO: "));
+}
+
+SendResult Manager::sendChunked(QString const &peer, QString const &inputBody) {
+    QString const body = normalizeForWireEncoding(inputBody);
+    if (body != inputBody) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] wire-normalize: inserted space(s) after ':'"
+            << "origLen=" << inputBody.size() << "normLen=" << body.size();
+    }
     SendResult result;
     if (m_sends.contains(peer) && !m_sends[peer].chunks.isEmpty()
         && m_sends[peer].nextIdx < m_sends[peer].chunks.size()) {
@@ -318,6 +374,13 @@ SendResult Manager::sendChunked(QString const &peer, QString const &body) {
 
     if (++m_nextMsgId > MSG_ID_MAX) {
         m_nextMsgId = MSG_ID_MIN;
+    }
+    // [PERSIST MSG ID 2026-06-12 build 254] Persist after every bump so
+    // a process restart resumes from the next value, not from 1.
+    {
+        QSettings settings;
+        settings.setValue(QString::fromLatin1(kNextMsgIdSettingsKey),
+                          m_nextMsgId);
     }
 
     qCWarning(chunkedarq_js8)

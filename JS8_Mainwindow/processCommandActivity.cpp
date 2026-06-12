@@ -765,6 +765,16 @@ void UI_Constructor::processCommandActivity() {
             qCDebug(mainwindow_js8)
                 << "storing message to" << to << ":" << text;
 
+            // [MSG TO: DIAG 2026-06-12 build 258] Surface storage path
+            // visibly so we can confirm what actually lands where when
+            // the operator reports inbox-routing surprises.
+            qWarning() << "[MSG TO:] on-air store: from=" << d.from
+                       << "to=K9AVT-style-relay=" << d.to
+                       << "addressee=" << to
+                       << "baseAddressee=" << Radio::base_callsign(to)
+                       << "text=" << text
+                       << "→ addCommandToStorage(STORE)";
+
             addCommandToStorage("STORE", cd);
 
             // we haven't replaced the from with the relay path, so we have to

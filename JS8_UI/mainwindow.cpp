@@ -3825,8 +3825,19 @@ void UI_Constructor::stopTx() {
 
     auto dt = DecodedText(m_currentMessage.trimmed(), m_currentMessageBits,
                           m_nSubMode);
-    last_tx_label.setText("Last Tx: " +
-                          dt.message()); // m_currentMessage.trimmed());
+    // [STATUS-BAR ARQ PROGRESS 2026-06-11 build 253]
+    // When an ARQ session is active, last_tx_label is owned by the
+    // ARQ progress override ("ARQ: #x/y (z repeats)"). Suppressing the
+    // per-frame "Last Tx: <message>" update keeps the progress visible
+    // through the cycle gap until the next chunk's progressUpdate
+    // refreshes it (or progressEnd restores the pre-ARQ cache). Without
+    // this, every chunk-done event would briefly overwrite the
+    // progress with "Last Tx: <chunk text>" for ~3.75s before the next
+    // progressUpdate clobbered it back.
+    if (!m_lastTxLabelCacheValid) {
+        last_tx_label.setText("Last Tx: " +
+                              dt.message()); // m_currentMessage.trimmed());
+    }
 
     Q_EMIT endTransmitMessage();
 
