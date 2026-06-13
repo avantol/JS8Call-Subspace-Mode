@@ -142,8 +142,14 @@ jobs:
       id: version
       shell: msys2 {0}
       run: |
-        ver=$(grep WSJTX_VERSION_PATCH Versions.cmake | grep -oP '[0-9]+\.[0-9]+')
-        echo "APP_VERSION=4.0.${ver}" >> $GITHUB_OUTPUT
+        # Derive full MAJOR.MINOR.PATCH from Versions.cmake instead of
+        # hardcoding the MAJOR.MINOR prefix. Survives version bumps
+        # without needing CI workflow edits — fix for v4.1.0 bump
+        # where this previously emitted 4.0.x for a 4.1.x build.
+        major=$(grep WSJTX_VERSION_MAJOR Versions.cmake | grep -oP '[0-9]+')
+        minor=$(grep WSJTX_VERSION_MINOR Versions.cmake | grep -oP '[0-9]+')
+        patch=$(grep WSJTX_VERSION_PATCH Versions.cmake | grep -oP '[0-9]+\.[0-9]+')
+        echo "APP_VERSION=${major}.${minor}.${patch}" >> $GITHUB_OUTPUT
 
     - name: Create Installer
       run: |
