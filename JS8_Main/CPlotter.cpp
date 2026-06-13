@@ -371,6 +371,14 @@ void CPlotter::annotateCall(QString const &call,
     int const descent = fm.descent();
     int const textWidth = fm.horizontalAdvance(call);
     int const columnWidth = ascent + descent;
+    // [LABEL-PAD 2026-06-12 build 263] Extend the rotated label
+    // background by one typical-char width (half on each end of the
+    // text) so adjacent labels have visible breathing room. The
+    // padded length flows through `lenPx` into the overlap-collision
+    // check below and into LabelEntry, so replot and same-column
+    // collision logic both respect the new footprint.
+    int const padPx = fm.averageCharWidth();
+    int const paddedLenPx = textWidth + padPx;
 
     // Center the label over the signal's bandwidth.
     int const bandwidth = JS8::Submode::bandwidth(submode);
@@ -420,19 +428,21 @@ void CPlotter::annotateCall(QString const &call,
 
     // Collision suppression: scan for any survivor whose column is
     // close enough AND whose current top-y still falls within this
-    // label's textWidth footprint at the top of the waterfall.
+    // label's footprint at the top of the waterfall. Uses the
+    // PADDED length (paddedLenPx) so the inter-label gap stays open
+    // — bare textWidth would let neighbors abut at the padded edges.
     // (The upgrade target — if any — was erased above and won't
     // appear here.)
     for (auto it = m_recentLabels.begin();
          it != m_recentLabels.end(); ++it) {
         if (std::abs(it->x - x) >= columnWidth) continue;
         qint64 const oldTopY = currentRow - it->row;
-        if (oldTopY >= textWidth) continue;  // already scrolled past
+        if (oldTopY >= paddedLenPx) continue;  // already scrolled past
         return;  // would overlap → suppress
     }
 
     qint64 const yOffset = currentRow - paintRow;
-    LabelEntry const entry{x, paintRow, textWidth, call, submode,
+    LabelEntry const entry{x, paintRow, paddedLenPx, call, submode,
                            inMyGroup, destIsSubspaceGroup};
     paintLabelAt(p, entry, yOffset);
     m_recentLabels.push_front(entry);
@@ -480,13 +490,21 @@ void CPlotter::paintLabelAt(QPainter &p,
     QFontMetrics const fm = p.fontMetrics();
     int const ascent = fm.ascent();
     int const descent = fm.descent();
+    // [LABEL-PAD 2026-06-12 build 263] e.lenPx is now the PADDED
+    // background length (text + averageCharWidth). Derive the text
+    // start offset so the callsign sits centered in that longer bar,
+    // with equal padding on both ends. Re-deriving from textWidth
+    // here keeps LabelEntry minimal — no new field needed and replot
+    // produces identical pixels.
+    int const textWidth = fm.horizontalAdvance(e.call);
+    int const textOffset = (e.lenPx - textWidth) / 2;
 
     p.save();
     p.translate(e.x, yOffset + e.lenPx);
     p.rotate(-90.0);
     p.fillRect(QRect(0, -ascent, e.lenPx, ascent + descent), bgColor);
     p.setPen(textColor);
-    p.drawText(0, 0, e.call);
+    p.drawText(textOffset, 0, e.call);
     p.restore();
 }
 

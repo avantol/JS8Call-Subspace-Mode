@@ -492,19 +492,27 @@ void Manager::onTxIdlePollTick() {
     bool const idleNow = idleCheckMissing ? true : m_txIdleCheck();
     qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
 
+    // [DYNAMIC CAP 2026-06-12 build 262] Per-submode safety cap so slow
+    // legacy modes (Normal 15s, Slow 30s) get enough TX-wait budget for
+    // a multi-frame chunk to finish before we arm the ACK timer. Read
+    // via callback so submode is sampled at THIS poll tick (mid-QSO
+    // mode switches take effect immediately). Falls back to the original
+    // 90 s constant if the host hasn't wired the callback.
+    int const dynamicCapMs = m_txIdleCapFn ? m_txIdleCapFn() : 90000;
     bool anyStillAwaiting = false;
     for (auto it = m_sends.begin(); it != m_sends.end(); ++it) {
         SendState &st = it.value();
         if (!st.awaitingTxDone) continue;
 
         bool const sanityCapHit =
-            (nowMs - st.awaitingSinceMs) >= TX_IDLE_MAX_WAIT_MS;
+            (nowMs - st.awaitingSinceMs) >= dynamicCapMs;
 
         if (idleNow || sanityCapHit) {
             if (sanityCapHit && !idleNow) {
                 qCWarning(chunkedarq_js8)
                     << "[ARQ-TX] TX-idle safety cap hit: peer=" << it.key()
                     << "ms=" << (nowMs - st.awaitingSinceMs)
+                    << "capMs=" << dynamicCapMs
                     << "— arming ACK timer anyway";
             }
             st.awaitingTxDone = false;

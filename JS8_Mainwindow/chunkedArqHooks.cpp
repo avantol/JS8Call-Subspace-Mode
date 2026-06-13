@@ -278,27 +278,29 @@ void UI_Constructor::onChunkedMsgDelivered(QString const &peer,
                                            QString const &addressee,
                                            QString const &body,
                                            int            msgId) {
-    // Route a successfully-delivered ARQ MSG body to the local inbox.
-    // Mirrors the construction at processCommandActivity.cpp:641-655
-    // for the existing "MSG TO:" handler — same CommandDetail shape,
-    // same addCommandToMyInbox call.
+    // [SENDER-SIDE INBOX FIX 2026-06-12 build 261]
+    // Previously this slot called addCommandToMyInbox on the SENDER,
+    // depositing a copy of every successfully-delivered ARQ MSG into
+    // the operator's own inbox. That mirrored neither the on-air bare
+    // MSG path (no sender-side auto-copy at all) nor the on-air
+    // MSG TO: path (stores via addCommandToStorage("STORE") on the
+    // RECEIVER's machine, not on the sender's). Per operator 2026-06-12:
+    // "when i'm sending a message with the MSG command, a copy goes
+    // into my inbox, not the desired action."
+    //
+    // Drop the local deposit. The operator already sees:
+    //   • Standard outbound TX rendering in the conversation panel
+    //   • onChunkedSendComplete's success dialog confirming delivery
+    //   • Status-bar ARQ progress while in flight
+    //
+    // The receiver-side hook (onChunkedInboxMessageReceived) still
+    // routes the body to the appropriate inbox slot on the peer's
+    // machine.
     qCWarning(chunkedarq_js8)
-        << "[ARQ-TX] msgDelivered → inbox: peer=" << peer
+        << "[ARQ-TX] msgDelivered: peer=" << peer
         << "addressee=" << addressee << "msgId=" << msgId
-        << "bodyChars=" << body.size();
-
-    CommandDetail cd = {};
-    cd.cmd  = QStringLiteral(" MSG ");
-    cd.from = m_baseCall;                  // we are the sender
-    cd.to   = addressee.isEmpty() ? m_baseCall : addressee;
-    cd.text = body.trimmed();
-    cd.utcTimestamp = DriftingDateTime::currentDateTimeUtc();
-    cd.submode      = m_nSubMode;
-    cd.offset       = freq();
-    cd.dial         = m_freqNominal;
-    cd.snr          = 0;
-    cd.tdrift       = 0;
-    addCommandToMyInbox(cd);
+        << "bodyChars=" << body.size()
+        << "(local-inbox deposit removed Build 261)";
 }
 
 void UI_Constructor::onChunkedInboxMessageReceived(QString const &fromCall,

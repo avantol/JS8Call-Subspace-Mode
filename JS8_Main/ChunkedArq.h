@@ -88,9 +88,40 @@ constexpr int    TX_IDLE_POLL_INTERVAL_MS = 1000;
 
 // Safety cap: if JS8Call never reports idle (e.g. user pressed Stop,
 // stuck PTT, etc.) arm the ACK timer anyway after this long so the
-// chunked-send state machine doesn't wedge. 90 s comfortably covers
-// even a Slow-mode cycle.
-constexpr int    TX_IDLE_MAX_WAIT_MS      = 90000;
+// chunked-send state machine doesn't wedge.
+//
+// [DYNAMIC CAP 2026-06-13 build 262]
+// Was a fixed 90 000 ms — designed for FT2/Subspace where 7-frame
+// chunks take ~26 s. But in slower legacy modes the cap fires before
+// TX is actually complete: Normal-mode (15 s cycle) 7-frame chunks
+// need ~105 s, Slow-mode (30 s cycle) needs ~210 s. Operator observed
+// this 2026-06-13 in a Normal-mode ARQ run where every chunk hit the
+// cap at exactly 90 s and the ACK timer started counting down ~15 s
+// before TX actually finished. ACKs still landed in time but the
+// 36 s ACK budget was burned through more than half before the
+// receiver could even decode the chunk.
+//
+// New per-submode cap: `max(90 s, 8 × cycle_s)`. 8× cycle is the
+// upper bound for a wire body that maxes out at MAX_CHUNK_BODY_CHARS
+// + envelope + marker (~85 chars) packed into JS8's ~13-char frames
+// = ~7 frames, with one extra cycle of cushion. The 90 s floor keeps
+// the cap at its original value for fast modes (FT2, Turbo, Fast)
+// where 8×cycle is smaller than the original constant.
+inline int txIdleMaxWaitMsForSubmode(int submode) {
+    int const cycleS = [submode]() {
+        switch (submode) {
+            case 0:  return 15;  // JS8CallNormal
+            case 1:  return 10;  // JS8CallFast
+            case 2:  return 6;   // JS8CallTurbo
+            case 4:  return 30;  // JS8CallSlow
+            case 16: return 4;   // JS8CallFT2 / Subspace — round 3.75 up to 4
+            default: return 15;  // Unknown — Normal
+        }
+    }();
+    int const dynamic = 8 * cycleS * 1000;     // ms
+    int const floor   = 90000;                  // ms (original constant)
+    return dynamic > floor ? dynamic : floor;
+}
 constexpr int    MIN_NACK_INTERVAL_MS    = 8000;  // per-peer NACK rate limit
 constexpr int    SESSION_QUIET_TIMEOUT_MS = 60000; // session-active flag decay
 constexpr int    ASSEMBLY_EVICT_TIMEOUT_MS = 300000; // drop incomplete reassemblies
@@ -329,6 +360,22 @@ class Manager : public QObject {
      */
     using AckTimeoutFn = std::function<int()>;
     void setAckTimeoutFn(AckTimeoutFn fn) { m_ackTimeoutFn = std::move(fn); }
+
+    /**
+     * @brief Callback returning the TX-idle safety-cap timeout in ms,
+     *        evaluated each poll tick (every 1 s). See
+     *        `txIdleMaxWaitMsForSubmode()` in this header for the per-
+     *        submode rationale (legacy Normal/Slow chunks take longer
+     *        than 90 s to drain so the fixed cap fired prematurely and
+     *        ate into the ACK budget). Defaults to 90 000 ms if unset.
+     *
+     * Typical UI wiring (mirror of setAckTimeoutFn):
+     *     mgr->setTxIdleCapFn([this]{
+     *         return ChunkedArq::txIdleMaxWaitMsForSubmode(m_nSubMode);
+     *     });
+     */
+    using TxIdleCapFn = std::function<int()>;
+    void setTxIdleCapFn(TxIdleCapFn fn) { m_txIdleCapFn = std::move(fn); }
 
     /**
      * @brief True if we've recently exchanged ARQ traffic with this
@@ -638,6 +685,7 @@ class Manager : public QObject {
 
     IdleCheckFn                 m_txIdleCheck;
     AckTimeoutFn                m_ackTimeoutFn;
+    TxIdleCapFn                 m_txIdleCapFn;
     QTimer                     *m_txIdlePollTimer{nullptr};
     bool                        m_arqEnabled{false};
 };

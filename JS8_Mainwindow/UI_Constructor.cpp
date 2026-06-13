@@ -183,6 +183,14 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     m_chunkedArq->setAckTimeoutFn([this]() {
         return ChunkedArq::ackTimeoutMsForSubmode(m_nSubMode);
     });
+    // [DYNAMIC CAP 2026-06-12 build 262] TX-idle safety cap scales with
+    // submode cycle length (90 s floor; legacy Normal/Slow chunks need
+    // ~105 / ~210 s to drain). Operator-observed in 2026-06-12 Normal-
+    // mode ARQ run: 90 s cap fired before chunk TX completed, burning
+    // ~15 s of the 36 s ACK budget unnecessarily on every chunk.
+    m_chunkedArq->setTxIdleCapFn([this]() {
+        return ChunkedArq::txIdleMaxWaitMsForSubmode(m_nSubMode);
+    });
     connect(m_chunkedArq, &ChunkedArq::Manager::wantToTransmit,
             this, &UI_Constructor::onChunkedWantToTransmit);
     connect(m_chunkedArq, &ChunkedArq::Manager::chunkAdded,
