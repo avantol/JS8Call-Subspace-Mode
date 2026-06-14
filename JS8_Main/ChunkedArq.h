@@ -501,6 +501,16 @@ class Manager : public QObject {
     void wantToTransmit(QString const &text);
 
     /**
+     * @brief Manager wants this RX-side response (ACK / NACK) TX'd.
+     *        Same payload semantics as wantToTransmit but the host can
+     *        wrap save/restore of the outgoing-text widget around the
+     *        TX so a draft the user is typing during reception isn't
+     *        clobbered. See TODO.md #57 (per-response outgoing-text
+     *        preservation) for design rationale.
+     */
+    void wantsResponseTx(QString const &text);
+
+    /**
      * @brief A clean chunk arrived from `fromCall`. UI should display
      *        it in the conversation panel as "<body> (CC/TT)" with NO
      *        end-of-message diamond — diamond is reserved for the

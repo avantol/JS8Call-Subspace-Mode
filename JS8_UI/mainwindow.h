@@ -302,6 +302,12 @@ class UI_Constructor : public QMainWindow {
   private slots:
     // ChunkedArq integration: TX-side relay + RX-side UI rendering.
     void onChunkedWantToTransmit(QString const &text);
+    // [TODO.md #57 / build 268] Per-response wrapper for ACK / NACK.
+    // Saves the operator's outgoing-box draft text into
+    // m_arqResponseSavedText, then delegates to onChunkedWantToTransmit
+    // for the actual TX. stopTx() restores the saved text after the
+    // ACK/NACK transmission completes.
+    void onChunkedWantsResponseTx(QString const &text);
     void onChunkedChunkAdded(QString const &fromCall,
                              QString const &chunkBody,
                              int            chunkId,
@@ -840,6 +846,22 @@ class UI_Constructor : public QMainWindow {
     // when the session ends. Empty when no ARQ session is in flight.
     QString m_lastTxLabelCache;
     bool    m_lastTxLabelCacheValid{false};
+    // [TODO.md #57 build 268] Per-response outgoing-text preservation.
+    // Saved on the wantsResponseTx slot before the ACK / NACK text
+    // gets written into the outgoing-msg widget; restored in stopTx()
+    // once the response TX completes. Empty + flag-false when no
+    // restore is pending.
+    QString m_arqResponseSavedText;
+    bool    m_arqResponseRestorePending{false};
+    // [TODO.md #58 build 268] Multi-mode RX runtime override.
+    // Set true (set-once / sticky for the program run) when the ARQ
+    // button is toggled on OR when the first inbound ARQ chunk is
+    // auto-detected. Once true, never cleared until program exit.
+    // Read by the legacy-decoder dispatch gate (mainwindow.cpp around
+    // line 1891) to force FT2/Subspace decoding even when the
+    // operator is in a legacy submode and actionModeMultiDecoder is
+    // unchecked. Configuration / QSettings is never written.
+    bool    m_arqMultiModeOverride{false};
 
     // moved from mainwindow.cpp, is used in multiple functions
     QString since(QDateTime const &time) {

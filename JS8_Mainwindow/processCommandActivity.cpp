@@ -228,6 +228,16 @@ void UI_Constructor::processCommandActivity() {
                                << "chunked-DATA frame from" << d.from
                                << "msgId=" << parsed.msgId;
                     ui->actionModeReplicatorProtocol->setChecked(true);
+                    // The toggle slot will also latch the multi-mode
+                    // override (TODO.md #58). Belt-and-suspenders: in
+                    // case the button was already on and we're just
+                    // arriving here via the chunk-detection path with
+                    // no toggle event, latch directly.
+                }
+                if (!m_arqMultiModeOverride) {
+                    m_arqMultiModeOverride = true;
+                    qWarning() << "[ARQ-RX] multi-mode RX override latched ON"
+                               << "via inbound chunked-DATA from" << d.from;
                 }
                 // Auto-match submode to sender per the table approved
                 // 2026-06-07 (build arq-modeFollow4):

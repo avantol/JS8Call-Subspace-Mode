@@ -88,6 +88,32 @@ void UI_Constructor::onChunkedWantToTransmit(QString const &text) {
     }
 }
 
+void UI_Constructor::onChunkedWantsResponseTx(QString const &text) {
+    // [TODO.md #57 build 268] Before sending an ACK / NACK, snapshot
+    // any draft text the operator has typed into the outgoing-msg
+    // widget. stopTx() restores it once the response TX completes.
+    // If a prior restore is still pending (back-to-back ACK / NACK
+    // events), do NOT overwrite the saved text — the existing snapshot
+    // is the genuine operator draft we still owe a restore for. The
+    // outgoing-box content at this moment is the previous response's
+    // wire text, which we'd be re-saving and then over-restoring on
+    // the next stopTx, producing a stale ACK / NACK line back in the
+    // box.
+    if (ui->extFreeTextMsgEdit && !m_arqResponseRestorePending) {
+        m_arqResponseSavedText = ui->extFreeTextMsgEdit->toPlainText();
+        m_arqResponseRestorePending = true;
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-RX] outgoing-text save: chars="
+            << m_arqResponseSavedText.size()
+            << "for response=" << text.left(40);
+    }
+    // Delegate to the existing chunk-emit path. addMessageText(/*clear=*/true)
+    // inside that slot replaces the widget contents with the response
+    // wire text; the restore later in stopTx swaps the operator's
+    // draft back in.
+    onChunkedWantToTransmit(text);
+}
+
 void UI_Constructor::onChunkedChunkAdded(QString const &fromCall,
                                          QString const &chunkBody,
                                          int            chunkId,

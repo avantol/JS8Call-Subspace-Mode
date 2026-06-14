@@ -309,6 +309,16 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
         }
 
         addMessageText(QString("%1 QUERY ARQ?").arg(selectedCall), true, true);
+        // [TODO.md #59 build 268] Auto-TX on selection — same pattern
+        // SNR / INFO / STATUS macro buttons use. QUERY ARQ? is a
+        // single-frame fire-and-forget capability probe; no draft
+        // text to compose, no reason to make the operator click Send
+        // separately. Gated on transmit_directed() so users who've
+        // opted out of auto-TX-on-directed-action still see the
+        // pre-typed text and can fire it manually.
+        if (m_config.transmit_directed()) {
+            toggleTx(true);
+        }
     });
 
     menu->addSeparator();

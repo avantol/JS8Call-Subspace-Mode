@@ -303,6 +303,50 @@ if(type == "STATION.SET_SPOT") {
           return;
     }
 
+    /** @brief MODE.GET_ARQ
+     * Returns whether the chunked-ARQ button is currently enabled
+     * (TODO.md #60 build 268).
+     *
+     * Response: `MODE.ARQ` with `VALUE` = true / false (boolean).
+     */
+    if (type == "MODE.GET_ARQ") {
+        bool const enabled =
+            ui->actionModeReplicatorProtocol &&
+            ui->actionModeReplicatorProtocol->isChecked();
+        sendNetworkMessage("MODE.ARQ", "", {
+            {"VALUE", enabled},
+            {"_ID", id},
+        });
+        return;
+    }
+
+    /** @brief MODE.SET_ARQ
+     * Sets the chunked-ARQ enabled state programmatically. Pairs with
+     * TX.SEND_CHUNKED so external clients (msg-rotator, scripts,
+     * custom UIs) can flip ARQ on before sending and off after
+     * (TODO.md #60 build 268). Mirrors the GUI button — fires the
+     * same `on_actionModeReplicatorProtocol_toggled` slot which
+     * handles the Manager wiring, modulator relax, mode_label,
+     * updateButtonDisplay, AND the multi-mode RX override latch.
+     *
+     * Param VALUE = true / false (boolean). Response: `MODE.ARQ`
+     * with current state after the toggle.
+     */
+    if (type == "MODE.SET_ARQ") {
+        bool const requested = QVariant(message.value()).toBool();
+        if (ui->actionModeReplicatorProtocol) {
+            ui->actionModeReplicatorProtocol->setChecked(requested);
+        }
+        bool const enabled =
+            ui->actionModeReplicatorProtocol &&
+            ui->actionModeReplicatorProtocol->isChecked();
+        sendNetworkMessage("MODE.ARQ", "", {
+            {"VALUE", enabled},
+            {"_ID", id},
+        });
+        return;
+    }
+
     /** @} */ // End STATION Commands
 
     // RX.GET_CALL_ACTIVITY

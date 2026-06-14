@@ -2102,6 +2102,33 @@ Varicode::buildMessageFrames(QString const &mycall, QString const &mygrid,
         }
 #endif
 
+        // [TRAILING-COLON-ON-TO 2026-06-14 build 267] Common typo: user
+        // writes "WM8Q: KJ7ROX: BODY" instead of "WM8Q: KJ7ROX BODY".
+        // After AUTO_REMOVE_MYCALL strips the leading self-tag, the
+        // first token here is "KJ7ROX:" — neither the AUTO_PREPEND_
+        // DIRECTED startsWith(selectedCall) check below nor the
+        // downstream packDirectedMessage parser recognizes that as a
+        // valid TO callsign, so the whole line falls through to free
+        // text and the receiver sees it doubled.
+        //
+        // Detect the case surgically: first whitespace-delimited token
+        // looks like a callsign immediately followed by ':' and then
+        // either whitespace or end-of-line. Verify the candidate is a
+        // real callsign shape (rejects "MSG:", "URGENT:", "RE:", etc.).
+        // Embedded mid-body colons survive untouched because the regex
+        // is anchored at '^'.
+        {
+            static QRegularExpression const trailingColonRe(
+                QStringLiteral(R"(^([A-Z0-9/]+):(?=\s|$))"));
+            auto const m = trailingColonRe.match(line);
+            if (m.hasMatch()) {
+                QString const candidate = m.captured(1);
+                if (Varicode::isValidCallsign(candidate, nullptr)) {
+                    line.remove(candidate.length(), 1);
+                }
+            }
+        }
+
 #if AUTO_RSTRIP_WHITESPACE
         // remove trailing whitespace as long as there are characters left
         // afterwards

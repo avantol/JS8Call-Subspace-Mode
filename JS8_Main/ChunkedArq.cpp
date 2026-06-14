@@ -851,7 +851,11 @@ void Manager::tryNack(QString const &peer, int seq) {
     // practice, so apply the same audio-output ramp-up window so the
     // NACK's leading Costas tones don't appear abrupt on the wire.
     QTimer::singleShot(ACK_TX_DELAY_MS, this, [this, text]() {
-        emit wantToTransmit(text);
+        // [RESPONSE-TX SIGNAL 2026-06-14 build 268] Route via the
+        // dedicated wantsResponseTx signal so the host can save/restore
+        // outgoing-text widget contents around this transmission (see
+        // TODO.md #57).
+        emit wantsResponseTx(text);
     });
 }
 
@@ -869,7 +873,8 @@ void Manager::sendAck(QString const &peer, int seq) {
     // QTimer::singleShot's `this` parented variant cleans up if the
     // Manager is destroyed before the delay expires.
     QTimer::singleShot(ACK_TX_DELAY_MS, this, [this, text]() {
-        emit wantToTransmit(text);
+        // [RESPONSE-TX SIGNAL 2026-06-14 build 268] see sendNack above.
+        emit wantsResponseTx(text);
     });
 }
 

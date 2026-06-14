@@ -1887,8 +1887,18 @@ bool UI_Constructor::decodeEnqueueReady(qint32 k, qint32 k0) {
         constexpr qint32 ft2CycleFrames = FT2_TX_PERIOD_MS * JS8_RX_SAMPLE_RATE / 1000;
         constexpr qint32 ft2FramesNeeded = FT2_NMAX;
 
+        // [TODO.md #58 build 268] m_arqMultiModeOverride is the
+        // sticky runtime flag that ARQ activation sets. Once true,
+        // FT2/Subspace decode runs even when the operator is in a
+        // legacy submode and the persisted multi-decoder action is
+        // unchecked. The override is set-once for the program run —
+        // never cleared — so a single ARQ contact unlocks Subspace
+        // RX for the remainder of the session without touching
+        // Configuration / QSettings. See setupJS8 entry handler and
+        // the auto-enable site in processCommandActivity.cpp.
         if (m_nSubMode == Varicode::JS8CallFT2 ||
-            ui->actionModeMultiDecoder->isChecked()) {
+            ui->actionModeMultiDecoder->isChecked() ||
+            m_arqMultiModeOverride) {
             qint32 currentCycle = (k / ft2CycleFrames) %
                                   (JS8_RX_SAMPLE_SIZE / ft2CycleFrames);
             qint32 delta = qAbs(k - k0);
@@ -1959,7 +1969,14 @@ bool UI_Constructor::decodeEnqueueReadyExperiment(qint32 k, qint32 /*k0*/) {
     int decodes = 0;
 
     // do we have a better way to check this?
-    bool multi = ui->actionModeMultiDecoder->isChecked();
+    // [TODO.md #58 build 269] Fold the sticky ARQ multi-mode latch
+    // into the `multi` flag so BOTH the legacy-mode dispatcher (uses
+    // `multi`) and the FT2 dispatcher below see the same effective
+    // gate. Build 268 added the override at the FT2 site only; the
+    // legacy-mode/alternate-positions block at line ~2071 also uses
+    // this `multi` and was therefore still blind to the override.
+    bool multi = ui->actionModeMultiDecoder->isChecked() ||
+                 m_arqMultiModeOverride;
 
     // do we need to process alternate positions?
     bool skipAlt = true;
@@ -2144,7 +2161,13 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
     int submode = -1;
     int maxDecodes = 1;
 
-    bool multi = ui->actionModeMultiDecoder->isChecked();
+    // [TODO.md #58 build 269] Same OR-with-override as the other
+    // `multi` definitions — without it the decoder dispatch picks
+    // maxDecodes=1 and the FT2 enqueue gets capped out of the queue
+    // when the operator is in a legacy mode with ARQ-driven multi-
+    // mode active.
+    bool multi = ui->actionModeMultiDecoder->isChecked() ||
+                 m_arqMultiModeOverride;
     if (multi) {
         maxDecodes = JS8_ENABLE_JS8I ? 5 : 4;
     }
@@ -3850,6 +3873,34 @@ void UI_Constructor::stopTx() {
         tx_status_label.setText("");
     }
 
+    // [TODO.md #57 build 269] Restore the operator's pre-response
+    // outgoing-text draft. The save in onChunkedWantsResponseTx ran
+    // just before the ACK / NACK wire text replaced the widget; this
+    // is the symmetric un-replace once that response TX has drained.
+    //
+    // Build 268 set the text synchronously here and produced a blank
+    // line above the post-TX strike-through display. JS8's own post-
+    // TX styling (the strike-through pass) runs LATER in the event
+    // loop, so a synchronous setPlainText() here gets overlaid by
+    // that styling. Defer to a singleShot queued back to the GUI
+    // thread so the strike-through completes first, then we replace.
+    // A 750 ms delay is generous enough to cover the post-stopTx
+    // styling cascade without leaving the operator staring at the
+    // wire-form ACK / NACK text for long.
+    if (m_arqResponseRestorePending && ui->extFreeTextMsgEdit) {
+        QString const saved = m_arqResponseSavedText;
+        m_arqResponseSavedText.clear();
+        m_arqResponseRestorePending = false;
+        QPointer<TransmitTextEdit> const widget(ui->extFreeTextMsgEdit);
+        QTimer::singleShot(750, this, [widget, saved]() {
+            if (!widget) return;
+            widget->setPlainText(saved);
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] outgoing-text restore (deferred 750ms):"
+                << "chars=" << saved.size();
+        });
+    }
+
 #if IDLE_BLOCKS_TX
     bool shouldContinue = !m_tx_watchdog && prepareNextMessageFrame();
 #else
@@ -5131,6 +5182,15 @@ void UI_Constructor::on_actionModeReplicatorProtocol_toggled(bool checked) {
     // and combines with mode check.
     if (m_chunkedArq) {
         m_chunkedArq->setArqEnabled(checked);
+    }
+    // [TODO.md #58 build 268] First time the operator enables ARQ in
+    // this program run, latch the multi-mode RX override true. Sticky
+    // — never cleared. Unlocking Subspace decode for legacy-mode
+    // operators is half the point of turning ARQ on: peers may send
+    // chunked-DATA in FT2 / Subspace.
+    if (checked && !m_arqMultiModeOverride) {
+        m_arqMultiModeOverride = true;
+        qWarning() << "[ARQ] multi-mode RX override latched ON via button";
     }
     if (m_modulator) {
         m_modulator->setArqRelax(checked);

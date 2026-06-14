@@ -193,6 +193,14 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     });
     connect(m_chunkedArq, &ChunkedArq::Manager::wantToTransmit,
             this, &UI_Constructor::onChunkedWantToTransmit);
+    // [TODO.md #57 build 268] RX-side ACK / NACK transmissions route
+    // through onChunkedWantsResponseTx so the slot can wrap save /
+    // restore of the operator's outgoing-text widget contents around
+    // the response TX. Plain chunk TX (wantToTransmit) does NOT need
+    // the save/restore — the chunk text *is* what the operator chose
+    // to send.
+    connect(m_chunkedArq, &ChunkedArq::Manager::wantsResponseTx,
+            this, &UI_Constructor::onChunkedWantsResponseTx);
     connect(m_chunkedArq, &ChunkedArq::Manager::chunkAdded,
             this, &UI_Constructor::onChunkedChunkAdded);
     connect(m_chunkedArq, &ChunkedArq::Manager::messageDelivered,
