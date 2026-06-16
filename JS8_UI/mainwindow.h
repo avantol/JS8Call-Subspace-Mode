@@ -1131,6 +1131,15 @@ class UI_Constructor : public QMainWindow {
     void displayTransmit();
     void updateModeButtonText();
     void updateButtonDisplay();
+    // [TODO.md #67 build 272] Tri-state for the ARQ button's live
+    // armed/not-armed visual, mirroring the full TX-time gate logic
+    // at on_startTxButton_clicked (mainwindow.cpp ~3485-3629).
+    enum class ArqGateState {
+        NotArmed_NoPeer,       // no valid peer from selection or text
+        NotArmed_DirectedCmd,  // packs as directed cmd (excl MSG/MSG TO:/relay)
+        Armed                  // would go via ARQ on the next Send
+    };
+    ArqGateState evaluateArqGateForText(QString const &text) const;
     void updateTextDisplay();
     void updateTextWordCheckerDisplay();
     void updateTextStatsDisplay(QString text, int count);

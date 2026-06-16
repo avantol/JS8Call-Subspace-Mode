@@ -2461,6 +2461,25 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
         return;
     }
 
+    // [TODO.md #66 build 275] Don't log MYCALL as a remote station.
+    // Single-point fix at the choke point — at least 7 upstream sites
+    // (processDecodeEvent / processCommandActivity / processRxActivity)
+    // pass `cd.call = attribFrom` straight through, so trapping it
+    // here covers every path: audio loopback / RX-during-TX, TCP API
+    // echo, third-party relay carrying our call, recall/replay.
+    //
+    // General rule (operator preference, 2026-06-15): compare on the
+    // FULL callsign, not base. WM8Q operating from home filters out
+    // "WM8Q" only; "WM8Q/P" (the operator's portable rig, same person
+    // legally) is a separate logical station and SHOULD appear in
+    // Call Activity so the operator can see their own field
+    // operations from a stationary console.
+    QString const myCall = m_config.my_callsign().trimmed();
+    if (!myCall.isEmpty() &&
+        d.call.compare(myCall, Qt::CaseInsensitive) == 0) {
+        return;
+    }
+
     if (m_callActivity.contains(d.call)) {
         // update (keep grid)
         CallDetail old = m_callActivity[d.call];
@@ -7128,6 +7147,88 @@ static void setDisabledIfChanged(QWidget *w, bool disabled) {
         w->setDisabled(disabled);
 }
 
+// [TODO.md #67 build 272] Live ARQ-gate evaluator. Mirrors the full
+// TX-time gate logic at on_startTxButton_clicked (this file, around
+// lines 3485-3629) so the ARQ button's armed visual matches what
+// Send will actually do — not just whether a Call Activity row is
+// picked. Const because it only reads widget / config / chunked-arq
+// state. Called from updateButtonDisplay() and indirectly from the
+// 100 ms text-debounce path. Keep this function and the TX-time
+// block in sync as a pair; if either drifts, the button visual
+// stops predicting actual behavior.
+UI_Constructor::ArqGateState
+UI_Constructor::evaluateArqGateForText(QString const &text) const {
+    QString arqPeer = const_cast<UI_Constructor *>(this)
+                          ->callsignSelected().trimmed();
+    if (arqPeer.isEmpty()) {
+        QString const myCall = m_config.my_callsign().trimmed().toUpper();
+        QString probe = text.toUpper().trimmed();
+        if (!myCall.isEmpty() && probe.startsWith(myCall + ":")) {
+            probe = probe.mid(myCall.length() + 1).trimmed();
+        }
+        static QRegularExpression const leadingCallRe(
+            QStringLiteral(R"(^\s*(@?[A-Z0-9/]+))"));
+        auto const m = leadingCallRe.match(probe);
+        if (m.hasMatch()) {
+            arqPeer = m.captured(1);
+        }
+    }
+    bool const arqHasPeer = !arqPeer.isEmpty() &&
+                            !arqPeer.startsWith('@') &&
+                            Radio::is_callsign(arqPeer);
+    bool const arqHasText = !text.trimmed().isEmpty();
+    if (!arqHasPeer || !arqHasText) {
+        return ArqGateState::NotArmed_NoPeer;
+    }
+
+    QString const myCallUp = m_config.my_callsign().trimmed().toUpper();
+    QString probe = text.trimmed();
+    if (!myCallUp.isEmpty() &&
+        probe.toUpper().startsWith(myCallUp + ":")) {
+        probe = probe.mid(myCallUp.length() + 1).trimmed();
+    }
+    QString dirTo, dirCmd, dirNum;
+    bool dirToCompound = false;
+    int dirN = 0;
+    QString dirFrame = Varicode::packDirectedMessage(
+        probe, myCallUp, &dirTo, &dirToCompound, &dirCmd, &dirNum, &dirN);
+    if (dirFrame.isEmpty()) {
+        QString const triedProbeWithPeer =
+            arqPeer + QStringLiteral(" ") + probe;
+        dirFrame = Varicode::packDirectedMessage(
+            triedProbeWithPeer, myCallUp, &dirTo, &dirToCompound,
+            &dirCmd, &dirNum, &dirN);
+    }
+    QString const cmdTrimmed = dirCmd.trimmed();
+    bool const isFreetextCmd = cmdTrimmed.isEmpty();
+    bool const isMsgCmd =
+        (cmdTrimmed.compare(QStringLiteral("MSG"),
+                            Qt::CaseInsensitive) == 0) ||
+        (cmdTrimmed.compare(QStringLiteral("MSG TO:"),
+                            Qt::CaseInsensitive) == 0);
+    bool const isRelayCmd = (cmdTrimmed == QStringLiteral(">"));
+    bool arqBodyIsDirectedCmd =
+        !dirFrame.isEmpty() && !isFreetextCmd &&
+        !isMsgCmd && !isRelayCmd;
+
+    // TYPING macro — not in directed_cmds so packDirectedMessage can't
+    // catch it, but must not arm ARQ.
+    if (!arqBodyIsDirectedCmd) {
+        QString const upperProbe = probe.toUpper();
+        QString bodyAfterPeer = upperProbe;
+        QString const peerPrefix = arqPeer.toUpper() + QStringLiteral(" ");
+        if (upperProbe.startsWith(peerPrefix)) {
+            bodyAfterPeer = upperProbe.mid(peerPrefix.length()).trimmed();
+        }
+        if (bodyAfterPeer.startsWith(QStringLiteral("TYPING"))) {
+            arqBodyIsDirectedCmd = true;
+        }
+    }
+
+    return arqBodyIsDirectedCmd ? ArqGateState::NotArmed_DirectedCmd
+                                : ArqGateState::Armed;
+}
+
 void UI_Constructor::updateButtonDisplay() {
     // Treat an in-flight chunked-ARQ super-message as "transmitting"
     // for ALL the macro-button gates below. Between chunks
@@ -7174,7 +7275,21 @@ void UI_Constructor::updateButtonDisplay() {
     if (m_arqButton) {
         bool const arqOn = ui->actionModeReplicatorProtocol &&
                            ui->actionModeReplicatorProtocol->isChecked();
-        bool const arqArmed = arqOn && !emptyCallsign;
+        // [TODO.md #67 build 272] Live-arm visual: instead of just
+        // "ARQ on AND a Call Activity row is picked", reproduce the
+        // FULL TX-time gate (peer-from-text + Radio::is_callsign +
+        // packDirectedMessage probe + MSG/MSG TO:/relay exceptions)
+        // via the evaluateArqGateForText helper. Operator gets
+        // truthful feedback as they type — typing
+        // `kk7vda File Transfer...` flips the button blue even with
+        // no Call Activity selection; appending a `?` to convert
+        // `kk7vda SNR` into `kk7vda SNR?` flips it back to gray.
+        // Re-evaluation is driven by updateButtonDisplay() being
+        // called from refreshTextDisplay()'s 100 ms debounced path.
+        QString const txText = ui->extFreeTextMsgEdit
+            ? ui->extFreeTextMsgEdit->toPlainText() : QString();
+        ArqGateState const gate = evaluateArqGateForText(txText);
+        bool const arqArmed = arqOn && (gate == ArqGateState::Armed);
         // Stylesheet matches the speed-mode buttons' shape exactly:
         // only set background-color on :checked, no explicit color.
         // That lets Qt's built-in :disabled pseudo-state gray ONLY
@@ -7366,6 +7481,14 @@ void UI_Constructor::refreshTextDisplay() {
                 updateTextWordCheckerDisplay();
                 updateTextStatsDisplay(transmitText, m_txFrameCountEstimate);
                 updateTxButtonDisplay();
+                // [TODO.md #67 build 272] Re-evaluate the broader UI
+                // button state (specifically the ARQ button's
+                // armed/not-armed visual) now that text has stabilized.
+                // updateButtonDisplay calls evaluateArqGateForText
+                // against the current widget contents and restyles the
+                // ARQ button only if the resulting style differs from
+                // the current one (no per-keystroke flash).
+                updateButtonDisplay();
             });
     t->start();
 #endif

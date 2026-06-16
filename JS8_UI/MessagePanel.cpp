@@ -253,6 +253,15 @@ void MessagePanel::markMessageRead(int id) {
   if (msg.type() == "UNREAD") {
     msg.setType("READ");
     inbox->set(id, msg);
+    // [build 274 2026-06-15] Tell the parent the per-callsign unread
+    // counts changed. UI_Constructor's connected slot calls
+    // refreshInboxCounts(), which rebuilds m_rxInboxCountCache from
+    // disk so the Call Activity row indicator stops showing
+    // "has unread inbox" once the operator has locally read the
+    // last unread message from that station. Before this, the
+    // count-badge cleared only on remote QUERY MSG or a full inbox
+    // resync.
+    emit countsUpdated();
   }
 }
 
