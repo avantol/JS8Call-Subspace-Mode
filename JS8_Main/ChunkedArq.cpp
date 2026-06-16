@@ -746,6 +746,39 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
                     << fromCall << "msgId=" << chunk.msgId
                     << "via=" << m.captured("call").toUpper();
             }
+            // [FILE-XFER 2026-06-16 build 277] Body starts with the
+            // file-transfer magic prefix "F/V1 GZIP/BASE32 " → flag
+            // so the assembly-complete branch emits
+            // fileMessageReceived. The "GZIP/BASE32" tail is the
+            // plain-language regulatory disclosure that the payload
+            // is standard zlib gzip wrapped in standard RFC 4648
+            // base32, not encryption (see FileTransfer.h PREFIX_V1
+            // commentary). Receivers earlier than build 277 had only
+            // "F/V1 " as the trigger and will silently fail to
+            // detect this; that's a clean failure mode (the
+            // super-message just displays as garbled freetext rather
+            // than mis-routing). The header is decoded later from
+            // the assembled body in the UI slot; we only need a
+            // routing flag here.
+            // Build 276 had a subtle trailing-space bug here. The
+            // splitIntoChunks packer can put JUST the prefix into
+            // chunk 1 (the next whitespace-delimited token — the long
+            // base32 header — won't fit in the remaining 60-char
+            // budget). That left chunk.body == "F/V1 " (5 chars). The
+            // probe = chunk.body.trimmed() stripped the trailing space
+            // → "F/V1", and the startsWith("F/V1 ") with required
+            // trailing space failed to match. The super-message then
+            // fell through to plain delivery — confusing display in
+            // the conversation panel + no file-receive dialog.
+            // Cover both shapes: chunk 1 = ONLY the prefix, OR chunk 1
+            // = prefix + start of header content.
+            else if (probe == QStringLiteral("F/V1 GZIP/BASE32") ||
+                     probe.startsWith(QStringLiteral("F/V1 GZIP/BASE32 "))) {
+                rx.fileXferDetected[chunk.msgId] = true;
+                qCWarning(chunkedarq_js8)
+                    << "[ARQ-RX] file-transfer detected on chunk 1 — peer="
+                    << fromCall << "msgId=" << chunk.msgId;
+            }
         }
     }
 
@@ -799,10 +832,27 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
         // slot has room to mutate state safely if needed.
         bool const wasMsg = rx.msgCmdDetected.value(chunk.msgId, false);
         bool const wasRelay = rx.relayCmdDetected.value(chunk.msgId, false);
+        bool const wasFile = rx.fileXferDetected.value(chunk.msgId, false);
         QString const addressee = rx.msgCmdAddressee.value(chunk.msgId);
         rx.msgCmdDetected.remove(chunk.msgId);
         rx.msgCmdAddressee.remove(chunk.msgId);
         rx.relayCmdDetected.remove(chunk.msgId);
+        rx.fileXferDetected.remove(chunk.msgId);
+
+        // [FILE-XFER 2026-06-16 build 276] File-transfer super-messages
+        // skip the standard messageDelivered display path — they have
+        // a base32 blob body that's meaningless to render in the
+        // conversation panel. Route straight to fileMessageReceived;
+        // the UI slot decodes the header, prompts the operator, and
+        // writes the file under the configured save dir.
+        if (wasFile) {
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] file-transfer assembled — peer=" << fromCall
+                << "msgId=" << chunk.msgId
+                << "bodyChars=" << assembled.size();
+            emit fileMessageReceived(fromCall, assembled, chunk.msgId);
+            return;
+        }
 
         emit messageDelivered(fromCall, m_myCall, assembled, chunk.msgId);
 

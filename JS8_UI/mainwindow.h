@@ -341,6 +341,15 @@ class UI_Constructor : public QMainWindow {
     void onChunkedRelayMessageReceived(QString const &fromCall,
                                        QString const &body,
                                        int            msgId);
+    // [FILE-XFER 2026-06-16 build 276] RX slot for ARQ file-transfer
+    // super-messages. body is the assembled "F/V1 <header-b32> <pay-b32>".
+    // Slot pops the accept dialog, verifies SHA-256, writes the file
+    // to the configured save dir.
+    void onChunkedFileMessageReceived(QString const &fromCall,
+                                      QString const &body,
+                                      int            msgId);
+    // TX-side handler for the "Send File…" button.
+    void on_sendFileButton_clicked();
     void onChunkedProgressUpdate(int chunkId, int total, int retries);
     void onChunkedProgressEnd();
 
@@ -622,6 +631,26 @@ class UI_Constructor : public QMainWindow {
     QPushButton *m_modeBtnSlow{nullptr};
     QPushButton *m_modeBtnFT2{nullptr};
     QPushButton *m_arqButton{nullptr};
+    // [FILE-XFER build 280 2026-06-16] Chevron QToolButton glued to the
+    // right edge of ui->startTxButton. InstantPopup mode → click opens
+    // a menu with "Send file…" (and any future send-action entries).
+    // The standalone QPushButton "File" from build 276 is gone — file
+    // send now lives inside this menu. Built programmatically in
+    // UI_Constructor since the Send button itself comes from the .ui.
+    QToolButton *m_sendMenuButton{nullptr};
+    // [FILE-XFER build 282] The "Send file…" action inside
+    // m_sendMenuButton's dropdown. Held as a member so the
+    // updateTextDisplay / updateTxButtonDisplay paths can toggle its
+    // enabled state — the chevron button itself stays enabled full-
+    // time for discoverability; gating lives on the action.
+    QAction *m_sendFileAction{nullptr};
+    // [FILE-XFER build 282] ARQ auto-enable bookkeeping. When the
+    // operator picks "Send file…" and ARQ was off, we flip it on for
+    // the duration of the transfer and restore the prior state on
+    // sendComplete / sendFailed. Match is by msgId — a non-zero
+    // m_fileSendMsgId means we're holding ARQ open for that send.
+    int  m_fileSendMsgId{0};
+    bool m_arqStateBeforeFileSend{false};
     QSettings *m_settings;
     bool m_settings_read;
     QScopedPointer<Ui::UI_Constructor> ui;

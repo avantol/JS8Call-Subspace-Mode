@@ -30,6 +30,10 @@
 
 #include "JS8_Main/ChunkedArq.h"
 #include "JS8_Main/DriftingDateTime.h"
+#include "JS8_Main/FileTransfer.h"
+
+#include <QDir>
+#include <QStandardPaths>
 
 namespace {
 
@@ -184,6 +188,21 @@ void UI_Constructor::onChunkedSendComplete(QString const &peer, int msgId,
     qCWarning(chunkedarq_js8)
         << "[ARQ-TX] sendComplete peer=" << peer << "msgId=" << msgId
         << "total=" << total << "totalRetries=" << totalRetries;
+
+    // [FILE-XFER build 282] If this msgId matches the file-send we
+    // auto-enabled ARQ for, restore ARQ to its prior state.
+    if (m_fileSendMsgId != 0 && msgId == m_fileSendMsgId) {
+        m_fileSendMsgId = 0;
+        if (ui->actionModeReplicatorProtocol &&
+            ui->actionModeReplicatorProtocol->isChecked() !=
+                m_arqStateBeforeFileSend) {
+            ui->actionModeReplicatorProtocol->setChecked(
+                m_arqStateBeforeFileSend);
+            qCWarning(chunkedarq_js8)
+                << "[FT-TX] file send delivered; ARQ restored to"
+                << (m_arqStateBeforeFileSend ? "ON" : "OFF");
+        }
+    }
     sendNetworkMessage("TX.CHUNKED_COMPLETE", "",
                        {
                            {"PEER",          peer},
@@ -224,6 +243,22 @@ void UI_Constructor::onChunkedSendFailed(QString const &peer, int msgId,
         << "[ARQ-TX] sendFailed peer=" << peer << "msgId=" << msgId
         << "delivered=" << delivered << "of" << total
         << "totalRetries=" << totalRetries << "reason=" << reason;
+
+    // [FILE-XFER build 282] Mirror of the sendComplete restore. The
+    // file send didn't make it, but ARQ still needs to go back to
+    // its pre-file state so the operator's UI returns to normal.
+    if (m_fileSendMsgId != 0 && msgId == m_fileSendMsgId) {
+        m_fileSendMsgId = 0;
+        if (ui->actionModeReplicatorProtocol &&
+            ui->actionModeReplicatorProtocol->isChecked() !=
+                m_arqStateBeforeFileSend) {
+            ui->actionModeReplicatorProtocol->setChecked(
+                m_arqStateBeforeFileSend);
+            qCWarning(chunkedarq_js8)
+                << "[FT-TX] file send failed; ARQ restored to"
+                << (m_arqStateBeforeFileSend ? "ON" : "OFF");
+        }
+    }
     sendNetworkMessage("TX.CHUNKED_FAILED", reason,
                        {
                            {"PEER",          peer},
@@ -284,6 +319,19 @@ void UI_Constructor::onChunkedSendRestoreRequested(QString const &body,
         return;
     }
     if (body.isEmpty()) {
+        return;
+    }
+    // [FILE-XFER 2026-06-16] Suppress restore for file-transfer
+    // super-messages. The body is base32 gibberish ("F/V1 GZIP/
+    // BASE32 .ABCD...") with no operator value — pasting it back
+    // into the outgoing box just creates a mess for them to clear
+    // before composing their next message. Halt / timeout / fail /
+    // complete all route through this slot; for files we drop all
+    // four restore paths uniformly.
+    if (body.startsWith(QString::fromLatin1(FileTransfer::PREFIX_V1))) {
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] suppressing outgoing-text restore for file "
+               "transfer (reason=" << reason << ")";
         return;
     }
     qCWarning(chunkedarq_js8)
@@ -555,4 +603,117 @@ void UI_Constructor::onChunkedRelayMessageReceived(QString const &fromCall,
     // processCommandActivity then fires the ">" handler at
     // processCommandActivity.cpp:561, which TXs the forward via the
     // standard TX queue.
+}
+
+void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
+                                                  QString const &body,
+                                                  int            msgId) {
+    // [FILE-XFER 2026-06-16 build 276] RX hook for ARQ file-transfer
+    // super-messages. body is the fully-assembled
+    // "F/V1 <header-b32> <payload-b32>" wire form. Decode header,
+    // confirm with operator, verify SHA-256, write to disk.
+    FileTransfer::FileHeader header;
+    QString payloadBase32;
+    if (!FileTransfer::splitWireBody(body, header, payloadBase32)) {
+        qCWarning(chunkedarq_js8)
+            << "[FT-RX] body parse failed — peer=" << fromCall
+            << "msgId=" << msgId << "bodyLen=" << body.size();
+        return;
+    }
+
+    qCWarning(chunkedarq_js8)
+        << "[FT-RX] header parsed — peer=" << fromCall
+        << "msgId=" << msgId
+        << "name=" << header.name
+        << "bytes=" << header.bytes;
+
+    // [build 277 2026-06-16] Modeless accept dialog. The Build 276
+    // version used QMessageBox::question() which is blocking-modal —
+    // operator missed it when not actively watching the screen, and
+    // it tied up the GUI thread. Now we new up a QMessageBox on the
+    // heap, parent it to `this` so it survives but doesn't block,
+    // and connect to its finished() signal for the save/discard
+    // decision. Operator can keep using the rest of JS8Call while
+    // the dialog sits; the dialog stays open until clicked.
+    auto const msg = QStringLiteral(
+        "Incoming file from %1\n\n"
+        "    Name:  %2\n"
+        "    Size:  %3 bytes\n\n"
+        "Save to disk?").arg(fromCall, header.name).arg(header.bytes);
+    auto *box = new QMessageBox(this);
+    box->setWindowTitle(QStringLiteral("Incoming file"));
+    box->setText(msg);
+    box->setIcon(QMessageBox::Question);
+    box->setStandardButtons(QMessageBox::Save | QMessageBox::Discard);
+    box->setDefaultButton(QMessageBox::Save);
+    box->setWindowModality(Qt::NonModal);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+
+    // Capture by value — payloadBase32 / fromCall / header / msgId
+    // need to survive the dialog's lifetime even if the original
+    // signal-emit frame is long gone. Save dir resolved at click
+    // time so a Settings change between receive and accept is
+    // honored (Phase 2 makes the dir operator-configurable).
+    QString const payloadCopy = payloadBase32;
+    QString const fromCopy    = fromCall;
+    FileTransfer::FileHeader const headerCopy = header;
+    int const msgIdCopy = msgId;
+
+    connect(box, &QMessageBox::finished, this,
+            [this, box, payloadCopy, fromCopy, headerCopy, msgIdCopy]
+            (int result) {
+        Q_UNUSED(box);  // WA_DeleteOnClose handles cleanup.
+        QMessageBox::StandardButton const choice =
+            static_cast<QMessageBox::StandardButton>(result);
+        if (choice != QMessageBox::Save) {
+            qCWarning(chunkedarq_js8)
+                << "[FT-RX] operator declined save — peer=" << fromCopy
+                << "msgId=" << msgIdCopy
+                << "name=" << headerCopy.name;
+            return;
+        }
+
+        QString const saveDir = QDir::cleanPath(
+            QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
+            + QStringLiteral("/JS8Call-FileTransfer"));
+        QString err;
+        QString const savedPath = FileTransfer::assembleReceivedFile(
+            saveDir, headerCopy, payloadCopy, &err);
+        if (savedPath.isEmpty()) {
+            qCWarning(chunkedarq_js8)
+                << "[FT-RX] assembleReceivedFile failed:" << err
+                << "peer=" << fromCopy << "msgId=" << msgIdCopy;
+            auto *errBox = new QMessageBox(this);
+            errBox->setWindowTitle(QStringLiteral("File transfer failed"));
+            errBox->setText(
+                QStringLiteral("Could not save received file from %1:\n%2")
+                    .arg(fromCopy, err));
+            errBox->setIcon(QMessageBox::Warning);
+            errBox->setStandardButtons(QMessageBox::Ok);
+            errBox->setWindowModality(Qt::NonModal);
+            errBox->setAttribute(Qt::WA_DeleteOnClose);
+            errBox->show();
+            return;
+        }
+
+        qCWarning(chunkedarq_js8)
+            << "[FT-RX] saved file — peer=" << fromCopy
+            << "msgId=" << msgIdCopy << "path=" << savedPath;
+        // Surface the save in the conversation panel so it survives
+        // panel scrollback (the modeless dialog will be dismissed by
+        // the operator at some point).
+        auto const summary =
+            QStringLiteral("%1: [file received: %2 → %3]")
+                .arg(fromCopy, headerCopy.name, savedPath);
+        auto const now = DriftingDateTime::currentDateTimeUtc();
+        displayTextForFreq(summary, freq(), now,
+                           /*isTx=*/false,
+                           /*isNewLine=*/true,
+                           /*isLast=*/true,
+                           m_nSubMode);
+    });
+
+    box->show();
+    box->raise();
+    box->activateWindow();
 }

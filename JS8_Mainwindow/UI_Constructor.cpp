@@ -7,6 +7,9 @@
 #include "JS8_UI/mainwindow.h"
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 
+#include <QMenu>
+#include <QToolButton>
+
 #ifdef JS8_ENABLE_FT2
 #include "JS8_Mode/ft2_bridge.h"
 #include "JS8_Mode/DecodeFT2.h"
@@ -220,6 +223,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             this, &UI_Constructor::onChunkedInboxMessageReceived);
     connect(m_chunkedArq, &ChunkedArq::Manager::relayMessageReceived,
             this, &UI_Constructor::onChunkedRelayMessageReceived);
+    // [FILE-XFER 2026-06-16 build 276] Receiver-side hook for ARQ
+    // file-transfer super-messages. Slot pops the accept dialog,
+    // decodes the base32 payload, verifies SHA-256, writes the file.
+    connect(m_chunkedArq, &ChunkedArq::Manager::fileMessageReceived,
+            this, &UI_Constructor::onChunkedFileMessageReceived);
     connect(m_chunkedArq, &ChunkedArq::Manager::progressUpdate,
             this, &UI_Constructor::onChunkedProgressUpdate);
     connect(m_chunkedArq, &ChunkedArq::Manager::progressEnd,
@@ -1684,6 +1692,62 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                         m_arqButton, &QPushButton::setChecked);
             }
 
+            // [FILE-XFER build 280 2026-06-16] Send-action chevron —
+            // small QToolButton glued to the right edge of the Send
+            // button, opens a menu with "Send file…" (and future
+            // send-actions). The standalone "File" button from build
+            // 276 is gone — operator now reaches file send via
+            // Send-button-chevron → "Send file…". Visually the
+            // chevron sits flush against startTxButton with no gap
+            // (rightLayout->setSpacing(2) is overridden locally by
+            // adding the chevron in the same logical group).
+            m_sendMenuButton = new QToolButton(parentWidget);
+            m_sendMenuButton->setArrowType(Qt::DownArrow);
+            m_sendMenuButton->setPopupMode(QToolButton::InstantPopup);
+            m_sendMenuButton->setFixedWidth(18);
+            m_sendMenuButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            m_sendMenuButton->setMinimumHeight(30);
+            m_sendMenuButton->setCursor(QCursor(Qt::PointingHandCursor));
+            // [FILE-XFER build 282] Suppress QToolButton's default
+            // menu-indicator glyph (a small triangle Qt overlays on
+            // any tool button that has a QMenu attached). The
+            // arrowType=DownArrow already paints a large arrow as the
+            // button content; the small overlay was duplicative.
+            m_sendMenuButton->setStyleSheet(
+                QStringLiteral("QToolButton::menu-indicator { image: none; }"));
+            m_sendMenuButton->setToolTip(
+                "Send a file (Select call sign first)");
+            {
+                auto *menu = new QMenu(m_sendMenuButton);
+                m_sendFileAction = menu->addAction(QStringLiteral("Send file…"));
+                // [FILE-XFER build 284] Wire the action's triggered
+                // signal to the file-send handler. (Builds 280-283
+                // shipped without this connect — the menu opened but
+                // clicking "Send file…" was a no-op. Qt's named-slot
+                // auto-connect only fires for widgets registered via
+                // QMetaObject::connectSlotsByName, not for QActions
+                // we add to a programmatically-built QMenu.)
+                connect(m_sendFileAction, &QAction::triggered,
+                        this, &UI_Constructor::on_sendFileButton_clicked);
+                // Action tooltip surfaces the size envelope + auto-
+                // ARQ behavior on hover so the operator knows what
+                // they're committing to before the file picker opens.
+                m_sendFileAction->setToolTip(
+                    "Send file via ARQ. Pick a local file (raw cap "
+                    "30 KB; protocol effective cap depends on "
+                    "compressibility, typically ~3 KB text or "
+                    "~1 KB binary). Sent reliably with per-chunk "
+                    "ACK/NACK and SHA-256 verify. ARQ is auto-"
+                    "enabled for the duration of the transfer and "
+                    "restored to its previous state when the send "
+                    "completes (or fails).");
+                // QMenu doesn't show action tooltips by default;
+                // enable the standard tooltips role so the hover
+                // delay surfaces the text.
+                menu->setToolTipsVisible(true);
+                m_sendMenuButton->setMenu(menu);
+            }
+
             // Build a single container for mode buttons + Send + Halt
             auto *rightContainer = new QWidget(parentWidget);
             auto *rightLayout = new QHBoxLayout(rightContainer);
@@ -1709,7 +1773,21 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             auto fmSend = ui->startTxButton->fontMetrics();
             ui->startTxButton->setMinimumWidth(fmSend.horizontalAdvance("Sending (1m 30s)") + 12);
             ui->stopTxButton->setMinimumWidth(40);
-            rightLayout->addWidget(ui->startTxButton, 2);
+            // [FILE-XFER build 281] Wrap Send + chevron in a zero-
+            // spacing sub-container so they LOOK like a single split-
+            // button. rightLayout's 2 px spacing applies between the
+            // sub-container and stopTxButton, but inside the sub-
+            // container the two widgets touch with no gap. Stretch
+            // factor for the wrapper carries the same proportional
+            // share startTxButton had before (2), so layout balance
+            // is preserved relative to stopTxButton (also 2).
+            auto *sendCluster = new QWidget(rightContainer);
+            auto *sendClusterLayout = new QHBoxLayout(sendCluster);
+            sendClusterLayout->setContentsMargins(0, 0, 0, 0);
+            sendClusterLayout->setSpacing(0);
+            sendClusterLayout->addWidget(ui->startTxButton, 1);
+            sendClusterLayout->addWidget(m_sendMenuButton, 0);
+            rightLayout->addWidget(sendCluster, 2);
             rightLayout->addWidget(ui->stopTxButton, 2);
             rightContainer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 

@@ -276,6 +276,14 @@ struct RxState {
     // assembly-complete branch emits relayMessageReceived instead of
     // letting the body display as plain freetext.
     QHash<int, bool>                relayCmdDetected;
+    // [FILE-XFER 2026-06-16 build 276] Parallel to msgCmdDetected /
+    // relayCmdDetected. Chunk 1 body starts with "F/V1 " → flag so
+    // the assembly-complete branch emits fileMessageReceived (instead
+    // of letting the body display as plain freetext or land in the
+    // inbox). The header is unused at assembly-complete time (the
+    // chunkedArqHooks slot re-parses from the assembled body), so
+    // only a bool flag is needed here.
+    QHash<int, bool>                fileXferDetected;
     qint64                          lastNackMonoMs{0};
     QTimer                         *quietTimer{nullptr};
     bool                            sessionActive{false};
@@ -606,6 +614,19 @@ class Manager : public QObject {
     void relayMessageReceived(QString const &fromCall,
                               QString const &body,
                               int            msgId);
+
+    /**
+     * @brief Inbound super-message that started with the "F/V1 "
+     *        file-transfer magic prefix has finished assembling.
+     *        chunkedArqHooks splits the body via
+     *        FileTransfer::splitWireBody to recover the header +
+     *        base32 payload, then pops the accept dialog and writes
+     *        the file via FileTransfer::assembleReceivedFile.
+     *        See TODO.md ARQ-file-transfer Phase 1 plan (2026-06-16).
+     */
+    void fileMessageReceived(QString const &fromCall,
+                             QString const &body,
+                             int            msgId);
 
     /**
      * @brief Outbound TX progress update for status-bar display.

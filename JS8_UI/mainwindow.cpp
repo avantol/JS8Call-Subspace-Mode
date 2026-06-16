@@ -7,6 +7,11 @@
 
 #include "mainwindow.h"
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
+#include "JS8_Main/FileTransfer.h"
+
+#include <QFileDialog>
+#include <QStandardPaths>
+#include <QToolButton>
 
 #ifdef JS8_ENABLE_FT2
 #include "JS8_Mode/DecodeFT2.h"
@@ -5900,6 +5905,125 @@ void UI_Constructor::on_typingMacroButton_clicked() {
         toggleTx(true);
 }
 
+// [FILE-XFER 2026-06-16 build 276] Send-File button — Phase 1 entry
+// point for ARQ file transfer. Pick a local file ≤ 30 KB → build the
+// wire body (header b32 + payload b32) → hand to ChunkedArq, which
+// chunks + ACKs + retries via the existing protocol.
+void UI_Constructor::on_sendFileButton_clicked() {
+    // Pre-flight gates. [FILE-XFER build 282] ARQ is no longer a
+    // pre-flight bail — it auto-enables for the transfer (and
+    // restores to its prior state on sendComplete / sendFailed). We
+    // still need m_chunkedArq + the action object to exist for the
+    // toggle path below.
+    if (!m_chunkedArq) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("ARQ unavailable"),
+            QStringLiteral("Chunked-ARQ manager is not initialized; "
+                           "cannot send file."));
+        return;
+    }
+    QString peer = callsignSelected().trimmed();
+    if (peer.isEmpty()) {
+        QString const myCall = m_config.my_callsign().trimmed().toUpper();
+        QString probe = ui->extFreeTextMsgEdit->toPlainText()
+                            .toUpper().trimmed();
+        if (!myCall.isEmpty() && probe.startsWith(myCall + ":")) {
+            probe = probe.mid(myCall.length() + 1).trimmed();
+        }
+        static QRegularExpression const leadingCallRe(
+            QStringLiteral(R"(^\s*(@?[A-Z0-9/]+))"));
+        auto const m = leadingCallRe.match(probe);
+        if (m.hasMatch()) peer = m.captured(1);
+    }
+    if (peer.isEmpty() || peer.startsWith('@') ||
+        !Radio::is_callsign(peer)) {
+        JS8MessageBox::information_message(
+            this,
+            QStringLiteral("Select a peer"),
+            QStringLiteral("File transfer needs a single peer "
+                           "callsign — pick one from Call Activity "
+                           "or type it as the first word in the "
+                           "outgoing box. Group targets (@ALLCALL, "
+                           "@PUBLIC, custom groups) are not "
+                           "supported because the protocol needs a "
+                           "single station to ACK."));
+        return;
+    }
+
+    QString const filePath = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("Pick a file to send via ARQ"),
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        QStringLiteral("Any file (*)"));
+    if (filePath.isEmpty()) return;  // user cancelled
+
+    QFileInfo const fi(filePath);
+    if (!fi.exists() || !fi.isReadable()) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("File error"),
+            QStringLiteral("Cannot read file:\n%1").arg(filePath));
+        return;
+    }
+    if (fi.size() > FileTransfer::MAX_FILE_BYTES) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("File too large"),
+            QStringLiteral(
+                "File is %1 bytes; Phase 1 cap is %2 bytes (%3 KB). "
+                "Compress externally or wait for Phase 2.")
+                .arg(fi.size())
+                .arg(FileTransfer::MAX_FILE_BYTES)
+                .arg(FileTransfer::MAX_FILE_BYTES / 1024));
+        return;
+    }
+
+    FileTransfer::FileHeader header;
+    QString const body = FileTransfer::buildSendBody(filePath, header);
+    if (body.isEmpty()) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("File transfer failed"),
+            QStringLiteral("Could not build send body for %1 "
+                           "(see log for detail).").arg(filePath));
+        return;
+    }
+
+    // [FILE-XFER build 282] Capture ARQ state and auto-enable it for
+    // this transfer. We restore the prior state when the matching
+    // sendComplete / sendFailed fires (gated on msgId so concurrent
+    // ARQ traffic for other peers doesn't trip the restore).
+    bool const arqWasOn = ui->actionModeReplicatorProtocol &&
+                          ui->actionModeReplicatorProtocol->isChecked();
+    bool arqAutoEnabled = false;
+    if (!arqWasOn && ui->actionModeReplicatorProtocol) {
+        ui->actionModeReplicatorProtocol->setChecked(true);
+        arqAutoEnabled = true;
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] ARQ auto-enabled for file transfer; will "
+               "restore to OFF on sendComplete/sendFailed";
+    }
+
+    qCWarning(chunkedarq_js8)
+        << "[FT-TX] dispatching to ChunkedArq — peer=" << peer
+        << "name=" << header.name
+        << "bytes=" << header.bytes
+        << "wireBodyChars=" << body.size();
+
+    auto const res = m_chunkedArq->sendChunked(peer, body);
+    if (res.ok) {
+        if (arqAutoEnabled) {
+            m_fileSendMsgId           = res.msgId;
+            m_arqStateBeforeFileSend  = arqWasOn;
+        }
+    } else if (arqAutoEnabled) {
+        // sendChunked rejected at pre-flight (too_long, busy, etc.).
+        // No async sendComplete / sendFailed will fire on our auto-
+        // enable, so restore ARQ immediately.
+        ui->actionModeReplicatorProtocol->setChecked(arqWasOn);
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] sendChunked rejected (" << res.error
+            << "); ARQ restored to prior state immediately";
+    }
+}
+
 void UI_Constructor::setShowColumn(QString tableKey, QString columnKey,
                                    bool value) {
     m_showColumnsCache[tableKey + columnKey] = QVariant(value);
@@ -7408,6 +7532,29 @@ void UI_Constructor::updateTextDisplay() {
 
     // Disable Send when nothing to send (only update if state changed to avoid flash)
     setDisabledIfChanged(ui->startTxButton, !canTransmit || isTransmitting || emptyText);
+    // [FILE-XFER build 283] Chevron button stays enabled full-time
+    // for discoverability — the operator can always open the menu
+    // and see what send-options exist. Gating moves to the menu
+    // *action*. We intentionally drop the emptyText / frame-count
+    // gates that apply to Send: file send doesn't read from the
+    // outgoing widget, so an empty box is a legitimate starting
+    // state. The remaining gates (canTransmit, !isTransmitting)
+    // cover "callsign selected" + "not currently TXing".
+    if (m_sendFileAction) {
+        m_sendFileAction->setEnabled(canTransmit && !isTransmitting);
+    }
+    // Chevron tooltip reflects current selection state so the
+    // operator sees, without opening the menu, why file send is or
+    // isn't ready. Cheap string compare avoids needless repaint.
+    if (m_sendMenuButton) {
+        bool const haveCall = !callsignSelected().trimmed().isEmpty();
+        QString const tip = haveCall
+            ? QStringLiteral("Option: Send file")
+            : QStringLiteral("Option: Send file (select call sign first)");
+        if (m_sendMenuButton->toolTip() != tip) {
+            m_sendMenuButton->setToolTip(tip);
+        }
+    }
 
     if (m_txTextDirty) {
         // debounce frame and word count
@@ -7546,16 +7693,27 @@ void UI_Constructor::updateTxButtonDisplay() {
         ui->startTxButton->setText(buttonText);
         ui->startTxButton->setEnabled(false);
         ui->startTxButton->setFlat(true);
+        // [FILE-XFER build 282] Chevron stays enabled full-time; the
+        // menu action mirrors Send's disabled state (no TX while
+        // queued / transmitting).
+        if (m_sendFileAction) m_sendFileAction->setEnabled(false);
     } else {
         QString const buttonText =
             m_txFrameCountEstimate > 0
                 ? State::timed(State::Send, m_txFrameCountEstimate * m_TRperiod)
                 : State::Send.toString();
         ui->startTxButton->setText(buttonText);
-        ui->startTxButton->setEnabled(canTransmit &&
-                                      m_txFrameCountEstimate > 0 &&
-                                      !ui->extFreeTextMsgEdit->toPlainText().isEmpty());
+        bool const sendEnabled = canTransmit &&
+                                 m_txFrameCountEstimate > 0 &&
+                                 !ui->extFreeTextMsgEdit->toPlainText().isEmpty();
+        ui->startTxButton->setEnabled(sendEnabled);
         ui->startTxButton->setFlat(false);
+        // [FILE-XFER build 283] File send doesn't read the outgoing
+        // widget, so the action's enable gate is just canTransmit —
+        // an empty outgoing box is a valid starting state for "pick
+        // a file to send". Chevron button itself stays enabled
+        // full-time for discoverability.
+        if (m_sendFileAction) m_sendFileAction->setEnabled(canTransmit);
     }
 }
 
