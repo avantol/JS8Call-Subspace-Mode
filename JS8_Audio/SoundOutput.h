@@ -72,6 +72,11 @@ class SoundOutput : public QObject {
     QIODevice *     m_source     = nullptr;
     ma_device       m_device_ma  {};
     bool            m_deviceInitialized = false;
+    // [AUDIO-PRIORITY 2026-06-16 build 286] miniaudio puts thread
+    // priority on the context, not the device — so we own a context.
+    // Init'd once per buildAndStart and torn down with the device.
+    ma_context      m_context_ma {};
+    bool            m_contextInitialized = false;
 };
 
 #endif

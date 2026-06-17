@@ -3,6 +3,7 @@
 #define MAINWINDOW_H
 
 #include <atomic>
+#include <cstdint>
 
 #include "JS8_Audio/AudioDevice.h"
 #include "JS8_Audio/NotificationAudio.h"
@@ -350,6 +351,10 @@ class UI_Constructor : public QMainWindow {
                                       int            msgId);
     // TX-side handler for the "Send File…" button.
     void on_sendFileButton_clicked();
+    // [BUILD 298] TX-side handler for the "Send using ARQ" menu action.
+    // Enables ARQ for this one send, fires the normal Send path, and
+    // arranges for ARQ to auto-disable on sendComplete / sendFailed.
+    void on_sendUsingArqAction_triggered();
     void onChunkedProgressUpdate(int chunkId, int total, int retries);
     void onChunkedProgressEnd();
 
@@ -630,7 +635,15 @@ class UI_Constructor : public QMainWindow {
     QPushButton *m_modeBtnTurbo{nullptr};
     QPushButton *m_modeBtnSlow{nullptr};
     QPushButton *m_modeBtnFT2{nullptr};
-    QPushButton *m_arqButton{nullptr};
+    // [BUILD 298] m_arqButton DELETED. The persistent ARQ-on toggle
+    // button is gone; ARQ is now opt-in per-message via the Send
+    // options menu's "Send using ARQ" action. The internal
+    // ui->actionModeReplicatorProtocol QAction still exists and is
+    // still the canonical enable flag — the visible button just no
+    // longer mirrors it. The "Send using ARQ" handler at
+    // on_sendUsingArqAction_triggered toggles the QAction true for
+    // the duration of one send, then sendComplete / sendFailed
+    // disables it.
     // [FILE-XFER build 280 2026-06-16] Chevron QToolButton glued to the
     // right edge of ui->startTxButton. InstantPopup mode → click opens
     // a menu with "Send file…" (and any future send-action entries).
@@ -644,6 +657,17 @@ class UI_Constructor : public QMainWindow {
     // enabled state — the chevron button itself stays enabled full-
     // time for discoverability; gating lives on the action.
     QAction *m_sendFileAction{nullptr};
+    // [BUILD 298] "Send using ARQ" menu action — first item in the
+    // Send options menu, replaces the standalone ARQ-toggle button.
+    // Enable state is updated live from updateButtonDisplay using
+    // evaluateArqGateForText.
+    QAction *m_sendArqAction{nullptr};
+    // [BUILD 298] When set non-zero, an in-flight chunked-ARQ send
+    // was initiated by "Send using ARQ" (text), as opposed to
+    // "Send file…" (file transfer). sendComplete / sendFailed on a
+    // matching msgId disables ARQ. Independent of m_fileSendMsgId
+    // which serves the same role for file sends.
+    int  m_arqTextSendMsgId{0};
     // [FILE-XFER build 282] ARQ auto-enable bookkeeping. When the
     // operator picks "Send file…" and ARQ was off, we flip it on for
     // the duration of the transfer and restore the prior state on
@@ -825,6 +849,12 @@ class UI_Constructor : public QMainWindow {
         bool shouldDisplay;
         float tdrift;
         int submode;
+        // [BUILD 294] Absolute global sample-buffer position where
+        // this frame's Costas was found (Subspace async decoder).
+        // Sort key for processBufferedActivity assembly. 0 = not
+        // populated (e.g., standard period-aligned decoder doesn't
+        // set it). See Event::Decoded::absPos for derivation.
+        std::int64_t absPos{0};
     };
 
     struct MessageBuffer {

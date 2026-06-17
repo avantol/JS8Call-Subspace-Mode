@@ -5,6 +5,7 @@
 #include "SoundOutput.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QIODevice>
 #include <QLoggingCategory>
 #include <cmath>
@@ -77,6 +78,37 @@ SoundOutput::s_dataCallback(ma_device * device,
 void
 SoundOutput::onPlayback(void * pOutput, ma_uint32 frameCount)
 {
+    // [AUDIO-CB-PROBE 2026-06-16 build 288] Measure inter-callback
+    // interval to detect audio-thread preemption. miniaudio doesn't
+    // expose whether the OS actually granted the realtime priority we
+    // asked for in the context config — but we can measure directly.
+    // Expected: callback fires every ~periodSizeInMs (~10-50 ms).
+    // Anomaly: >2× expected period = audio thread was preempted,
+    // sound card likely underran, OS audio layer replayed last DMA
+    // chunk to cover the gap (the "sputter" signature).
+    // Log only when an interval is anomalous so we don't drown the
+    // log in routine callbacks. Static state is single-threaded by
+    // miniaudio convention (one playback thread per device).
+    static qint64 lastCallbackMs = 0;
+    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (lastCallbackMs > 0) {
+        qint64 const dt = nowMs - lastCallbackMs;
+        // [BUILD 291] Threshold 150 ms — actual callback period on
+        // this device is 70-82 ms (one buffer period), so any value
+        // up to ~100 ms is healthy normal. 150 ms catches genuine
+        // preemption (callback missed at least one buffer cycle)
+        // without spamming the log on every normal callback.
+        // The build 288/290 thresholds (100 / 30 ms) were set based
+        // on assumed callback periods that didn't match reality.
+        if (dt >= 150) {
+            qWarning() << "[AUDIO-CB-PROBE] late callback dt=" << dt
+                       << "ms frames=" << frameCount
+                       << "(>=100ms ⇒ likely preempted; check whether"
+                       << "device buffer underran)";
+        }
+    }
+    lastCallbackMs = nowMs;
+
     qint64 const totalBytes = m_format.bytesForFrames(frameCount);
     char *       out        = static_cast<char *>(pOutput);
 
@@ -108,6 +140,14 @@ SoundOutput::teardown()
         ma_device_uninit(&m_device_ma);
         m_deviceInitialized = false;
     }
+    // [AUDIO-PRIORITY 2026-06-16 build 286] Context uninit MUST come
+    // after device uninit — the device's callback thread is owned by
+    // the context, and uninit'ing the context first would yank the
+    // thread out from under a still-running callback.
+    if (m_contextInitialized) {
+        ma_context_uninit(&m_context_ma);
+        m_contextInitialized = false;
+    }
 }
 
 bool
@@ -125,6 +165,15 @@ SoundOutput::buildAndStart(QIODevice * source)
     bool const haveDevice = !m_device.isNull()
                           && resolvePlaybackDevice(m_device, deviceId);
 
+    // [AUDIO-PRIORITY REVERT 2026-06-16 build 290] Build 286 added an
+    // explicit ma_context with ma_thread_priority_realtime. The probe
+    // data from build 289 showed zero preemption events, suggesting
+    // the realtime request wasn't actually helping (silently falling
+    // back to default on Linux without CAP_SYS_NICE) — and yet the
+    // gap behavior differs vs build 285 which used a null context.
+    // Reverting to null context to match build 285 exactly until we
+    // understand what changed. m_context_ma stays defined as a member
+    // for future re-use but is not initialized in this code path.
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.pDeviceID = haveDevice ? &deviceId : nullptr;
     cfg.playback.format    = ma_format_s16;

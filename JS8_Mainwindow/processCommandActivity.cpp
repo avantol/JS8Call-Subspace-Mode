@@ -216,6 +216,15 @@ void UI_Constructor::processCommandActivity() {
         // are vanishingly unlikely (parseChunkedData validates msg_id,
         // chunk_id, total, and CRC field placement). Vanilla traffic
         // that doesn't match falls through unchanged.
+        // [ARQ-DIAG build 301] log every directed-to-me message arrival
+        // so we can see whether the JS8 free-text assembler is even
+        // delivering the assembled text for chunked-ARQ frames.
+        if (toMe) {
+            qWarning() << "[ARQ-DIAG] toMe directed msg arrived from=" << d.from
+                       << "to=" << d.to << "cmd=" << d.cmd << "isLast=" << isLast
+                       << "submode=" << d.submode << "textLen=" << text.length()
+                       << "text=" << text;
+        }
         if (toMe && m_chunkedArq) {
             ChunkedArq::ParsedChunk parsed;
             if (ChunkedArq::parseChunkedData(text, parsed)) {

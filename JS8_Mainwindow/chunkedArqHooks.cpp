@@ -203,6 +203,20 @@ void UI_Constructor::onChunkedSendComplete(QString const &peer, int msgId,
                 << (m_arqStateBeforeFileSend ? "ON" : "OFF");
         }
     }
+    // [BUILD 303] ARQ is opt-in per super-message. Disable on EVERY
+    // sendComplete regardless of how the message was initiated (menu
+    // action, plain Send, TCP API, etc.). The prior build-298 gate on
+    // m_arqTextSendMsgId only fired for menu-initiated sends, leaving
+    // plain-Send ARQ sessions latched. m_arqTextSendMsgId is still
+    // cleared if set so the sentinel doesn't dangle.
+    m_arqTextSendMsgId = 0;
+    if (ui->actionModeReplicatorProtocol &&
+        ui->actionModeReplicatorProtocol->isChecked()) {
+        ui->actionModeReplicatorProtocol->setChecked(false);
+        qCWarning(chunkedarq_js8)
+            << "[ARQ] super-message delivered (msgId="
+            << msgId << "); ARQ auto-disabled";
+    }
     sendNetworkMessage("TX.CHUNKED_COMPLETE", "",
                        {
                            {"PEER",          peer},
@@ -258,6 +272,16 @@ void UI_Constructor::onChunkedSendFailed(QString const &peer, int msgId,
                 << "[FT-TX] file send failed; ARQ restored to"
                 << (m_arqStateBeforeFileSend ? "ON" : "OFF");
         }
+    }
+    // [BUILD 303] Mirror of sendComplete. Disable ARQ on EVERY failure
+    // regardless of initiation path. ARQ is opt-in per-message.
+    m_arqTextSendMsgId = 0;
+    if (ui->actionModeReplicatorProtocol &&
+        ui->actionModeReplicatorProtocol->isChecked()) {
+        ui->actionModeReplicatorProtocol->setChecked(false);
+        qCWarning(chunkedarq_js8)
+            << "[ARQ] super-message failed (msgId=" << msgId
+            << "reason=" << reason << "); ARQ auto-disabled";
     }
     sendNetworkMessage("TX.CHUNKED_FAILED", reason,
                        {

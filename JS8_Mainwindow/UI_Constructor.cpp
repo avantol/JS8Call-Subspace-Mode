@@ -4,6 +4,17 @@
  *   constructs and connects UI elements to the JS8 "engine"
  */
 
+// [FT2-L2 ASYNC TOGGLE — build 291 RE-ENABLED]
+// The "no gap on receiver waterfall" symptom that motivated the
+// build 285 / 290 disable was determined to be a receiver-side
+// display artifact (other audio processing smearing the waterfall),
+// NOT a wire-level issue. Wired-loopback audio capture confirmed
+// sender output is clean in both ARQ-relaxed and non-relaxed modes
+// — no audible sputter. So the disable was solving a problem that
+// didn't exist on the TX side. Async receive is back on; the
+// diagnostic toggle is preserved.
+// #define JS8_DISABLE_L2_ASYNC 1
+
 #include "JS8_UI/mainwindow.h"
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 
@@ -776,8 +787,29 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(&m_l2DecodeTimer, &QTimer::timeout, this, [this]() {
         l2TryDecode("watchdog");
     });
+    // [FT2-L2 ASYNC TOGGLE 2026-06-16] Define JS8_DISABLE_L2_ASYNC
+    // to force the FT2/Subspace decoder to run ONLY on period
+    // boundaries (the standard ft2_decode_c path), disabling the
+    // 7.5 s rolling-window L2 async decoder. Operator-driven A/B
+    // test: WM8Q's hypothesis is the async path is responsible for
+    // missed-frame regressions in chunked ARQ under wired loopback
+    // — the first and last Costas arrays in successive frames appear
+    // jammed up against each other in the waterfall, suggesting the
+    // async window is straddling frame boundaries and bricking decode.
+    // The standard FT2 decode in decoder.cpp is untouched.
+    //
+    // To toggle: add `#define JS8_DISABLE_L2_ASYNC 1` at the very top
+    // of this file (above the #include lines is fine — it just needs
+    // to be visible at this point), or pass -DJS8_DISABLE_L2_ASYNC=1
+    // via CMake. Touch this file and rebuild to re-evaluate.
+#ifndef JS8_DISABLE_L2_ASYNC
     m_l2Enabled = true;
     m_l2DecodeTimer.start(2000);  // watchdog only — normal path is l2DecodeDone → l2TryDecode
+#else
+    qWarning() << "[FT2-L2] async decode DISABLED at compile time "
+                  "(JS8_DISABLE_L2_ASYNC) — period-aligned FT2 "
+                  "decoder is the only RX path";
+#endif
 #endif
 
     setupJS8();
@@ -1665,32 +1697,18 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // actionModeReplicatorProtocol menu action so the on/off
             // state stays single-sourced (settings persistence,
             // ChunkedArq plumbing, mode_label/+ARQ suffix, and the
-            // canChangeMode gate all already key off the QAction).
-            m_arqButton = new QPushButton("ARQ", parentWidget);
-            m_arqButton->setCheckable(true);
-            m_arqButton->setFixedWidth(38);
-            m_arqButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-            m_arqButton->setMinimumHeight(30);
-            m_arqButton->setToolTip("Auto Repeat Request: Transmit with reliable message delivery, requires a selected call sign");
-            m_arqButton->setCursor(QCursor(Qt::PointingHandCursor));
-            // Initial stylesheet is empty — updateButtonDisplay() (which
-            // runs on every callsign-selection change AND on a periodic
-            // tick) decides the actual look: blue (#6699ff, matching
-            // the top-right mode-summary button) ONLY when ARQ is
-            // enabled AND a callsign is selected (i.e. an ARQ send
-            // would actually fire). Otherwise leave the default Qt
-            // look — the checked state shows as a subtle recessed
-            // gray to signal "ARQ is on but won't fire without a
-            // peer."
-            m_arqButton->setStyleSheet(QString());
-            if (ui->actionModeReplicatorProtocol) {
-                m_arqButton->setChecked(ui->actionModeReplicatorProtocol->isChecked());
-                connect(m_arqButton, &QPushButton::clicked, this, [this]() {
-                    ui->actionModeReplicatorProtocol->toggle();
-                });
-                connect(ui->actionModeReplicatorProtocol, &QAction::toggled,
-                        m_arqButton, &QPushButton::setChecked);
-            }
+            // [BUILD 298] m_arqButton REMOVED. The persistent "ARQ on/off"
+            // toggle is gone; ARQ is now opt-in per-message via the
+            // Send options menu's "Send using ARQ" action. The internal
+            // ui->actionModeReplicatorProtocol QAction still exists (the
+            // ChunkedArq::Manager checks it; toggling it pushes state to
+            // the Modulator) — it's just no longer bound to a visible
+            // button. The "Send using ARQ" action sets it true at
+            // dispatch time and the sendComplete/sendFailed handlers
+            // unset it post-send.
+            // canChangeMode gate at mainwindow.cpp:3415 area no longer
+            // applies to a button (m_arqButton is null) — the gate now
+            // governs the action's enable state instead.
 
             // [FILE-XFER build 280 2026-06-16] Send-action chevron —
             // small QToolButton glued to the right edge of the Send
@@ -1715,10 +1733,30 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // button content; the small overlay was duplicative.
             m_sendMenuButton->setStyleSheet(
                 QStringLiteral("QToolButton::menu-indicator { image: none; }"));
+            // [BUILD 298] Initial tooltip; updateTextDisplay rewrites
+            // it dynamically based on whether a call sign is selected.
             m_sendMenuButton->setToolTip(
-                "Send a file (Select call sign first)");
+                "Send options: send using ARQ, send a file");
             {
                 auto *menu = new QMenu(m_sendMenuButton);
+                // [BUILD 298] "Send using ARQ" — first menu item,
+                // replaces the standalone ARQ toggle button. Enabling
+                // ARQ is now opt-in per-message: this action turns
+                // ARQ on, fires the regular Send path, and
+                // sendComplete/sendFailed disables it again. No
+                // persistent "armed" state.
+                m_sendArqAction = menu->addAction(
+                    QStringLiteral("Send using ARQ"));
+                m_sendArqAction->setToolTip(
+                    "Send the current outgoing message using ARQ "
+                    "(Auto Repeat Request). Reliable delivery with "
+                    "per-chunk ACK/NACK and CRC verification. Requires "
+                    "a selected call sign. ARQ is automatically "
+                    "disabled after the send completes (or fails) — "
+                    "there is no persistent ARQ-on state.");
+                connect(m_sendArqAction, &QAction::triggered,
+                        this, &UI_Constructor::on_sendUsingArqAction_triggered);
+
                 m_sendFileAction = menu->addAction(QStringLiteral("Send file…"));
                 // [FILE-XFER build 284] Wire the action's triggered
                 // signal to the file-send handler. (Builds 280-283
@@ -1753,10 +1791,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             auto *rightLayout = new QHBoxLayout(rightContainer);
             rightLayout->setContentsMargins(0, 0, 0, 0);
             rightLayout->setSpacing(2);
-            rightLayout->addWidget(m_arqButton, 0);
-            // Small visual break between ARQ (a capability toggle)
-            // and the mode-selection group that follows.
-            rightLayout->addSpacing(8);
+            // [BUILD 298] m_arqButton removed from layout. The 8 px
+            // spacing that separated it from the mode-selection group
+            // is also gone — the bar reverts to pre-Build-228 layout.
             rightLayout->addWidget(m_modeBtnSlow, 0);
             rightLayout->addWidget(m_modeBtnNormal, 0);
             rightLayout->addWidget(m_modeBtnFast, 0);
@@ -1788,6 +1825,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             sendClusterLayout->addWidget(ui->startTxButton, 1);
             sendClusterLayout->addWidget(m_sendMenuButton, 0);
             rightLayout->addWidget(sendCluster, 2);
+            // [BUILD 298] Extra spacing between the Send-options
+            // chevron and the Halt button so they read as visually
+            // distinct controls rather than one button group.
+            rightLayout->addSpacing(8);
             rightLayout->addWidget(ui->stopTxButton, 2);
             rightContainer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
@@ -1804,28 +1845,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
             }
 
-            // Pinned narrower than natural text+padding width to free
-            // horizontal space for the new ARQ button on the mode bar.
-            // REPLY / SNR / INFO stay at 90%; STATUS / TYPING relax
-            // to 95% (only 5% trim) because their text is the
-            // longest in the group and a full 10% trim was visibly
-            // tight. Min == max so the grid can't stretch them back.
-            auto pinScaled = [](QPushButton *btn, double scale) {
-                auto fm = btn->fontMetrics();
-                int const w = static_cast<int>(
-                    (fm.horizontalAdvance(btn->text()) + 12) * scale);
-                btn->setMinimumWidth(w);
-                btn->setMaximumWidth(w);
-                btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-            };
-            for (auto *btn : {ui->replyMacroButton, ui->snrMacroButton,
-                              ui->infoMacroButton}) {
-                pinScaled(btn, 0.9);
-            }
-            for (auto *btn : {ui->statusMacroButton,
-                              ui->typingMacroButton}) {
-                pinScaled(btn, 0.95);
-            }
+            // [BUILD 298] Width-squeeze REMOVED. The build 228
+            // pinScaled block trimmed REPLY/SNR/INFO to 90% and
+            // STATUS/TYPING to 95% of their natural width "to free
+            // horizontal space for the new ARQ button on the mode
+            // bar." Now that the ARQ button is gone, the buttons
+            // return to their natural text+padding widths.
 
             // Set initial checked state
             m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);

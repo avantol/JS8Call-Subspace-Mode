@@ -208,6 +208,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     d.snr = decodedtext.snr();
                     d.isBuffered = false;
                     d.submode = decodedtext.submode();
+                    // [BUILD 294] Carry absPos from the Subspace async
+                    // decoder event into the per-frame ActivityDetail
+                    // so processBufferedActivity can sort msgs by
+                    // global TX position rather than arrival order.
+                    // 0 for standard period-aligned decodes (which
+                    // are once-per-period and don't need sort).
+                    d.absPos = ev.absPos;
 
                     // Detect single-frame-in-buffer condition for SNR accuracy
                     if (d.submode == Varicode::JS8CallFT2) {
@@ -224,6 +231,15 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             qWarning() << "[SNR-SUSPECT] single frame in buffer"
                                        << "snr=" << d.snr << "freq=" << offset;
                     }
+                    // [BUILD 293 REVERT]
+                    // Build 292 preserved Subspace tdrift so the
+                    // assembler could sort by xdt — but the sort math
+                    // was wrong (dt is per-decode-pass-relative, not
+                    // absolute), broke reception entirely. Build 293
+                    // restores the build-291 behavior (zero tdrift
+                    // for Subspace). The Build-292 dedup-by-text
+                    // remains in processBufferedActivity and does not
+                    // require tdrift to function.
                     d.tdrift = (d.submode == Varicode::JS8CallFT2)
                                    ? 0.0
                                    : m_wideGraph->shouldAutoSyncSubmode(d.submode)

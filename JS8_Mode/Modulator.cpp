@@ -103,83 +103,36 @@ void Modulator::start(double const frequency, int const submode,
         // If we have hit the nominal start time for the period, adjust for late
         // start if we're not exactly at the nominal start time.
 
-        // ARQ-relax override (authorized 2026-06-05, refined twice):
-        // when ARQ messaging is in flight, start immediately with
-        // only the minimum startDelay pad — NO period-offset gate.
-        // Subspace's continuous-frame decoder is offset-tolerant
-        // BY DESIGN, so cross-cycle starts are safe at the air
-        // interface. Build 224 (arq-modPeriodAlign) briefly removed
-        // this branch on the assumption that period-aligned audio
-        // was required for reliable RX — REVERTED 2026-06-09 per
-        // operator: the design intent is full async for ALL frames
-        // during ARQ, not just the first. Missed frames under this
-        // path are a decoder-side defect to diagnose, not a reason
-        // to abandon the async spec.
-        // Mode-gated: m_arqRelax alone isn't enough — it stays true
-        // for the whole session under the current stub. Require
-        // m_ft2Mode too so the bypass only applies to Subspace TX'es,
-        // matching the prepareSending side gate
-        // (m_nSubMode == JS8CallFT2 && arqInProgress()). Without the
-        // mode gate, switching to Normal/Fast/Turbo/Slow mid-session
-        // would also drop period-aligned padding for those TXs —
-        // synchronous-decode modes would silently mis-time.
-        // [ARQ TX TIMING TEST — conditional compilation 2026-06-09]
-        // Defined  = ARQ-RELAX silent_frames (100ms pad, no period align)
-        // Undefined = period-aligned silent_frames (same as non-ARQ)
-        // Toggle here AND in JS8_UI/mainwindow.cpp must match.
-        // The mainwindow.cpp #define is the master; see the comment
-        // block there.
+        // [TX-CADENCE UNIFIED 2026-06-17 build 297]
+        // RESTORED from build 286's design intent: both modes use
+        // the SAME pre-silence pad. Build 288 had reverted to mode-
+        // dependent padding (ARQ-RELAX: 100ms, TX-DELAY: 200-300ms)
+        // which the user instructed must be the same. The build-288
+        // "non-ARQ gap disappeared" symptom that motivated the
+        // revert was later determined to be a receiver-side display
+        // artifact, not a real wire issue. So the unification was
+        // never actually broken — only mis-blamed.
         //
-#define ARQ_TX_ASYNC 1
-        //
-        // ^^ Comment-out for period-aligned test build; uncomment for
-        //    async build.
-#ifdef ARQ_TX_ASYNC
-        if (m_arqRelax.load() && m_ft2Mode) {
-            m_silentFrames = startDelayMS * FRAME_RATE / MS_PER_SEC;
-            qWarning() << "[TX-CADENCE] Modulator path: ARQ-RELAX"
-                << "periodOffsetMS=" << periodOffsetMS
-                << "startDelayMS=" << startDelayMS
-                << "silentFrames=" << m_silentFrames
-                << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
-        } else
-#endif
-        {
-        bool const inTxDelayBeforePeriodStart =
-            periodMS <= periodOffsetMS + txDelay * MS_PER_SEC;
-        if (inTxDelayBeforePeriodStart) {
-            unsigned const additionalMSNeededForTxDelay =
-                periodMS - periodOffsetMS;
-            m_silentFrames = (startDelayMS + additionalMSNeededForTxDelay) *
-                             FRAME_RATE / MS_PER_SEC;
-            qWarning() << "[TX-CADENCE] Modulator path: TX-DELAY"
-                        << "periodOffsetMS=" << periodOffsetMS
-                        << "additionalMS=" << additionalMSNeededForTxDelay
-                        << "silentFrames=" << m_silentFrames
-                        << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
-        } else if (startDelayMS > periodOffsetMS) {
-            m_silentFrames =
-                (startDelayMS - periodOffsetMS) * FRAME_RATE / MS_PER_SEC;
-            qWarning() << "[TX-CADENCE] Modulator path: EARLY-START"
-                        << "periodOffsetMS=" << periodOffsetMS
-                        << "startDelayMS=" << startDelayMS
-                        << "silentFrames=" << m_silentFrames
-                        << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
-        } else {
-            // Too late in the current period to start cleanly.
-            // Wait for the next period boundary + startDelay instead of
-            // cutting away initial symbols (which breaks GFSK sync).
-            unsigned const msToNextBoundary = periodMS - periodOffsetMS;
-            m_silentFrames = (msToNextBoundary + startDelayMS) *
-                             FRAME_RATE / MS_PER_SEC;
-            qWarning() << "[TX-CADENCE] Modulator path: WAIT-NEXT-PERIOD"
-                        << "periodOffsetMS=" << periodOffsetMS
-                        << "startDelayMS=" << startDelayMS
-                        << "msToNextBoundary=" << msToNextBoundary
-                        << "silentFrames=" << m_silentFrames
-                        << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE);
-        }
-        } // end ARQ-relax outer else
+        // The pad value is fixed at 250 ms, large enough that the
+        // receiver's L2 decoder sees a clean silent region before
+        // the leading Costas tones (which build 295 ARQ-RELAX at
+        // only 100ms pad apparently didn't provide — frame decode
+        // failures correlated with the shorter pad). Period-
+        // alignment is now a CALLER-side scheduling decision in
+        // prepareSending, not a Modulator-internal concern. The
+        // Modulator pads exactly the same amount regardless of
+        // m_arqRelax or m_ft2Mode.
+        constexpr unsigned UNIFIED_PRE_SILENCE_MS = 250;
+        m_silentFrames = UNIFIED_PRE_SILENCE_MS * FRAME_RATE / MS_PER_SEC;
+        qWarning() << "[TX-CADENCE] Modulator path: UNIFIED"
+                   << "periodOffsetMS=" << periodOffsetMS
+                   << "padMS=" << UNIFIED_PRE_SILENCE_MS
+                   << "silentFrames=" << m_silentFrames
+                   << "silentMS=" << (m_silentFrames * 1000 / FRAME_RATE)
+                   << "(arqRelax=" << m_arqRelax.load()
+                   << " ft2Mode=" << m_ft2Mode << ")";
+        Q_UNUSED(startDelayMS);
+        Q_UNUSED(txDelay);
     } else {
         qCDebug(modulator_js8) << "Modulator finds it is tuning.";
     }

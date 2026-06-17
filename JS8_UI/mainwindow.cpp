@@ -408,8 +408,11 @@ void UI_Constructor::writeSettings() {
                          ui->actionHeartbeatAcknowledgements->isChecked());
     m_settings->setValue("SubModeMultiDecode",
                          ui->actionModeMultiDecoder->isChecked());
-    m_settings->setValue("ReplicatorProtocol",
-                         ui->actionModeReplicatorProtocol->isChecked());
+    // [BUILD 304] ARQ state intentionally NOT persisted. With the
+    // opt-in-per-super-message + auto-disable design, persistence
+    // doesn't make sense and the startup-restore path raced ahead
+    // of m_chunkedArq construction (labels showed +ARQ but Manager
+    // was off, so the first Send went out as plain non-ARQ).
     m_settings->setValue("DialFreq",
                          QVariant::fromValue(m_lastMonitoredFrequency));
     m_settings->setValue("OutAttenuation", ui->outAttenuation->value());
@@ -540,8 +543,9 @@ void UI_Constructor::readSettings() {
         m_settings->value("SubModeHBAck", false).toBool());
     ui->actionModeMultiDecoder->setChecked(
         m_settings->value("SubModeMultiDecode", true).toBool());
-    ui->actionModeReplicatorProtocol->setChecked(
-        m_settings->value("ReplicatorProtocol", false).toBool());
+    // [BUILD 304] ARQ always starts OFF. Opt-in per super-message via
+    // the menu action or manual toggle. Not persisted (see save site).
+    ui->actionModeReplicatorProtocol->setChecked(false);
 
     m_lastMonitoredFrequency =
         m_settings
@@ -2819,7 +2823,14 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
     // required (this is intentional — runtime certainty about which
     // path is in the binary).
     //
-#define ARQ_TX_ASYNC 1
+// [BUILD 297] Relaxed TX re-enabled. Build 296 confirmed the failure
+// mode IS related to relaxed TX, but later analysis showed the
+// difference was the pre-silence pad amount (100ms relaxed vs
+// 200-300ms non-relaxed), not the off-boundary timing itself. Build
+// 297 unifies the pad at 250ms in Modulator.cpp for BOTH modes, so
+// relaxed TX now puts the same amount of silence before the Costas
+// as non-relaxed. Expected: relaxed mode now decodes reliably too.
+#define ARQ_TX_ASYNC 1  // re-enabled in build 300 (rxAlign5s); interval bumped to 5000ms
     //
     // ^^ Comment-out the #define line above for the period-aligned
     //    test build. Uncomment for the async build.
@@ -2848,7 +2859,7 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
     // becomes a consistent ~1.13 s every frame, matching the natural
     // period-aligned non-ARQ cadence the operator confirmed decodes
     // reliably.
-    constexpr qint64 MIN_ARQ_PTT_INTERVAL_MS = 3750;  // = FT2 T/R period
+    constexpr qint64 MIN_ARQ_PTT_INTERVAL_MS = 3750;  // build 302 (rxStdCycle): back to standard 3.75s to rule out dead-time effect
     bool const arqIntervalOK = !m_lastTxStartTime.isValid() ||
         m_lastTxStartTime.msecsTo(DriftingDateTime::currentDateTimeUtc())
             >= MIN_ARQ_PTT_INTERVAL_MS;
@@ -2888,6 +2899,21 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         }
         m_iptt = 1;
         m_generateAudioWhenPttConfirmedByTX = true;
+        // [GATE MISMATCH FIX 2026-06-16 build 289]
+        // Synchronize the Modulator's m_arqRelax flag to THIS PTT's
+        // actual gate decision (session-active state), not to the ARQ
+        // button toggle. Pre-build-289 the flag was wired to the
+        // button toggle via setArqRelax(checked), which left non-ARQ
+        // TX (hails, autoreplies, plain directed messages) routing
+        // through the ARQ-RELAX branch in Modulator::start whenever
+        // the ARQ button was on — bypassing period alignment for
+        // ostensibly period-aligned TX. The caller (this site) knows
+        // the actual decision via `arqFullRelax`; pushing it to the
+        // Modulator here means the Modulator picks the correct
+        // alignment path per-TX.
+        if (m_modulator) {
+            m_modulator->setArqRelax(arqFullRelax);
+        }
         setRig();
         setXIT(freq());
         emitPTT(true);
@@ -3390,9 +3416,11 @@ void UI_Constructor::guiUpdate() {
         if (m_modeBtnSlow && m_modeBtnSlow->isEnabled() != canChangeSpeed) m_modeBtnSlow->setEnabled(canChangeSpeed);
         if (m_modeBtnFT2 && m_modeBtnFT2->isEnabled() != canChangeSpeed) m_modeBtnFT2->setEnabled(canChangeSpeed);
 
-        if (m_arqButton && m_arqButton->isEnabled() != canChangeMode) {
-            m_arqButton->setEnabled(canChangeMode);
-        }
+        // [BUILD 298] m_arqButton enable gate REMOVED — button deleted.
+        // The canChangeMode rule still applies to the underlying
+        // QAction (which governs the ChunkedArq::Manager and
+        // Modulator state), so Subspace mode-switch interlock
+        // continues to work for the "Send using ARQ" menu action.
         if (ui->actionModeReplicatorProtocol &&
             ui->actionModeReplicatorProtocol->isEnabled() != canChangeMode) {
             ui->actionModeReplicatorProtocol->setEnabled(canChangeMode);
@@ -5905,6 +5933,69 @@ void UI_Constructor::on_typingMacroButton_clicked() {
         toggleTx(true);
 }
 
+// [BUILD 298] "Send using ARQ" menu action handler. Replaces the
+// standalone ARQ-toggle button. Each invocation: validate peer, enable
+// the internal ARQ-on flag, fire the normal Send path, and arrange for
+// ARQ to disable on sendComplete / sendFailed. There is no persistent
+// "ARQ-on" state — ARQ is opt-in per-message via this action.
+void UI_Constructor::on_sendUsingArqAction_triggered() {
+    if (!m_chunkedArq) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("ARQ unavailable"),
+            QStringLiteral("Chunked-ARQ manager is not initialized; "
+                           "cannot send via ARQ."));
+        return;
+    }
+    if (!ui->actionModeReplicatorProtocol) {
+        return;  // shouldn't happen in practice
+    }
+    // Validate text & peer using the existing gate logic. The menu
+    // item enable state mirrors this; the runtime check here is a
+    // belt-and-suspenders against keyboard-driven activation when
+    // the menu refresh hasn't caught up.
+    QString const txText = ui->extFreeTextMsgEdit
+        ? ui->extFreeTextMsgEdit->toPlainText() : QString();
+    if (txText.trimmed().isEmpty()) {
+        JS8MessageBox::information_message(
+            this, QStringLiteral("Nothing to send"),
+            QStringLiteral("Type a message in the outgoing box first."));
+        return;
+    }
+    ArqGateState const gate = evaluateArqGateForText(txText);
+    if (gate != ArqGateState::Armed) {
+        QString reason = (gate == ArqGateState::NotArmed_NoPeer)
+            ? QStringLiteral("Select a call sign first — ARQ needs a "
+                             "single peer to ACK.")
+            : QStringLiteral("This message looks like a JS8 directed "
+                             "command, which ARQ does not wrap.");
+        JS8MessageBox::information_message(
+            this, QStringLiteral("Cannot send via ARQ"), reason);
+        return;
+    }
+
+    // Enable ARQ for this send. The toggle handler at
+    // on_actionModeReplicatorProtocol_toggled propagates to
+    // ChunkedArq::Manager + Modulator via setArqEnabled / setArqRelax.
+    if (!ui->actionModeReplicatorProtocol->isChecked()) {
+        ui->actionModeReplicatorProtocol->setChecked(true);
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-MENU] Send-using-ARQ: enabled ARQ for this send; "
+               "will disable on sendComplete / sendFailed";
+    }
+    // Mark this as a "menu-initiated ARQ text send" so the next
+    // chunked send's terminal event (sendComplete or sendFailed)
+    // disables ARQ. msgId is captured after the normal Send path
+    // dispatches via ChunkedArq's wrapText hook — see
+    // onChunkedSendComplete / onChunkedSendFailed for the match.
+    // Setting to -1 means "next send from this menu, msgId unknown
+    // yet"; the hook captures it on first emit.
+    m_arqTextSendMsgId = -1;
+
+    // Fire the normal Send path. The chunked-ARQ wrapping happens
+    // automatically inside the TX pipeline because ARQ is now on.
+    toggleTx(true);
+}
+
 // [FILE-XFER 2026-06-16 build 276] Send-File button — Phase 1 entry
 // point for ARQ file transfer. Pick a local file ≤ 30 KB → build the
 // wire body (header b32 + payload b32) → hand to ChunkedArq, which
@@ -7301,8 +7392,20 @@ UI_Constructor::evaluateArqGateForText(QString const &text) const {
                             !arqPeer.startsWith('@') &&
                             Radio::is_callsign(arqPeer);
     bool const arqHasText = !text.trimmed().isEmpty();
-    if (!arqHasPeer || !arqHasText) {
+    if (!arqHasPeer) {
         return ArqGateState::NotArmed_NoPeer;
+    }
+    // [BUILD 287] Empty outgoing box + valid peer = Armed. Earlier
+    // builds (272+) required non-empty text here too, which broke
+    // "select a call sign and the ARQ button immediately reflects
+    // readiness." Empty text is the legitimate starting state for a
+    // file send (operator picks a peer, then clicks the chevron's
+    // Send file… action — the file body never goes through the
+    // outgoing widget) and for any operator who selects a peer
+    // BEFORE composing. The downstream directed-cmd check only
+    // applies when there's actual text to inspect.
+    if (!arqHasText) {
+        return ArqGateState::Armed;
     }
 
     QString const myCallUp = m_config.my_callsign().trimmed().toUpper();
@@ -7389,46 +7492,25 @@ void UI_Constructor::updateButtonDisplay() {
     setDisabledIfChanged(ui->infoMacroButton, isTransmitting || emptyInfo);
     setDisabledIfChanged(ui->statusMacroButton, isTransmitting || emptyStatus);
 
-    // ARQ button background tracks the "would this send actually
-    // use ARQ?" state. ARQ requires both the toggle and a selected
-    // peer to fire — when both hold, paint #6699ff to match the
-    // top-right mode-summary button (visual cue that the next send
-    // is reliable-delivery). When ARQ is on but no callsign is
-    // selected, fall back to the default Qt look so the operator
-    // sees at a glance that ARQ won't engage on the next Send.
-    if (m_arqButton) {
-        bool const arqOn = ui->actionModeReplicatorProtocol &&
-                           ui->actionModeReplicatorProtocol->isChecked();
-        // [TODO.md #67 build 272] Live-arm visual: instead of just
-        // "ARQ on AND a Call Activity row is picked", reproduce the
-        // FULL TX-time gate (peer-from-text + Radio::is_callsign +
-        // packDirectedMessage probe + MSG/MSG TO:/relay exceptions)
-        // via the evaluateArqGateForText helper. Operator gets
-        // truthful feedback as they type — typing
-        // `kk7vda File Transfer...` flips the button blue even with
-        // no Call Activity selection; appending a `?` to convert
-        // `kk7vda SNR` into `kk7vda SNR?` flips it back to gray.
-        // Re-evaluation is driven by updateButtonDisplay() being
-        // called from refreshTextDisplay()'s 100 ms debounced path.
+    // [BUILD 298] "Send using ARQ" menu action — live enable/disable.
+    // Replaces the prior m_arqButton armed-visual (no more blue
+    // styled state; just enabled vs disabled). The action is
+    // enabled exactly when an ARQ send would actually succeed: peer
+    // resolvable, text non-empty, text not a directed cmd that ARQ
+    // can't wrap (MSG / MSG TO: / relay > and freetext are armed;
+    // SNR? / GRID? / standard directed cmds are not). Driven by the
+    // same evaluateArqGateForText helper that prior arming used.
+    if (m_sendArqAction) {
         QString const txText = ui->extFreeTextMsgEdit
             ? ui->extFreeTextMsgEdit->toPlainText() : QString();
         ArqGateState const gate = evaluateArqGateForText(txText);
-        bool const arqArmed = arqOn && (gate == ArqGateState::Armed);
-        // Stylesheet matches the speed-mode buttons' shape exactly:
-        // only set background-color on :checked, no explicit color.
-        // That lets Qt's built-in :disabled pseudo-state gray ONLY
-        // the foreground text (per platform palette) while leaving
-        // the #6699ff bg in place — same as the "T" button when
-        // disabled mid-TX (operator spec 2026-06-08). The earlier
-        // version explicitly set `color: black` which overrode Qt's
-        // disabled-text graying and made the button look identical
-        // enabled vs disabled.
-        QString const wantStyle = arqArmed
-            ? QStringLiteral("QPushButton:checked { background-color: #6699ff; font-weight: bold; }")
-            : QString();
-        if (m_arqButton->styleSheet() != wantStyle) {
-            m_arqButton->setStyleSheet(wantStyle);
-        }
+        // updateButtonDisplay scope doesn't have `canTransmit` —
+        // `isTransmitting` + `emptyCallsign` are the relevant local
+        // gates. Gate::Armed already requires a valid peer, so
+        // emptyCallsign is implicitly covered by the gate result.
+        bool const canSendArq = (gate == ArqGateState::Armed) &&
+                                !isTransmitting;
+        m_sendArqAction->setEnabled(canSendArq);
     }
     {
         // TYPING enabled if: Subspace mode, not transmitting, and either
@@ -7549,8 +7631,8 @@ void UI_Constructor::updateTextDisplay() {
     if (m_sendMenuButton) {
         bool const haveCall = !callsignSelected().trimmed().isEmpty();
         QString const tip = haveCall
-            ? QStringLiteral("Option: Send file")
-            : QStringLiteral("Option: Send file (select call sign first)");
+            ? QStringLiteral("Send options: send using ARQ, send a file")
+            : QStringLiteral("Send options: send using ARQ, send a file (select call sign first)");
         if (m_sendMenuButton->toolTip() != tip) {
             m_sendMenuButton->setToolTip(tip);
         }
@@ -9044,9 +9126,16 @@ void UI_Constructor::l2TryDecode(char const *source) {
     std::memcpy(knownSnap, m_l2KnownBits, sizeof(knownSnap));
     int nknownSnap = m_l2NKnown;
 
+    // [BUILD 294] Capture the snapshot's global base position so the
+    // L2 callback can compute the absolute global sample-position for
+    // each decoded frame. (pos - validSamples) is the global sample
+    // position of buf[0]; adding the per-frame ibest (recovered from
+    // the decoded event's xdt) yields an absPos that's identical
+    // across decode passes for the same physical frame.
+    std::int64_t const snapBasePos = pos - validSamples;
     m_l2Decoding = true;
     m_l2DecodeWatcher.setFuture(QtConcurrent::run(
-        [buf, nfqso, nfa, nfb, utc, knownSnap, nknownSnap, this]() {
+        [buf, nfqso, nfa, nfb, utc, knownSnap, nknownSnap, snapBasePos, this]() {
         auto t0 = QDateTime::currentMSecsSinceEpoch();
 
         // --- Sync monitor: scan for Costas tones before full decode ---
@@ -9104,9 +9193,38 @@ void UI_Constructor::l2TryDecode(char const *source) {
         int nNewDecoded = 0;
         float decodedFreq = 0.0f;
         JS8::DecodeFT2::decodeL2(buf->data(), scanNfqso, nfa, nfb, utc,
-            [this](JS8::Event::Variant const &ev) {
-                QMetaObject::invokeMethod(this, [this, ev]() {
-                    processDecodeEvent(ev);
+            [this, snapBasePos](JS8::Event::Variant const &ev) {
+                // [BUILD 295] Compute absolute global sample position
+                // for Decoded events so processBufferedActivity can
+                // sort frames by TX order across multiple sliding-
+                // window decode passes.
+                //
+                // Build 294 had a unit-mismatch bug: snapBasePos is
+                // in 12 kHz sample units (matches m_l2RingPos), but
+                // ibest computed as (xdt+0.5)*1333.33 is in DECIMATED
+                // sample units (1333.33 ≈ 12000/9 = 9-sample bins).
+                // Adding mismatched units produced absPos values that
+                // varied across decode passes for the same physical
+                // frame: pass 1 vs pass 2 differed by ~747 absPos for
+                // a 70 ms inter-pass interval (snapBasePos delta of
+                // 840 vs ibest delta of only 93). Sort+dedup both
+                // failed silently — same frame wasn't recognized as
+                // a duplicate, and ordering across passes was wrong.
+                //
+                // Fix: compute the frame's sample position WITHIN the
+                // snapshot in 12 kHz units directly: (xdt + 0.5) *
+                // 12000. Then absPos = snapBasePos + that, in
+                // consistent 12 kHz sample units. Invariant across
+                // passes: snapBasePos increases by the same amount
+                // the in-snapshot position decreases.
+                JS8::Event::Variant ev2 = ev;
+                if (auto *d = std::get_if<JS8::Event::Decoded>(&ev2)) {
+                    std::int64_t const samplePosInSnap =
+                        static_cast<std::int64_t>((d->xdt + 0.5f) * 12000.0f);
+                    d->absPos = snapBasePos + samplePosInSnap;
+                }
+                QMetaObject::invokeMethod(this, [this, ev2]() {
+                    processDecodeEvent(ev2);
                 }, Qt::QueuedConnection);
             },
             knownSnap, nknownSnap,

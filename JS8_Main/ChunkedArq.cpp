@@ -85,19 +85,30 @@ QString encodeChunkedData(QString const &myCall,
 bool parseChunkedData(QString const &text, ParsedChunk &out) {
     auto const match = dataFrameRegex().match(text);
     if (!match.hasMatch()) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-DIAG] parseChunkedData REGEX-MISS text=" << text;
         return false;
     }
     bool ok = false;
     int const msgId = match.captured("msg").toInt(&ok);
     if (!ok || msgId < MSG_ID_MIN || msgId > MSG_ID_MAX) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-DIAG] parseChunkedData BAD-MSGID raw=" << match.captured("msg")
+            << "parsed=" << msgId << "ok=" << ok << "text=" << text;
         return false;
     }
     int const chunkId = match.captured("chunk").toInt(&ok);
     if (!ok || chunkId < 1) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-DIAG] parseChunkedData BAD-CHUNKID raw=" << match.captured("chunk")
+            << "parsed=" << chunkId << "ok=" << ok << "text=" << text;
         return false;
     }
     int const total = match.captured("total").toInt(&ok);
     if (!ok || total < 1 || total > MAX_CHUNKS_PER_MESSAGE || chunkId > total) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-DIAG] parseChunkedData BAD-TOTAL raw=" << match.captured("total")
+            << "parsed=" << total << "chunkId=" << chunkId << "text=" << text;
         return false;
     }
     out.from    = match.captured("from");
@@ -107,6 +118,10 @@ bool parseChunkedData(QString const &text, ParsedChunk &out) {
     out.chunkId = chunkId;
     out.total   = total;
     out.crcHex  = match.captured("crc");
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-DIAG] parseChunkedData OK from=" << out.from << "to=" << out.to
+        << "msgId=" << out.msgId << "chunk=" << out.chunkId << "/" << out.total
+        << "crc=" << out.crcHex << "bodyLen=" << out.body.length();
     return true;
 }
 
@@ -637,6 +652,10 @@ void Manager::onAckTimerExpired() {
 }
 
 void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk) {
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-DIAG] onChunkReceived ENTRY from=" << fromCall
+        << "msgId=" << chunk.msgId << "chunk=" << chunk.chunkId << "/" << chunk.total
+        << "advertisedCRC=" << chunk.crcHex << "bodyLen=" << chunk.body.length();
     markSessionActive(fromCall);
 
     auto &rx = getOrCreateRx(fromCall);

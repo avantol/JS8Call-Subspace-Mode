@@ -2098,8 +2098,6 @@ background-color: #22ff22;
     <addaction name="separator"/>
     <addaction name="actionModeMultiDecoder"/>
     <addaction name="separator"/>
-    <addaction name="actionModeReplicatorProtocol"/>
-    <addaction name="separator"/>
     <addaction name="actionModeAutoreply"/>
     <addaction name="actionModeJS8HB"/>
     <addaction name="actionHeartbeatAcknowledgements"/>

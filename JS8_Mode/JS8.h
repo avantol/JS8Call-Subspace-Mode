@@ -5,6 +5,7 @@
 #include <QSemaphore>
 #include <QThread>
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <variant>
@@ -70,6 +71,18 @@ struct Decoded {
     float quality;
     int mode;
     bool l2 = false;
+    // [BUILD 294] Absolute global sample-buffer position where this
+    // frame's Costas was found. Computed at the L2 callback site as
+    // (snapshot_base_pos + ibest). Invariant across decode passes —
+    // same physical frame produces the same absPos regardless of
+    // which sliding-window pass found it. Sort key for ordering
+    // and dedup key for sliding-window double-decodes in
+    // processBufferedActivity. Default 0 means "not computed"
+    // (standard period-aligned decoder leaves it unset; absPos=0
+    // entries sort to the front in their relative arrival order
+    // via stable_sort, which matches the standard-decoder's once-
+    // per-period firing pattern).
+    std::int64_t absPos = 0;
 };
 
 struct DecodeFinished {

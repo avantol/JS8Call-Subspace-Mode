@@ -7,6 +7,8 @@
 #include "JS8_UI/mainwindow.h"
 
 #include <QRegularExpression>
+#include <QSet>
+#include <algorithm>
 
 void UI_Constructor::processBufferedActivity() {
     if (m_messageBuffer.isEmpty())
@@ -53,8 +55,63 @@ void UI_Constructor::processBufferedActivity() {
             continue;
         }
 
+        // [SUBSPACE FRAME-ASSEMBLY FIX — BUILD 294]
+        // Multi-frame Subspace messages decoded via the async path
+        // can arrive in `msgs` out of order (async dispatches via
+        // QueuedConnection, frame N+1 may land before frame N if
+        // decoded in different sliding-window passes) and duplicated
+        // (sliding window catches the same physical frame multiple
+        // times). Build 292 attempted to sort by tdrift but that was
+        // window-relative and produced wrong order across passes.
+        //
+        // Build 294 sorts by absPos — the absolute global sample-
+        // buffer position where each frame's Costas was found,
+        // computed at the L2 callback site as
+        // (snapshot_base_pos + ibest). Invariant across decode
+        // passes: same physical frame produces the same absPos no
+        // matter which pass found it. Sort puts frames in
+        // transmission order. Entries with absPos == 0 (standard
+        // period-aligned decoder doesn't compute it) keep their
+        // relative arrival order via stable_sort and land before
+        // any L2 entries; for normal text traffic that's the
+        // standard decoder's once-per-period firing so still
+        // correct.
+        //
+        // After sort, dedup by absPos > 0 (drops sliding-window
+        // double-decodes of the same frame). Fall back to text-
+        // equality dedup for absPos == 0 entries so the build-293
+        // safety net stays in place for the standard path.
+        std::stable_sort(
+            buffer.msgs.begin(), buffer.msgs.end(),
+            [](ActivityDetail const &a, ActivityDetail const &b) {
+                return a.absPos < b.absPos;
+            });
+        QList<ActivityDetail> deduped;
+        deduped.reserve(buffer.msgs.size());
+        for (auto const &part : buffer.msgs) {
+            bool isDup = false;
+            for (auto const &kept : deduped) {
+                if (part.absPos > 0 && kept.absPos == part.absPos) {
+                    isDup = true;
+                    break;
+                }
+                if (part.absPos == 0 && kept.text == part.text) {
+                    isDup = true;
+                    break;
+                }
+            }
+            if (!isDup) deduped.append(part);
+        }
+        if (deduped.size() != buffer.msgs.size()) {
+            qWarning() << "[BUFFERED-ASM] dedup: dropped"
+                       << (buffer.msgs.size() - deduped.size())
+                       << "duplicate frame(s) at offset" << freq
+                       << "(kept" << deduped.size() << "of"
+                       << buffer.msgs.size() << ")";
+        }
+
         QString message;
-        foreach (auto part, buffer.msgs) {
+        foreach (auto part, deduped) {
             message.append(part.text);
         }
         message = Varicode::rstrip(message);
