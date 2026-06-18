@@ -1731,8 +1731,19 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // any tool button that has a QMenu attached). The
             // arrowType=DownArrow already paints a large arrow as the
             // button content; the small overlay was duplicative.
+            // [BUILD 309 TODO #70(c)] Square the chevron's left corners
+            // and drop its left border so it visually merges with
+            // startTxButton — no visible gap, reads as one split
+            // button. The right corners keep their normal rounding
+            // so the chevron's right edge still matches startTxButton's
+            // right edge in the pre-cluster layout.
             m_sendMenuButton->setStyleSheet(
-                QStringLiteral("QToolButton::menu-indicator { image: none; }"));
+                QStringLiteral(
+                    "QToolButton { border-left: 0; "
+                    "  border-top-left-radius: 0; "
+                    "  border-bottom-left-radius: 0; "
+                    "  padding-left: 0; padding-right: 0; } "
+                    "QToolButton::menu-indicator { image: none; }"));
             // [BUILD 298] Initial tooltip; updateTextDisplay rewrites
             // it dynamically based on whether a call sign is selected.
             m_sendMenuButton->setToolTip(
@@ -1750,10 +1761,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 m_sendArqAction->setToolTip(
                     "Send the current outgoing message using ARQ "
                     "(Auto Repeat Request). Reliable delivery with "
-                    "per-chunk ACK/NACK and CRC verification. Requires "
-                    "a selected call sign. ARQ is automatically "
-                    "disabled after the send completes (or fails) — "
-                    "there is no persistent ARQ-on state.");
+                    "per-sub-message ACK/NACK and CRC verification. Requires "
+                    "a selected call sign.");
                 connect(m_sendArqAction, &QAction::triggered,
                         this, &UI_Constructor::on_sendUsingArqAction_triggered);
 
@@ -1771,14 +1780,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 // ARQ behavior on hover so the operator knows what
                 // they're committing to before the file picker opens.
                 m_sendFileAction->setToolTip(
-                    "Send file via ARQ. Pick a local file (raw cap "
-                    "30 KB; protocol effective cap depends on "
-                    "compressibility, typically ~3 KB text or "
-                    "~1 KB binary). Sent reliably with per-chunk "
-                    "ACK/NACK and SHA-256 verify. ARQ is auto-"
-                    "enabled for the duration of the transfer and "
-                    "restored to its previous state when the send "
-                    "completes (or fails).");
+                    "Send file via ARQ. Pick a local file, max size depends on "
+                    "compressibility (typically ~3 KB text or "
+                    "~1 KB binary). Sent reliably with per-sub-message "
+                    "ACK/NACK and SHA-256 verify. The file is compressed "
+                    "using GZIP and encoded using Base32, but is NOT encrypted."
+                    "Encryption is not permitted on amateur bands,");
                 // QMenu doesn't show action tooltips by default;
                 // enable the standard tooltips role so the hover
                 // delay surfaces the text.

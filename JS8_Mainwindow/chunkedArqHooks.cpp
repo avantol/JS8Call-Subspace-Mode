@@ -699,7 +699,7 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
 
         QString const saveDir = QDir::cleanPath(
             QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
-            + QStringLiteral("/JS8Call-FileTransfer"));
+            + QStringLiteral("/Subspace-FileTransfer"));
         QString err;
         QString const savedPath = FileTransfer::assembleReceivedFile(
             saveDir, headerCopy, payloadCopy, &err);

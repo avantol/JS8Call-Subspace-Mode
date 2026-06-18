@@ -464,7 +464,12 @@ void Manager::sendNextChunk(QString const &peer) {
     // [STATUS-BAR PROGRESS 2026-06-11 build 251] UI hook overrides
     // the "Tx: <message>" status-bar label with the ARQ progress
     // string until progressEnd fires from a terminal path below.
-    emit progressUpdate(cc, tt, state.retries);
+    // [BUILD 309] TODO #69: pass totalRetries (cumulative across the
+    // whole super-message) rather than state.retries (per-chunk,
+    // resets to 0 on every ACK). Operator saw the count flicker
+    // back to 0 after each successful chunk; they expect a running
+    // total of how stuck the entire transfer has been.
+    emit progressUpdate(cc, tt, state.totalRetries);
 
     emit wantToTransmit(text);
     ensureTxIdlePolling();

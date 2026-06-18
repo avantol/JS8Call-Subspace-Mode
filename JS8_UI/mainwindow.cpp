@@ -2830,7 +2830,16 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 // 297 unifies the pad at 250ms in Modulator.cpp for BOTH modes, so
 // relaxed TX now puts the same amount of silence before the Costas
 // as non-relaxed. Expected: relaxed mode now decodes reliably too.
-// #define ARQ_TX_ASYNC 1  // build 308 (periodTx): forced OFF — period-aligned PTT for A/B vs asyncTx
+// [BUILD 309 TODO #72] Platform-gated: enable async (relaxed) ARQ TX
+// on Windows / macOS where the audio stack is clean; force period-
+// aligned on Linux. Empirical evidence from 2026-06-17 testing:
+// Linux PipeWire-mediated TX produces ~8x more mid-chunk frame loss
+// than Windows audio for the same code, causing the chunked-ARQ
+// retry rate to spike. Linux uptake is low and period-aligned ARQ
+// is proven clean on Linux, so just disable the async path there.
+#if !defined(Q_OS_LINUX)
+#define ARQ_TX_ASYNC 1
+#endif
     //
     // ^^ Comment-out the #define line above for the period-aligned
     //    test build. Uncomment for the async build.
@@ -7623,7 +7632,19 @@ void UI_Constructor::updateTextDisplay() {
     // state. The remaining gates (canTransmit, !isTransmitting)
     // cover "callsign selected" + "not currently TXing".
     if (m_sendFileAction) {
-        m_sendFileAction->setEnabled(canTransmit && !isTransmitting);
+        // [BUILD 309 TODO #70(a)] Also disable during an in-flight ARQ
+        // super-message so the operator can't kick off a second
+        // chunked-ARQ session on top of one already running.
+        bool const arqTxBusy = m_chunkedArq && m_chunkedArq->hasActiveTxSession();
+        m_sendFileAction->setEnabled(canTransmit && !isTransmitting && !arqTxBusy);
+    }
+    // [BUILD 309 TODO #70(b)] Chevron mirrors Send's enabled state so
+    // the visual pair reads as one split button — gray together,
+    // active together. Send's own gate (above) already handles all
+    // the ARQ-busy / isTransmitting / empty-text / no-callsign cases,
+    // so we just track it.
+    if (m_sendMenuButton) {
+        m_sendMenuButton->setEnabled(ui->startTxButton->isEnabled());
     }
     // Chevron tooltip reflects current selection state so the
     // operator sees, without opening the menu, why file send is or
