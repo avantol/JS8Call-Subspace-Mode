@@ -1824,38 +1824,20 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             auto fmSend = ui->startTxButton->fontMetrics();
             ui->startTxButton->setMinimumWidth(fmSend.horizontalAdvance("Sending (1m 30s)") + 12);
             ui->stopTxButton->setMinimumWidth(40);
-            // [FILE-XFER build 281] Wrap Send + chevron in a zero-
-            // spacing sub-container so they LOOK like a single split-
-            // button. rightLayout's 2 px spacing applies between the
-            // sub-container and stopTxButton, but inside the sub-
-            // container the two widgets touch with no gap. Stretch
-            // factor for the wrapper carries the same proportional
-            // share startTxButton had before (2), so layout balance
-            // is preserved relative to stopTxButton (also 2).
-            auto *sendCluster = new QWidget(rightContainer);
-            // [BUILD 321] Cap the cluster widget's height so it
-            // doesn't report a larger sizeHint than the rest of the
-            // action-bar row's siblings. On macOS, the cluster's
-            // reported height was larger than the row's effective
-            // height (Aqua-styled push buttons), and rightLayout's
-            // vertical-centering math left Send+chevron positioned
-            // half-button-height BELOW HALT and the mode buttons.
-            // Pinning the cluster to 30 keeps it the same height
-            // it would have been as a bare startTxButton pre-cluster.
-            sendCluster->setFixedHeight(36);  // build 322: 30 → 36 for macOS Aqua chrome
-            sendCluster->setSizePolicy(QSizePolicy::Preferred,
-                                        QSizePolicy::Fixed);
-            auto *sendClusterLayout = new QHBoxLayout(sendCluster);
-            sendClusterLayout->setContentsMargins(0, 0, 0, 0);
-            sendClusterLayout->setSpacing(0);
-            // [BUILD 320] AlignVCenter insurance: even if cluster ends
-            // up taller than the row (Aqua native chrome), keep its
-            // children centered rather than top-aligned.
-            sendClusterLayout->addWidget(ui->startTxButton, 1, Qt::AlignVCenter);
-            sendClusterLayout->addWidget(m_sendMenuButton,   0, Qt::AlignVCenter);
-            // [BUILD 322] Explicit AlignVCenter — default behavior on
-            // macOS didn't center the cluster properly within the row.
-            rightLayout->addWidget(sendCluster, 2, Qt::AlignVCenter);
+            // [BUILD 323] Abandoned the sendCluster sub-widget plan.
+            // Builds 281-322 wrapped startTxButton + chevron in a
+            // sub-container QWidget to enforce 0-px spacing between
+            // them. On macOS that wrapper's reported size confused
+            // the parent layout and pushed the cluster half-button-
+            // height below the rest of the action-bar row. The wins
+            // (visual zero-gap) weren't worth the cross-platform
+            // layout instability. Send and chevron are now siblings
+            // in rightLayout — rightLayout->setSpacing(2) gives them
+            // a 2-px gap (acceptable per operator), and rightLayout's
+            // native vertical-centering handles macOS correctly the
+            // same way it always handled other siblings.
+            rightLayout->addWidget(ui->startTxButton, 2);
+            rightLayout->addWidget(m_sendMenuButton,  0);
             // [BUILD 298] Extra spacing between the Send-options
             // chevron and the Halt button so they read as visually
             // distinct controls rather than one button group.
