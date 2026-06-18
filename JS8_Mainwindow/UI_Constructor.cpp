@@ -1725,7 +1725,13 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             m_sendMenuButton->setPopupMode(QToolButton::InstantPopup);
             m_sendMenuButton->setFixedWidth(18);
             m_sendMenuButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-            m_sendMenuButton->setMinimumHeight(30);
+            // [BUILD 320] setFixedHeight instead of setMinimumHeight
+            // so macOS Aqua-styled QToolButton can't render taller
+            // than 30. On Mac the unbounded height was making the
+            // whole sendCluster oversized vs the rest of the row,
+            // and Cocoa positioned the cluster (Send + chevron) below
+            // the row's intended top edge.
+            m_sendMenuButton->setFixedHeight(30);
             m_sendMenuButton->setCursor(QCursor(Qt::PointingHandCursor));
             // [FILE-XFER build 282] Suppress QToolButton's default
             // menu-indicator glyph (a small triangle Qt overlays on
@@ -1830,8 +1836,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             auto *sendClusterLayout = new QHBoxLayout(sendCluster);
             sendClusterLayout->setContentsMargins(0, 0, 0, 0);
             sendClusterLayout->setSpacing(0);
-            sendClusterLayout->addWidget(ui->startTxButton, 1);
-            sendClusterLayout->addWidget(m_sendMenuButton, 0);
+            // [BUILD 320] AlignVCenter insurance: even if cluster ends
+            // up taller than the row (Aqua native chrome), keep its
+            // children centered rather than top-aligned.
+            sendClusterLayout->addWidget(ui->startTxButton, 1, Qt::AlignVCenter);
+            sendClusterLayout->addWidget(m_sendMenuButton,   0, Qt::AlignVCenter);
             rightLayout->addWidget(sendCluster, 2);
             // [BUILD 298] Extra spacing between the Send-options
             // chevron and the Halt button so they read as visually
