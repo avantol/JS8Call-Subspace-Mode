@@ -2830,7 +2830,7 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 // 297 unifies the pad at 250ms in Modulator.cpp for BOTH modes, so
 // relaxed TX now puts the same amount of silence before the Costas
 // as non-relaxed. Expected: relaxed mode now decodes reliably too.
-#define ARQ_TX_ASYNC 1  // re-enabled in build 300 (rxAlign5s); interval bumped to 5000ms
+// #define ARQ_TX_ASYNC 1  // build 308 (periodTx): forced OFF — period-aligned PTT for A/B vs asyncTx
     //
     // ^^ Comment-out the #define line above for the period-aligned
     //    test build. Uncomment for the async build.
