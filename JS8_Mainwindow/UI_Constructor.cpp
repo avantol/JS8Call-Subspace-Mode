@@ -1833,6 +1833,18 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // share startTxButton had before (2), so layout balance
             // is preserved relative to stopTxButton (also 2).
             auto *sendCluster = new QWidget(rightContainer);
+            // [BUILD 321] Cap the cluster widget's height so it
+            // doesn't report a larger sizeHint than the rest of the
+            // action-bar row's siblings. On macOS, the cluster's
+            // reported height was larger than the row's effective
+            // height (Aqua-styled push buttons), and rightLayout's
+            // vertical-centering math left Send+chevron positioned
+            // half-button-height BELOW HALT and the mode buttons.
+            // Pinning the cluster to 30 keeps it the same height
+            // it would have been as a bare startTxButton pre-cluster.
+            sendCluster->setFixedHeight(30);
+            sendCluster->setSizePolicy(QSizePolicy::Preferred,
+                                        QSizePolicy::Fixed);
             auto *sendClusterLayout = new QHBoxLayout(sendCluster);
             sendClusterLayout->setContentsMargins(0, 0, 0, 0);
             sendClusterLayout->setSpacing(0);
