@@ -1842,7 +1842,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // half-button-height BELOW HALT and the mode buttons.
             // Pinning the cluster to 30 keeps it the same height
             // it would have been as a bare startTxButton pre-cluster.
-            sendCluster->setFixedHeight(30);
+            sendCluster->setFixedHeight(36);  // build 322: 30 → 36 for macOS Aqua chrome
             sendCluster->setSizePolicy(QSizePolicy::Preferred,
                                         QSizePolicy::Fixed);
             auto *sendClusterLayout = new QHBoxLayout(sendCluster);
@@ -1853,13 +1853,19 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // children centered rather than top-aligned.
             sendClusterLayout->addWidget(ui->startTxButton, 1, Qt::AlignVCenter);
             sendClusterLayout->addWidget(m_sendMenuButton,   0, Qt::AlignVCenter);
-            rightLayout->addWidget(sendCluster, 2);
+            // [BUILD 322] Explicit AlignVCenter — default behavior on
+            // macOS didn't center the cluster properly within the row.
+            rightLayout->addWidget(sendCluster, 2, Qt::AlignVCenter);
             // [BUILD 298] Extra spacing between the Send-options
             // chevron and the Halt button so they read as visually
             // distinct controls rather than one button group.
             rightLayout->addSpacing(8);
             rightLayout->addWidget(ui->stopTxButton, 2);
-            rightContainer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+            // [BUILD 322] Minimum (not Fixed) vertical policy so the
+            // container can grow to fit macOS Aqua native button
+            // chrome — long-standing issue where mode-speed button
+            // "selected" indicators were clipped at the bottom 5-7px.
+            rightContainer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
 
             // Place the combined container in the grid
             layout->addWidget(rightContainer, sendRow, sendCol, 1, 3);
