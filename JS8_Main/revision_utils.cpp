@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"Tranya\" (v4.1.0.309-linuxAlign) by WM8Q"}
+    return QString{"%1 \"Tranya\" (v4.1.0.319) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

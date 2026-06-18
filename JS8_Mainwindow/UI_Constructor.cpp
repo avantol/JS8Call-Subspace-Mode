@@ -16,6 +16,7 @@
 // #define JS8_DISABLE_L2_ASYNC 1
 
 #include "JS8_UI/mainwindow.h"
+#include "JS8_UI/SpeechBalloon.h"
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 
 #include <QMenu>
@@ -1731,18 +1732,18 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // any tool button that has a QMenu attached). The
             // arrowType=DownArrow already paints a large arrow as the
             // button content; the small overlay was duplicative.
-            // [BUILD 309 TODO #70(c)] Square the chevron's left corners
-            // and drop its left border so it visually merges with
-            // startTxButton — no visible gap, reads as one split
-            // button. The right corners keep their normal rounding
-            // so the chevron's right edge still matches startTxButton's
-            // right edge in the pre-cluster layout.
+            // [BUILD 309 TODO #70 FINAL] Borderless ghost button:
+            // no border, transparent background (inherits the
+            // action-bar color so it blends in), dark arrow always.
+            // Operator gating happens on the menu items inside the
+            // popup, not on the chevron itself — chevron stays
+            // visually unchanged so the operator's eye doesn't
+            // chase color transitions on it.
             m_sendMenuButton->setStyleSheet(
                 QStringLiteral(
-                    "QToolButton { border-left: 0; "
-                    "  border-top-left-radius: 0; "
-                    "  border-bottom-left-radius: 0; "
-                    "  padding-left: 0; padding-right: 0; } "
+                    "QToolButton { border: none; "
+                    "  background: transparent; "
+                    "  color: #222; } "
                     "QToolButton::menu-indicator { image: none; }"));
             // [BUILD 298] Initial tooltip; updateTextDisplay rewrites
             // it dynamically based on whether a call sign is selected.
@@ -1885,6 +1886,30 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 
     QTimer::singleShot(500, this, &UI_Constructor::initializeDummyData);
     QTimer::singleShot(500, this, &UI_Constructor::initializeGroupMessage);
+
+    // [BUILD 314] First-run discovery: the ARQ button + Mode-menu
+    // entry are both gone, so a new operator has no surface hinting
+    // that ARQ + file transfer live behind the Send-chevron. Pop a
+    // speech balloon pointing at the chevron on first launch, set a
+    // sticky QSettings flag so subsequent launches are quiet.
+    // Deferred 1500 ms so the main window is fully shown and the
+    // chevron has its global position before we anchor to it.
+    if (!m_settings->value("FirstRunArqHintShown", false).toBool()) {
+        QPointer<UI_Constructor> const self(this);
+        QTimer::singleShot(1500, this, [self]() {
+            if (!self || !self->m_sendMenuButton) return;
+            auto *balloon = new SpeechBalloon(
+                tr("\xf0\x9f\x91\x8b  Click here to to use the ARQ protocol "
+                   "(reliable delivery) to send or relay a message or to send a file. "
+                   "Use '@ALLCALL QUERY ARQ?' to find ARQ-ready stations. "
+                   "Click anywhere to dismiss."),
+                self->m_sendMenuButton);
+            balloon->setTailSide(SpeechBalloon::TailSide::Bottom);
+            balloon->setAutoDismissMs(45000);
+            balloon->showAtTarget();
+            self->m_settings->setValue("FirstRunArqHintShown", true);
+        });
+    }
 
     // this must be the last statement of constructor
     if (!m_valid)

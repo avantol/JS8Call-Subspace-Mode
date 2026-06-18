@@ -248,54 +248,32 @@ void UI_Constructor::processCommandActivity() {
                     qWarning() << "[ARQ-RX] multi-mode RX override latched ON"
                                << "via inbound chunked-DATA from" << d.from;
                 }
-                // Auto-match submode to sender per the table approved
-                // 2026-06-07 (build arq-modeFollow4):
-                //
-                //   • First chunk OR Subspace involved on either side
-                //     → match sender exactly. Subspace↔legacy is a hard
-                //     decoder boundary (multi-decoder doesn't bridge it
-                //     in the Subspace direction per operator), so the
-                //     receiver MUST match the sender's mode to decode
-                //     subsequent chunks AND emit ACKs the sender can
-                //     decode.
-                //   • Subsequent chunks + both-legacy mismatch
-                //     → "at minimum sender's speed": only switch DOWN
-                //     to sender's mode if our current mode is slower.
-                //     If we're already faster (e.g. operator switched
-                //     up Normal→Fast mid-session and the sender stayed
-                //     on Normal), keep our faster mode — the sender's
-                //     decoder can still copy it via multi-decoder.
-                //
-                // First-chunk heuristic: parsed.chunkId == 1. This also
-                // re-fires the exact-match policy on retransmits of
-                // chunk 1, which is harmless (idempotent when we're
-                // already matched, correct when we're not).
-                bool const isFirstChunk = (parsed.chunkId == 1);
-                bool const subspaceInvolved =
-                    (m_nSubMode == Varicode::JS8CallFT2) ||
-                    (d.submode    == Varicode::JS8CallFT2);
-
-                int targetMode = m_nSubMode;
-                if (isFirstChunk || subspaceInvolved) {
-                    // Cases 1–4, 7, 8 → exact match
-                    targetMode = d.submode;
-                } else {
-                    // Case 9 → "at minimum sender's speed"
-                    unsigned const senderPeriod =
-                        JS8::Submode::periodMS(d.submode);
-                    unsigned const currentPeriod =
-                        JS8::Submode::periodMS(m_nSubMode);
-                    if (senderPeriod < currentPeriod) {
-                        // sender is faster — we'd be slower, match it
-                        targetMode = d.submode;
-                    }
-                    // else keep current (we're already at-or-faster)
-                }
+                // [BUILD 316] Auto-match submode to sender, always.
+                // Previously had a per-case table (first-chunk vs subseq,
+                // subspace-involved vs both-legacy, "at minimum sender's
+                // speed"), but the simple rule wins: whatever speed mode
+                // the inbound chunk arrived in is the mode we should be
+                // in to ACK / NACK / decode the next chunk. The post-
+                // ACK/NACK revert (TODO #73) restores the operator's
+                // original mode after each response transmits.
+                int const targetMode = d.submode;
 
                 if (targetMode != m_nSubMode) {
-                    qWarning() << "[ARQ-RX] auto-mode:"
-                               << (isFirstChunk ? "first" : "subseq")
-                               << "chunk; was=" << m_nSubMode
+                    // [TODO #73 build 312] Stash the operator's
+                    // pre-switch mode so stopTx can restore it 750 ms
+                    // after the ACK / NACK transmits. Only stash on
+                    // the FIRST auto-switch of a sequence (don't
+                    // overwrite an already-pending stash — that
+                    // would lose the operator's real original mode
+                    // across consecutive sender chunks where the
+                    // restore hasn't fired yet).
+                    if (m_arqPreSwitchSubmode == -1) {
+                        m_arqPreSwitchSubmode = m_nSubMode;
+                        qWarning() << "[ARQ-RX] stashed pre-switch submode="
+                                   << m_arqPreSwitchSubmode
+                                   << "for post-ACK restore";
+                    }
+                    qWarning() << "[ARQ-RX] auto-mode: was=" << m_nSubMode
                                << "sender=" << d.submode
                                << "→ now=" << targetMode
                                << "(peer=" << d.from
@@ -1002,8 +980,14 @@ void UI_Constructor::processCommandActivity() {
         else if (d.cmd == " ACK" && !isAllCall) {
             qCDebug(mainwindow_js8) << "skipping incoming ack" << d.text;
 
-            // notification for ack
-            tryNotify("ack", d.submode);
+            // [BUILD 317] Suppress the per-ACK notification sound when
+            // an outbound ARQ super-message is in flight. A multi-
+            // chunk transfer fires one ACK per chunk; chiming on each
+            // is noise. ACK arrivals from non-ARQ traffic (manual
+            // operator-typed "WM8Q ACK" responses, etc.) still chime.
+            if (!(m_chunkedArq && m_chunkedArq->hasActiveTxSession())) {
+                tryNotify("ack", d.submode);
+            }
 
             // make sure this is explicit
             continue;
@@ -1017,7 +1001,10 @@ void UI_Constructor::processCommandActivity() {
         // reply-construction chain below could fire.
         else if (d.cmd == " NACK" && !isAllCall) {
             qCDebug(mainwindow_js8) << "skipping incoming nack" << d.text;
-            tryNotify("ack", d.submode);
+            // [BUILD 317] Same suppression as the ACK branch.
+            if (!(m_chunkedArq && m_chunkedArq->hasActiveTxSession())) {
+                tryNotify("ack", d.submode);
+            }
             continue;
         }
 

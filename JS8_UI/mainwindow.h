@@ -912,6 +912,14 @@ class UI_Constructor : public QMainWindow {
     // restore is pending.
     QString m_arqResponseSavedText;
     bool    m_arqResponseRestorePending{false};
+    // [TODO #73 build 312] Pre-auto-switch submode, stashed when
+    // the arq-modeFollow logic at processCommandActivity.cpp auto-
+    // switches the receiver into the sender's mode for an inbound
+    // chunk. Restored unconditionally 750 ms after the ACK / NACK
+    // transmits (same hook as m_arqResponseSavedText). The speed
+    // buttons are disabled during TX so the operator can't race a
+    // manual mode change in. -1 = no stash pending.
+    int     m_arqPreSwitchSubmode{-1};
     // [TODO.md #58 build 268] Multi-mode RX runtime override.
     // Set true (set-once / sticky for the program run) when the ARQ
     // button is toggled on OR when the first inbound ARQ chunk is

@@ -3962,6 +3962,27 @@ void UI_Constructor::stopTx() {
         });
     }
 
+    // [TODO #73 build 312] Always revert to the stashed pre-auto-
+    // switch submode 750ms after the ACK / NACK transmits. The
+    // speed buttons are disabled during TX so the operator can't
+    // race a manual selection into the gap; whatever's in m_nSubMode
+    // at this moment is the auto-switch's choice. No conditional
+    // gating needed.
+    if (m_arqPreSwitchSubmode != -1) {
+        int const stashedMode = m_arqPreSwitchSubmode;
+        m_arqPreSwitchSubmode = -1;
+        if (m_nSubMode != stashedMode) {
+            QPointer<UI_Constructor> const self(this);
+            QTimer::singleShot(750, this, [self, stashedMode]() {
+                if (!self) return;
+                qCWarning(chunkedarq_js8)
+                    << "[ARQ-RX] submode restore (deferred 750ms): from="
+                    << self->m_nSubMode << "to=" << stashedMode;
+                self->setSubmode(stashedMode);
+            });
+        }
+    }
+
 #if IDLE_BLOCKS_TX
     bool shouldContinue = !m_tx_watchdog && prepareNextMessageFrame();
 #else
@@ -5971,14 +5992,26 @@ void UI_Constructor::on_sendUsingArqAction_triggered() {
         return;
     }
     ArqGateState const gate = evaluateArqGateForText(txText);
-    if (gate != ArqGateState::Armed) {
-        QString reason = (gate == ArqGateState::NotArmed_NoPeer)
-            ? QStringLiteral("Select a call sign first — ARQ needs a "
-                             "single peer to ACK.")
-            : QStringLiteral("This message looks like a JS8 directed "
-                             "command, which ARQ does not wrap.");
+    if (gate == ArqGateState::NotArmed_NoPeer) {
+        // [BUILD 314] Mirror of the file-send "Select a peer" dialog
+        // (mainwindow.cpp:6042) — explain how to pick a call sign so
+        // ARQ can target a single station.
         JS8MessageBox::information_message(
-            this, QStringLiteral("Cannot send via ARQ"), reason);
+            this,
+            QStringLiteral("Select a call sign"),
+            QStringLiteral("ARQ needs a single call sign to ACK — "
+                           "pick one from Call Activity or type it "
+                           "as the first word in the outgoing box. "
+                           "Group targets (@ALLCALL, @PUBLIC, custom "
+                           "groups) are not supported because the "
+                           "protocol needs a single station to ACK."));
+        return;
+    }
+    if (gate != ArqGateState::Armed) {
+        JS8MessageBox::information_message(
+            this, QStringLiteral("Cannot send via ARQ"),
+            QStringLiteral("This message looks like a JS8 directed "
+                           "command, which ARQ does not wrap."));
         return;
     }
 
@@ -6039,9 +6072,9 @@ void UI_Constructor::on_sendFileButton_clicked() {
         !Radio::is_callsign(peer)) {
         JS8MessageBox::information_message(
             this,
-            QStringLiteral("Select a peer"),
-            QStringLiteral("File transfer needs a single peer "
-                           "callsign — pick one from Call Activity "
+            QStringLiteral("Select a call sign"),
+            QStringLiteral("File transfer requires that a "
+                           "callsign is selected — pick one from Call Activity "
                            "or type it as the first word in the "
                            "outgoing box. Group targets (@ALLCALL, "
                            "@PUBLIC, custom groups) are not "
@@ -7512,13 +7545,16 @@ void UI_Constructor::updateButtonDisplay() {
     if (m_sendArqAction) {
         QString const txText = ui->extFreeTextMsgEdit
             ? ui->extFreeTextMsgEdit->toPlainText() : QString();
+        bool const hasText = !txText.trimmed().isEmpty();
         ArqGateState const gate = evaluateArqGateForText(txText);
-        // updateButtonDisplay scope doesn't have `canTransmit` —
-        // `isTransmitting` + `emptyCallsign` are the relevant local
-        // gates. Gate::Armed already requires a valid peer, so
-        // emptyCallsign is implicitly covered by the gate result.
-        bool const canSendArq = (gate == ArqGateState::Armed) &&
-                                !isTransmitting;
+        // [BUILD 314] Also enable when text is present but no peer
+        // is selected — clicking the menu in that state fires a
+        // "Select a call sign" dialog (mirrors the file-send case).
+        // DirectedCmd stays disabled: those messages already have
+        // their own send path and ARQ doesn't wrap them.
+        bool const canSendArq = !isTransmitting && hasText &&
+            (gate == ArqGateState::Armed ||
+             gate == ArqGateState::NotArmed_NoPeer);
         m_sendArqAction->setEnabled(canSendArq);
     }
     {
@@ -7638,14 +7674,13 @@ void UI_Constructor::updateTextDisplay() {
         bool const arqTxBusy = m_chunkedArq && m_chunkedArq->hasActiveTxSession();
         m_sendFileAction->setEnabled(canTransmit && !isTransmitting && !arqTxBusy);
     }
-    // [BUILD 309 TODO #70(b)] Chevron mirrors Send's enabled state so
-    // the visual pair reads as one split button — gray together,
-    // active together. Send's own gate (above) already handles all
-    // the ARQ-busy / isTransmitting / empty-text / no-callsign cases,
-    // so we just track it.
-    if (m_sendMenuButton) {
-        m_sendMenuButton->setEnabled(ui->startTxButton->isEnabled());
-    }
+    // [BUILD 309 TODO #70(b) — FINAL] Chevron is a borderless ghost
+    // button (styled at construction in UI_Constructor.cpp): always
+    // enabled, always transparent background (matches action bar),
+    // always dark arrow. No per-frame palette tracking — the
+    // setPalette approach lagged Send's color changes badly. Menu
+    // items inside the popup handle their own gating; the chevron
+    // itself just opens the menu.
     // Chevron tooltip reflects current selection state so the
     // operator sees, without opening the menu, why file send is or
     // isn't ready. Cheap string compare avoids needless repaint.
