@@ -8,6 +8,9 @@
 
 void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
     bool isAllCall = isAllCallIncluded(call);
+    // [BUILD 331-bellGroupGate] Group calls (e.g. @SUBSPACE) are
+    // also broadcast-targeted; some items shouldn't fire to a group.
+    bool isGroupCall = isGroupCallIncluded(call);
 
     // for now, we're going to omit displaying the call...delete this if we want
     // the other functionality
@@ -155,6 +158,26 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 GRID?").arg(selectedCall), true);
 
+        if (m_config.transmit_directed())
+            toggleTx(true);
+    });
+
+    // [BUILD 331-bell TODO #80] BELL — soft summons. Pings the
+    // recipient with a configurable chime (default DingDing.wav).
+    // No reply expected from the protocol; this is a UX-level
+    // attention-getter for slow-mode QSO. Disabled for @ALLCALL AND
+    // any group call — BELL is per-recipient, never broadcast.
+    auto bellAction = menu->addAction(
+        QString("%1 BELL - Ring the recipient with a chime")
+            .arg(call)
+            .trimmed());
+    bellAction->setDisabled(isAllCall || isGroupCall);
+    connect(bellAction, &QAction::triggered, this, [this]() {
+        QString selectedCall = callsignSelected();
+        if (selectedCall.isEmpty()) {
+            return;
+        }
+        addMessageText(QString("%1 BELL").arg(selectedCall), true);
         if (m_config.transmit_directed())
             toggleTx(true);
     });

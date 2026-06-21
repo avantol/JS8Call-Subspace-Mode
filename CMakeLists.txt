@@ -366,6 +366,7 @@ if(ENABLE_FT2)
   target_sources(${TARGET} PRIVATE
     JS8_Mode/DecodeFT2.cpp
     JS8_Mode/FT2OnsetDetector.cpp
+    JS8_Mode/SubspacePreamble.cpp
     JS8_Mode/ft2_impl.cpp
     JS8_Mode/ft2_ldpc.cpp
     JS8_Mode/ft2_modem.cpp

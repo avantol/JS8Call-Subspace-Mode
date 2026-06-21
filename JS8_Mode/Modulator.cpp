@@ -4,6 +4,7 @@
  */
 #include "Modulator.h"
 #include "JS8Submode.h"
+#include "SubspacePreamble.h"
 #include "JS8_Audio/SoundOutput.h"
 #include "JS8_Include/commons.h"
 #include "JS8_Main/DriftingDateTime.h"
@@ -78,6 +79,29 @@ void Modulator::start(double const frequency, int const submode,
     m_silentFrames = 0;
     m_ic = 0;
 
+    // [BUILD 324] Subspace ⚡ preamble drain buffer — DEAD code, kept
+    // for the dead drain logic in readData(). Build 328 pivoted to
+    // full-frame bolt that swaps m_ft2Wave below.
+    m_boltAudio.clear();
+    m_boltPos = 0;
+
+    // [BUILD 328] Full-frame ⚡ bolt override. When the GUI staged a
+    // bolt waveform via setFullFrameBoltWaveform(), this TX cycle
+    // plays the bolt INSTEAD of the encoded text audio. We override
+    // m_ft2Wave/m_ft2WaveLen to point at the bolt buffer; the rest of
+    // the FT2 TX path runs unchanged, just with bolt samples as the
+    // "FT2 waveform". One-shot — flag clears so next cycle reverts.
+    if (m_ft2Mode && !m_tuning && m_useFullFrameBolt.load() &&
+        !m_boltWaveform.isEmpty()) {
+        m_ft2Wave = m_boltWaveform.data();
+        m_ft2WaveLen = m_boltWaveform.size();
+        m_useFullFrameBolt.store(false);
+        qWarning() << "[FT2-TX] ⚡ FULL-FRAME bolt: playing"
+                    << m_boltWaveform.size() << "samples ("
+                    << (m_boltWaveform.size() * 1000 / FRAME_RATE)
+                    << "ms) at" << frequency << "Hz";
+    }
+
     // [AUDIO-CADENCE PROBE 2026-06-09] Reset capture sentinels for this
     // cycle. Stores happen inside readData() on transitions.
     m_audioStartedMs.store(-1);
@@ -122,6 +146,16 @@ void Modulator::start(double const frequency, int const submode,
         // prepareSending, not a Modulator-internal concern. The
         // Modulator pads exactly the same amount regardless of
         // m_arqRelax or m_ft2Mode.
+        // [BUILD 328] Reverted to original 250 ms pre-roll. The
+        // bolt-in-pre-roll approach (builds 324-327) couldn't make
+        // the bolt visibly recognizable without breaking FT2 cycle
+        // timing. Pivoted to full-frame bolt design: bolt becomes a
+        // standalone TX cycle, audio fills the whole frame instead
+        // of piggybacking on FT2 pre-roll. Per-TX bolt preamble code
+        // below (m_paintBolt, m_boltAudio, m_boltPos) is now dead;
+        // the setPaintBoltPreamble setter is no longer called by
+        // mainwindow. Full-frame bolt rides through m_ft2Wave swap
+        // (see setBoltOnlyWaveform).
         constexpr unsigned UNIFIED_PRE_SILENCE_MS = 250;
         m_silentFrames = UNIFIED_PRE_SILENCE_MS * FRAME_RATE / MS_PER_SEC;
         qWarning() << "[TX-CADENCE] Modulator path: UNIFIED"
@@ -268,17 +302,29 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
     case State::Synchronizing: {
         if (m_silentFrames) {
             // Send silence up to end of start delay.
+            // [BUILD 324] During the first portion of the silent
+            // pre-roll, emit Subspace ⚡ bolt samples instead of
+            // zeros — when the GUI flagged this TX for a preamble
+            // and m_boltAudio was populated by start(). Cycle timing
+            // is unchanged: bolt occupies what would have been the
+            // first ~155 ms of silence, then zeros for the remainder.
 
             framesGenerated = qMin(m_silentFrames, maxFrames);
 
             do {
-                samples = load(0, samples);
+                qint16 outSample = 0;
+                if (m_boltPos < m_boltAudio.size()) {
+                    outSample = m_boltAudio[m_boltPos++];
+                }
+                samples = load(outSample, samples);
             } while (--m_silentFrames && samples != samplesEnd);
 
             if (!m_silentFrames) {
                 qCDebug(modulator_js8) << "[FT2-TX] Modulator: Synchronizing→Active"
                             << "cycle#" << m_txCycleCount
-                            << "ft2Mode=" << m_ft2Mode;
+                            << "ft2Mode=" << m_ft2Mode
+                            << "boltDrained=" << m_boltPos << "of"
+                            << m_boltAudio.size();
                 m_state.store(State::Active);
             }
         }

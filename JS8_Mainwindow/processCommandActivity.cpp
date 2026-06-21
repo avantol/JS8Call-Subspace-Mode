@@ -9,6 +9,9 @@
 
 #include "JS8_Main/ChunkedArq.h"
 
+#include <QPointer>
+#include <QTimer>
+
 void UI_Constructor::processCommandActivity() {
 #if 0
     if (!m_txFrameQueue.isEmpty()) {
@@ -228,21 +231,18 @@ void UI_Constructor::processCommandActivity() {
         if (toMe && m_chunkedArq) {
             ChunkedArq::ParsedChunk parsed;
             if (ChunkedArq::parseChunkedData(text, parsed)) {
-                // Auto-enable ARQ on first sight of any chunked-DATA
-                // wire frame addressed to us (2026-06-07, build arq-
-                // autoEnable).
-                if (ui->actionModeReplicatorProtocol &&
-                    !ui->actionModeReplicatorProtocol->isChecked()) {
-                    qWarning() << "[ARQ-RX] auto-enabling ARQ on first"
-                               << "chunked-DATA frame from" << d.from
-                               << "msgId=" << parsed.msgId;
-                    ui->actionModeReplicatorProtocol->setChecked(true);
-                    // The toggle slot will also latch the multi-mode
-                    // override (TODO.md #58). Belt-and-suspenders: in
-                    // case the button was already on and we're just
-                    // arriving here via the chunk-detection path with
-                    // no toggle event, latch directly.
-                }
+                // [BUILD 331-arqRxClean] REMOVED auto-enable-on-RX
+                // (was set via actionModeReplicatorProtocol->setChecked
+                // (true) here in build arq-autoEnable 2026-06-07).
+                // Receiving ARQ messages/files NEVER required ARQ-
+                // enabled — `m_arqEnabled` only gates TX-side wrapping
+                // (mainwindow.cpp::evaluateArqGateForText). Auto-
+                // enabling on RX was setting a TX-side flag from RX
+                // activity, which silently turned the operator's NEXT
+                // freetext into chunked-ARQ traffic (the "+ ARQ"
+                // suffix appeared on the status bar with no operator
+                // action). Multi-mode override is still latched
+                // directly below — it never needed the toggle path.
                 if (!m_arqMultiModeOverride) {
                     m_arqMultiModeOverride = true;
                     qWarning() << "[ARQ-RX] multi-mode RX override latched ON"
@@ -420,7 +420,22 @@ void UI_Constructor::processCommandActivity() {
                 // anything directed to this operator, so suppress the
                 // "directed-msg" alert there. Spotting / display / any
                 // auto-reply logic on @APRSIS is unchanged.
-                if (d.to != "@APRSIS") {
+                // [BUILD 331-todo78] Also suppress when an ARQ session
+                // (TX or RX) is active. Each chunk arrival in a multi-
+                // chunk super-message fires this notification path;
+                // chiming every ~3.75 s during a 20-chunk transfer is
+                // pure noise. hasActiveSession() catches both directions.
+                bool const arqInFlight =
+                    m_chunkedArq && m_chunkedArq->hasActiveSession();
+                // [BUILD 331-bell] BELL has its own notification kind
+                // ("bell" — DingDing). Suppress the generic "directed-
+                // msg" chime when the body is a BELL so we don't get
+                // both at once.
+                bool const isBellMsg =
+                    d.cmd == QStringLiteral(" ") &&
+                    (d.text.toUpper().endsWith(QStringLiteral(" BELL")) ||
+                     d.text.toUpper() == QStringLiteral("BELL"));
+                if (d.to != "@APRSIS" && !arqInFlight && !isBellMsg) {
                     tryNotify("directed", d.submode);
                 }
             }
@@ -476,6 +491,44 @@ void UI_Constructor::processCommandActivity() {
         QString reply;
         int priority = PriorityNormal;
         int freq = -1;
+
+        // [BUILD 331-avHail2] Hidden AVHAIL? remote-trigger command.
+        // When a peer addresses us with "AVHAIL?" body, switch to
+        // Subspace (FT2) submode and fire an audio-visual HAIL. Stay
+        // in Subspace after — don't auto-revert. NOT in the directed-
+        // to-XXX menu (operators invoke via TCP API or manual typing).
+        // Guarded: not-allcall, not-already-in-AV-HAIL, not-transmitting.
+        if (!isAllCall && d.cmd == QStringLiteral(" ") &&
+            d.text.toUpper().contains(QStringLiteral("AVHAIL?")) &&
+            m_visibleHailStep == 0 && !m_transmitting) {
+            qWarning() << "[AVHAIL?] remote-trigger received from"
+                       << d.from
+                       << "→ switching to Subspace + firing AV HAIL";
+            setSubmode(Varicode::JS8CallFT2);
+            QPointer<UI_Constructor> const self(this);
+            QTimer::singleShot(500, this, [self]() {
+                if (!self) return;
+                self->on_sendVisibleHailAction_triggered();
+            });
+            continue;
+        }
+
+        // [BUILD 331-bell TODO #80] BELL command. Peer addresses us
+        // with "<us> BELL" — we play the configured "bell" sound
+        // (DingDing.wav recommended). Soft summons for a QSO.
+        // Guards: addressed-to-us-personally (not @ALLCALL, not a
+        // group), freetext cmd, body equals or ends with "BELL", not
+        // in active ARQ session (chunked-ARQ body might literally
+        // contain "BELL" as payload text — don't trigger on those).
+        if (!isAllCall && !isGroupCall && d.cmd == QStringLiteral(" ") &&
+            (d.text.toUpper().endsWith(QStringLiteral(" BELL")) ||
+             d.text.toUpper() == QStringLiteral("BELL")) &&
+            !(m_chunkedArq && m_chunkedArq->hasActiveSession())) {
+            qWarning() << "[BELL] received from" << d.from
+                       << "→ playing bell notification";
+            tryNotify(QStringLiteral("bell"), d.submode);
+            continue;
+        }
 
         // QUERIED SNR
         if (d.cmd == " SNR?" && !isAllCall) {
@@ -980,12 +1033,16 @@ void UI_Constructor::processCommandActivity() {
         else if (d.cmd == " ACK" && !isAllCall) {
             qCDebug(mainwindow_js8) << "skipping incoming ack" << d.text;
 
-            // [BUILD 317] Suppress the per-ACK notification sound when
-            // an outbound ARQ super-message is in flight. A multi-
-            // chunk transfer fires one ACK per chunk; chiming on each
-            // is noise. ACK arrivals from non-ARQ traffic (manual
-            // operator-typed "WM8Q ACK" responses, etc.) still chime.
-            if (!(m_chunkedArq && m_chunkedArq->hasActiveTxSession())) {
+            // [BUILD 331-todo78] Suppress chime only for NUMBERED ACK
+            // ("ACK 5" etc. — d.extra holds the chunk-id digit). Plain
+            // unnumbered ACK ("just ACK") is a normal QSO ACK and
+            // SHOULD chime. The numbered form is always an ARQ chunk
+            // ack — chiming once per chunk in a long super-message is
+            // pure noise. This supersedes the Build 317 gate that only
+            // suppressed during our own active TX session (RX-side
+            // ARQ activity also benefits from the suppression now).
+            bool const isNumberedAck = !d.extra.trimmed().isEmpty();
+            if (!isNumberedAck) {
                 tryNotify("ack", d.submode);
             }
 
@@ -1001,8 +1058,11 @@ void UI_Constructor::processCommandActivity() {
         // reply-construction chain below could fire.
         else if (d.cmd == " NACK" && !isAllCall) {
             qCDebug(mainwindow_js8) << "skipping incoming nack" << d.text;
-            // [BUILD 317] Same suppression as the ACK branch.
-            if (!(m_chunkedArq && m_chunkedArq->hasActiveTxSession())) {
+            // [BUILD 331-todo78] Mirror the ACK branch: suppress chime
+            // only for NUMBERED NACK (ARQ chunk NACK). Plain unnumbered
+            // NACK chimes normally.
+            bool const isNumberedNack = !d.extra.trimmed().isEmpty();
+            if (!isNumberedNack) {
                 tryNotify("ack", d.submode);
             }
             continue;

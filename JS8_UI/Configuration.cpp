@@ -1935,6 +1935,11 @@ void Configuration::impl::initialize_models() {
     on_notifications_check_box_toggled(enable_notifications_);
 
     QList<QPair<QString, QString>> notifyRows = {
+        // [BUILD 331-bell] BELL placed at top of list per TODO #80.
+        // Standard QSO-level "ring my recipient" command. Receiver
+        // plays the configured sound (DingDing.wav recommended) when
+        // a peer addresses them with "<peer> BELL" body.
+        {"bell", "BELL Message Received"},
         {"cq", "CQ Message Received"},
         {"hb", "HB Message Received"},
         {"ack", "ACK Message Received"},
@@ -2041,16 +2046,20 @@ void Configuration::impl::initialize_models() {
                 });
 
         // row config
+        // [BUILD 331-todo81] Column order changed per Andy 2026-06-20:
+        // was [Subspace | Event | Enabled | Sound | Buttons]
+        // now  [Event | Enabled | Subspace | Sound | Buttons]
+        // Mirror change in Configuration.ui header order.
         int col = 0;
         table->insertRow(i);
-
-        table->setCellWidget(i, col++, subspaceWidget);
 
         auto eventLabelItem = new QTableWidgetItem(value);
         eventLabelItem->setData(Qt::UserRole, QVariant(key));
         table->setItem(i, col++, eventLabelItem);
 
         table->setCellWidget(i, col++, enabledWidget);
+
+        table->setCellWidget(i, col++, subspaceWidget);
 
         table->setCellWidget(i, col++, pathLabel);
 
@@ -3368,25 +3377,30 @@ void Configuration::impl::accept() {
     enable_notifications_ = ui_->notifications_check_box->isChecked();
 
     for (int i = 0; i < ui_->notifications_table_widget->rowCount(); i++) {
-        // event (column 1 — shifted by subspace column)
-        auto eventItem = ui_->notifications_table_widget->item(i, 1);
+        // [BUILD 331-todo81] Column indices updated for new order:
+        //   col 0: Event (name) ← carries the key
+        //   col 1: Enabled checkbox
+        //   col 2: Subspace-only checkbox
+        //   col 3: Sound File path label
+        //   col 4: buttons
+        auto eventItem = ui_->notifications_table_widget->item(i, 0);
         auto key = eventItem->data(Qt::UserRole).toString();
         if (key.isEmpty()) {
             continue;
         }
 
-        auto subspaceWidget = ui_->notifications_table_widget->cellWidget(i, 0);
-        QCheckBox *subspaceCheckbox =
-            subspaceWidget->findChild<QCheckBox *>("subspaceCheckbox");
-        if (subspaceCheckbox) {
-            notifications_subspace_[key] = subspaceCheckbox->isChecked();
-        }
-
-        auto enabledWidget = ui_->notifications_table_widget->cellWidget(i, 2);
+        auto enabledWidget = ui_->notifications_table_widget->cellWidget(i, 1);
         QCheckBox *enabledCheckbox =
             enabledWidget->findChild<QCheckBox *>("enabledCheckbox");
         if (enabledCheckbox) {
             notifications_enabled_[key] = enabledCheckbox->isChecked();
+        }
+
+        auto subspaceWidget = ui_->notifications_table_widget->cellWidget(i, 2);
+        QCheckBox *subspaceCheckbox =
+            subspaceWidget->findChild<QCheckBox *>("subspaceCheckbox");
+        if (subspaceCheckbox) {
+            notifications_subspace_[key] = subspaceCheckbox->isChecked();
         }
 
         auto pathWidget = ui_->notifications_table_widget->cellWidget(i, 3);

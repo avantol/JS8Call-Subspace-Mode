@@ -4,6 +4,7 @@
 #include "JS8_Audio/AudioDevice.h"
 
 #include <QPointer>
+#include <QVector>
 #include <atomic>
 
 class SoundOutput;
@@ -98,6 +99,23 @@ class Modulator final : public AudioDevice {
     // the audio-thread read is well-defined.
     void setArqRelax(bool relax) { m_arqRelax.store(relax); }
 
+    // [BUILD 328] Full-frame ⚡ Hellschreiber bolt-beacon mode.
+    // Pivot from the per-TX pre-roll preamble (builds 324-327, dead
+    // code below). When the GUI passes a non-empty bolt waveform here,
+    // the NEXT start() invocation uses that waveform as the FT2 data
+    // for the cycle — instead of the encoded text bits — and PLAYS
+    // THE BOLT. One-shot: the flag clears inside start() so the cycle
+    // after the bolt reverts to normal FT2 modulation. Caller must
+    // ensure Modulator is Idle when calling (no mid-stream swap).
+    void setFullFrameBoltWaveform(QVector<float> waveform) {
+        m_boltWaveform = std::move(waveform);
+        m_useFullFrameBolt.store(!m_boltWaveform.isEmpty());
+    }
+
+    // [DEAD: builds 324-327 preamble code below, kept compiling but
+    // setPaintBoltPreamble is no longer called by mainwindow.]
+    void setPaintBoltPreamble(bool paint) { m_paintBolt.store(paint); }
+
   signals:
     /// Emitted when FT2 waveform finishes playing (transitions to KeepAlive).
     void ft2WaveformDone();
@@ -136,6 +154,23 @@ class Modulator final : public AudioDevice {
     double m_nsps;
     qint64 m_silentFrames;
     std::atomic<bool> m_arqRelax{false};
+
+    // [BUILD 324] ⚡ preamble plumbing — DEAD code, retained for the
+    // dead setPaintBoltPreamble setter above. Build 328 pivoted to
+    // full-frame bolt (see m_boltWaveform / m_useFullFrameBolt below).
+    std::atomic<bool> m_paintBolt{false};
+    QVector<qint16> m_boltAudio;
+    int m_boltPos{0};
+
+    // [BUILD 328] Full-frame ⚡ bolt plumbing.
+    // m_useFullFrameBolt: GUI sets via setFullFrameBoltWaveform()
+    //   before triggering TX; start() reads, overrides m_ft2Wave to
+    //   point at m_boltWaveform's data, then clears the flag (one-shot).
+    // m_boltWaveform: float audio samples (~144000 at 48 kHz = 3 s).
+    //   Stays alive for the duration of the bolt TX cycle since
+    //   start() points m_ft2Wave INTO this buffer's storage.
+    std::atomic<bool> m_useFullFrameBolt{false};
+    QVector<float> m_boltWaveform;
     unsigned m_ic;
     unsigned m_isym0;
 #ifdef JS8_ENABLE_FT2

@@ -25,6 +25,7 @@
 #ifdef JS8_ENABLE_FT2
 #include "JS8_Mode/ft2_bridge.h"
 #include "JS8_Mode/DecodeFT2.h"
+#include "JS8_Mode/SubspacePreamble.h"
 #endif
 
 int ms_minute_error() {
@@ -195,8 +196,16 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // budget tracks cycle length (Subspace 3.75 s → 12 s, Normal 15 s
     // → 36 s, etc.). Evaluated at arm time, so mid-QSO mode switches
     // take effect on the next chunk's timer.
-    m_chunkedArq->setAckTimeoutFn([this]() {
-        return ChunkedArq::ackTimeoutMsForSubmode(m_nSubMode);
+    // [BUILD 331-arqTimeoutLock] Lambda now takes the submode the
+    // chunk's audio was actually encoded in (captured by ChunkedArq
+    // at sendChunked time, stored on SendState.txSubmode, passed back
+    // here at arm time). The Manager passes that captured value — NOT
+    // the current m_nSubMode — so an operator mode-switch between
+    // sendChunked and arm can never make this timer use the wrong
+    // mode. Mid-QSO mode switches still take effect on the NEXT
+    // chunk (which captures its own txSubmode at its own sendChunked).
+    m_chunkedArq->setAckTimeoutFn([](int submode) {
+        return ChunkedArq::ackTimeoutMsForSubmode(submode);
     });
     // [DYNAMIC CAP 2026-06-12 build 262] TX-idle safety cap scales with
     // submode cycle length (90 s floor; legacy Normal/Slow chunks need
@@ -363,6 +372,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         qWarning() << "[FT2-TX] waveform complete: triggering stopTx()";
         stopTx();
     }, Qt::QueuedConnection);
+    // [BUILD 331-visHailEpi3] Visible-Hail chain advancement is in
+    // stopTx() (mainwindow.cpp), NOT here. ft2WaveformDone is dead
+    // code for FT2 mode — only emitted in the legacy JS8 else-branch
+    // in Modulator.cpp, never fires for FT2 TX. FT2 completion is
+    // detected by guiUpdate's isFT2WaveformDone() poll → stopTx().
     connect(&m_audioThread, &QThread::finished, m_modulator,
             &QObject::deleteLater);
 
@@ -1787,12 +1801,31 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 // ARQ behavior on hover so the operator knows what
                 // they're committing to before the file picker opens.
                 m_sendFileAction->setToolTip(
-                    "Send file via ARQ. Pick a local file, max size depends on "
+                    "Send file via ARQ. Pick a local file (any format), max size depends on "
                     "compressibility (typically ~3 KB text or "
-                    "~1 KB binary). Sent reliably with per-sub-message "
+                    "~1 KB binary). Perfect for certain forms where spaces may be meaningful. Sent reliably with per-sub-message "
                     "ACK/NACK and SHA-256 verify. The file is compressed "
-                    "using GZIP and encoded using Base32, but is NOT encrypted."
+                    "using GZIP and encoded using Base32, but is NOT encrypted. "
                     "Encryption is not permitted on amateur bands,");
+
+                // [BUILD 331-visHailEpi8] "Send audio-visual HAIL" —
+                // third item. Three-cycle sequence: standard Subspace
+                // HAIL message (`<mycall>: @ALLCALL ACK`) followed by
+                // two back-to-back lightning-bolt waterfall silhouettes
+                // (Hellschreiber-style raster, decoder-agnostic, in-
+                // band). Reaches both software-decoder peers AND
+                // waterfall-watching humans. Disabled during ARQ
+                // transfers and while another audio-visual HAIL is
+                // already in flight.
+                m_sendVisibleHailAction = menu->addAction(
+                    QStringLiteral("Send audio-visual HAIL"));
+                m_sendVisibleHailAction->setToolTip(
+                    "Send a standard Subspace HAIL "
+                    "message followed by a distinctive image visible on the waterfall, and a readily identifiable sound from your radio speaker.");
+                connect(m_sendVisibleHailAction, &QAction::triggered,
+                        this,
+                        &UI_Constructor::on_sendVisibleHailAction_triggered);
+
                 // QMenu doesn't show action tooltips by default;
                 // enable the standard tooltips role so the hover
                 // delay surfaces the text.

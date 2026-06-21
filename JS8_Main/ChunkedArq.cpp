@@ -320,7 +320,8 @@ static QString normalizeForWireEncoding(QString const &body) {
     return QString(body).replace(msgToNoSpaceRe, QStringLiteral("MSG TO: "));
 }
 
-SendResult Manager::sendChunked(QString const &peer, QString const &inputBody) {
+SendResult Manager::sendChunked(QString const &peer, QString const &inputBody,
+                                int submode) {
     QString const body = normalizeForWireEncoding(inputBody);
     if (body != inputBody) {
         qCWarning(chunkedarq_js8)
@@ -362,6 +363,12 @@ SendResult Manager::sendChunked(QString const &peer, QString const &inputBody) {
     state.originalBody = body;
     state.wasMsgCmd    = false;
     state.msgAddressee.clear();
+    // [BUILD 331-arqTimeoutLock] Lock the submode the chunks will be
+    // transmitted in. Used downstream by armAckTimer to compute the
+    // per-chunk ACK timeout, eliminating the race window where an
+    // operator mode-switch between sendChunked and the actual TX
+    // would have made the timer use the wrong mode's timeout.
+    state.txSubmode    = submode;
 
     // MSG-cmd detection. Match the JS8 directed-cmd words "MSG TO:"
     // (slot 10, store at a station — capture addressee) and the bare
@@ -495,7 +502,11 @@ void Manager::armAckTimer(QString const &peer, SendState &state) {
         connect(state.ackTimer, &QTimer::timeout,
                 this, &Manager::onAckTimerExpired);
     }
-    int const timeoutMs = m_ackTimeoutFn ? m_ackTimeoutFn()
+    // [BUILD 331-arqTimeoutLock] Pass the chunk's TX-time submode
+    // (locked at sendChunked) so the timeout is correct for the mode
+    // the chunk actually went out in, regardless of any operator
+    // mode-switch between sendChunked and now.
+    int const timeoutMs = m_ackTimeoutFn ? m_ackTimeoutFn(state.txSubmode)
                                          : DEFAULT_ACK_TIMEOUT_MS;
     state.ackTimer->start(timeoutMs);
     qCWarning(chunkedarq_js8)

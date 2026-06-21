@@ -162,6 +162,10 @@ void UI_Constructor::onChunkedMessageDelivered(QString const &fromCall,
                            {"TO",     toCall},
                            {"MSG_ID", msgId},
                        });
+    // [BUILD 331-arqRxClean] No auto-disable needed here — the
+    // auto-enable on first chunk RX was removed (see
+    // processCommandActivity.cpp). ARQ state purely reflects
+    // operator/TX intent now; RX side never toggles it.
 }
 
 void UI_Constructor::onChunkedSendProgress(QString const &peer, int msgId,

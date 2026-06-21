@@ -15,6 +15,7 @@
 
 #ifdef JS8_ENABLE_FT2
 #include "JS8_Mode/DecodeFT2.h"
+#include "JS8_Mode/SubspacePreamble.h"
 #include "JS8_Mode/ft2_bridge.h"
 #include <cstring>
 #endif
@@ -3756,7 +3757,8 @@ void UI_Constructor::startTx() {
                    << "peer=" << arqPeer
                    << "bodyChars=" << arqBody.size()
                    << "(was" << text.size() << "incl prefix)";
-        auto const result = m_chunkedArq->sendChunked(arqPeer, arqBody);
+        auto const result =
+            m_chunkedArq->sendChunked(arqPeer, arqBody, m_nSubMode);
         if (!result.ok) {
             qWarning() << "[ARQ] sendChunked rejected:" << result.error;
             // 2026-06-07 operator request: when the super-message is
@@ -3855,6 +3857,15 @@ void UI_Constructor::transmit() {
                 << "m_transmitting=" << m_transmitting
                 << "genAudio=" << m_generateAudioWhenPttConfirmedByTX
                 << "m_iptt=" << m_iptt << "m_iptt0=" << m_iptt0;
+    // [BUILD 328] Pre-roll preamble classifier removed — pivoted to
+    // full-frame bolt (see on_sendBoltAction_triggered). The bolt
+    // mode-flag on Modulator is now set ONLY by the explicit beacon
+    // action, not by every TX. Cleared here defensively in case a
+    // previous beacon's flag survived.
+    if (m_modulator) {
+        m_modulator->setPaintBoltPreamble(false);
+    }
+
     Q_EMIT sendMessage(freq() + m_XIT, m_nSubMode, m_TxDelay, m_soundOutput,
                        m_config.audio_output_channel());
     ui->signal_meter_widget->setValue(0, 0);
@@ -4019,6 +4030,64 @@ void UI_Constructor::stopTx() {
         TX_SWITCHOFF_DELAY); // end-of-transmission sequencer delay stopTx2
     monitor(true);
     statusUpdate();
+
+    // [BUILD 331-visHailEpi4] Visible-Hail chain advancement.
+    // ft2WaveformDone signal is dead code for FT2 mode. FT2 TX
+    // completion is detected by guiUpdate's isFT2WaveformDone() poll
+    // → stopTx(). We advance the chain state machine HERE.
+    //
+    // Double-fire guard: stopTx() can be called multiple times for
+    // ONE TX cycle (btxok-edge + waveform-poll both fire it within
+    // the same guiUpdate tick). Without the m_visibleHailAdvanceArmed
+    // flag, the chain over-advances and skips intermediate TXes (and
+    // may crash if downstream state assumes a clean per-step flow).
+    if (m_visibleHailStep != 0 && m_visibleHailAdvanceArmed) {
+        m_visibleHailAdvanceArmed = false;  // consume the arming
+        int const completedStep = m_visibleHailStep;
+        QPointer<UI_Constructor> const self(this);
+        // Defensive: only arm next TX if Modulator is still valid.
+        auto armBoltCycle = [self]() {
+            if (!self || !self->m_modulator) return;
+            double const audioFreqHz = self->freq() + self->m_XIT;
+            double const ft2BandMidHz = audioFreqHz + 62.5;
+            auto bolt =
+                SubspacePreamble::generateFullFrameBolt(ft2BandMidHz);
+            self->m_modulator->setFullFrameBoltWaveform(std::move(bolt));
+            QString const myCallUp =
+                self->m_config.my_callsign().trimmed().toUpper();
+            QString const hailText =
+                myCallUp + QStringLiteral(": @ALLCALL ACK");
+            if (self->ui && self->ui->extFreeTextMsgEdit) {
+                self->ui->extFreeTextMsgEdit->setPlainText(hailText);
+            }
+            // Re-arm advance guard so the NEXT stopTx (after this
+            // TX completes) can advance the chain again.
+            self->m_visibleHailAdvanceArmed = true;
+            self->toggleTx(true);
+        };
+        switch (completedStep) {
+            case 1:  // HAIL done → epilog diag 1 (back-to-back, no
+                     // silent space — Andy 2026-06-20 dropped the gap)
+                m_visibleHailStep = 2;
+                qWarning() << "[FT2-TX] Visible Hail: HAIL done → "
+                              "scheduling epilog diag 1 back-to-back";
+                QTimer::singleShot(100, this, armBoltCycle);
+                break;
+            case 2:  // diag 1 done → diag 2 (back-to-back)
+                m_visibleHailStep = 3;
+                qWarning() << "[FT2-TX] Visible Hail: diag 1 done → "
+                              "scheduling diag 2 back-to-back";
+                QTimer::singleShot(100, this, armBoltCycle);
+                break;
+            case 3:  // diag 2 done → sequence complete
+                m_visibleHailStep = 0;
+                qWarning() << "[FT2-TX] Visible Hail: sequence complete";
+                break;
+            default:
+                m_visibleHailStep = 0;
+                break;
+        }
+    }
 }
 
 /**
@@ -5963,6 +6032,87 @@ void UI_Constructor::on_typingMacroButton_clicked() {
         toggleTx(true);
 }
 
+// [BUILD 331-visibleHail] "Send Visible Hail" menu action handler.
+// Two-cycle sequence: bolt frame (Hellschreiber-style ⚡ raster),
+// one silent cycle gap, then standard Subspace HAIL message
+// (`<mycall>: @ALLCALL ACK`). The visible bolt + the encoded ID
+// together announce the operator to BOTH waterfall-watchers AND
+// decoder-running peers.
+//
+// Chain step 1 runs here (bolt TX). Chain step 2 (the HAIL TX) is
+// scheduled in the ft2WaveformDone handler when it sees the
+// m_visibleHailPendingHail flag set.
+void UI_Constructor::on_sendVisibleHailAction_triggered() {
+    if (!m_modulator) {
+        return;
+    }
+    // [BUILD 331-avHailSunset] Time-limited test feature. After
+    // 2026-06-25 (local date), the audio-visual HAIL is no longer
+    // available; clicking the menu item shows an info dialog instead.
+    // The menu item itself remains visible so operators see the
+    // entry exists and learn it was a time-limited experiment.
+    if (QDate::currentDate() > QDate(2026, 6, 25)) {
+        JS8MessageBox::information_message(
+            this, QStringLiteral("Audio-visual HAIL — limited-time test"),
+            QStringLiteral("This feature was only available for a limited "
+                           "time test. Check the Subspace discussion group "
+                           "for current availability."));
+        return;
+    }
+    if (m_nSubMode != Varicode::JS8CallFT2) {
+        JS8MessageBox::information_message(
+            this, QStringLiteral("Subspace required"),
+            QStringLiteral("Visible Hail transmits on the Subspace (FT2) "
+                           "submode. Switch to ⚡ first."));
+        return;
+    }
+    if (m_transmitting || m_tune) {
+        return;  // ignore if already TX-ing
+    }
+    // [BUILD 331-avHailGroupDialog] When a group / @ALLCALL is
+    // selected as the active peer, show the "Select a call sign"
+    // dialog instead of silently disabling the menu. Matches the
+    // existing Send-ARQ / Send-file pattern — operators learn what
+    // to do, rather than seeing a greyed menu item with no
+    // explanation.
+    {
+        QString const selCall = callsignSelected();
+        if (isGroupCallIncluded(selCall) || isAllCallIncluded(selCall)) {
+            JS8MessageBox::information_message(
+                this,
+                QStringLiteral("Select a call sign"),
+                QStringLiteral("Audio-visual HAIL targets a single "
+                               "station. Pick one from Call Activity "
+                               "or type it as the first word in the "
+                               "outgoing box. Group targets "
+                               "(@ALLCALL, @PUBLIC, custom groups) "
+                               "are not supported for this action."));
+            return;
+        }
+    }
+
+    QString const myCallUp = m_config.my_callsign().trimmed().toUpper();
+    QString const hailText =
+        myCallUp + QStringLiteral(": @ALLCALL ACK");
+
+    // [BUILD 331-visHailEpi2] Andy 2026-06-19: NO initial bolt. The
+    // sequence is now HAIL → diag1 → diag2 (back-to-back). The
+    // standard encoded HAIL fires first so the encoded ID gets out
+    // BEFORE the visual diag lines that follow it on the waterfall.
+    if (ui->extFreeTextMsgEdit) {
+        ui->extFreeTextMsgEdit->setPlainText(hailText);
+    }
+    qWarning() << "[FT2-TX] Visible Hail: HAIL first =" << hailText;
+
+    // Arm the chain. Step 1 = HAIL cycle in progress; on completion
+    // → step 2 (epilog-diag-1, ~1 sec gap), step 3 (epilog-diag-2,
+    // back-to-back with #2).
+    m_visibleHailStep = 1;
+    m_visibleHailAdvanceArmed = true;
+
+    toggleTx(true);
+}
+
 // [BUILD 298] "Send using ARQ" menu action handler. Replaces the
 // standalone ARQ-toggle button. Each invocation: validate peer, enable
 // the internal ARQ-on flag, fire the normal Send path, and arrange for
@@ -6140,7 +6290,7 @@ void UI_Constructor::on_sendFileButton_clicked() {
         << "bytes=" << header.bytes
         << "wireBodyChars=" << body.size();
 
-    auto const res = m_chunkedArq->sendChunked(peer, body);
+    auto const res = m_chunkedArq->sendChunked(peer, body, m_nSubMode);
     if (res.ok) {
         if (arqAutoEnabled) {
             m_fileSendMsgId           = res.msgId;
@@ -6939,6 +7089,18 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
             qWarning() << "[HAIL-DIAG] loop cancelled: stop button (longterm)";
         m_hb_loop->onLoopCancel();
         m_cq_loop->onLoopCancel();
+        // [BUILD 331-avHailHalt] Operator-initiated Halt cancels the
+        // entire audio-visual HAIL sequence — current frame stops AND
+        // the chain state machine resets so no further epilog frames
+        // get scheduled. Without this, the stopTx tail's switch would
+        // happily advance the chain and fire diag 1 / diag 2 even
+        // though the operator just hit Halt.
+        if (m_visibleHailStep != 0) {
+            qWarning() << "[FT2-TX] Visible Hail: aborted by operator "
+                          "Halt at step" << m_visibleHailStep;
+            m_visibleHailStep = 0;
+            m_visibleHailAdvanceArmed = false;
+        }
     }
 }
 
@@ -7673,6 +7835,22 @@ void UI_Constructor::updateTextDisplay() {
         // chunked-ARQ session on top of one already running.
         bool const arqTxBusy = m_chunkedArq && m_chunkedArq->hasActiveTxSession();
         m_sendFileAction->setEnabled(canTransmit && !isTransmitting && !arqTxBusy);
+    }
+    // [BUILD 331-visHailEpi8] Gate "Send audio-visual HAIL" menu item.
+    // Disabled while a Visible Hail sequence is already in flight
+    // (m_visibleHailStep != 0) AND while an ARQ super-message is in
+    // progress (don't interrupt either with another visible hail).
+    // [BUILD 331-avHailGroupDialog] Group/@ALLCALL selection NO
+    // LONGER disables the menu — instead the slot itself shows a
+    // "Select a call sign" info dialog (matches the Send-ARQ /
+    // Send-file pattern). Operators discover via the dialog, not
+    // via a silently-greyed item.
+    if (m_sendVisibleHailAction) {
+        bool const arqTxBusy =
+            m_chunkedArq && m_chunkedArq->hasActiveTxSession();
+        bool const visHailBusy = m_visibleHailStep != 0;
+        m_sendVisibleHailAction->setEnabled(
+            canTransmit && !arqTxBusy && !visHailBusy);
     }
     // [BUILD 309 TODO #70(b) — FINAL] Chevron is a borderless ghost
     // button (styled at construction in UI_Constructor.cpp): always

@@ -355,6 +355,14 @@ class UI_Constructor : public QMainWindow {
     // Enables ARQ for this one send, fires the normal Send path, and
     // arranges for ARQ to auto-disable on sendComplete / sendFailed.
     void on_sendUsingArqAction_triggered();
+    // [BUILD 331-visibleHail] TX-side handler for the "Send Visible
+    // Hail" menu action. Two-cycle sequence: bolt frame (paints
+    // ⚡ silhouette on waterfall as Hellschreiber-style raster), one
+    // silent cycle gap, then standard Subspace HAIL message
+    // (encoded `<mycall>: @ALLCALL ACK`). Chain step 2 (the HAIL TX)
+    // is scheduled in the ft2WaveformDone handler when
+    // m_visibleHailPendingHail is set.
+    void on_sendVisibleHailAction_triggered();
     void onChunkedProgressUpdate(int chunkId, int total, int retries);
     void onChunkedProgressEnd();
 
@@ -662,6 +670,32 @@ class UI_Constructor : public QMainWindow {
     // Enable state is updated live from updateButtonDisplay using
     // evaluateArqGateForText.
     QAction *m_sendArqAction{nullptr};
+    // [BUILD 331-visibleHail] "Send Visible Hail" menu action — third
+    // item. Two-cycle sequence: bolt frame (3.75 s, painted ⚡
+    // silhouette as Hellschreiber-style audio raster), one full silent
+    // cycle gap, then standard Subspace HAIL frame (3.75 s of the
+    // encoded `<mycall>: @ALLCALL ACK` directed message). Total
+    // duration ~11.25 s. The visual + the encoded ID together
+    // announce the operator's presence to BOTH eyeballs-on-waterfall
+    // AND software-decoder peers.
+    QAction *m_sendVisibleHailAction{nullptr};
+    // [BUILD 331-visHailEpi2] Visible-Hail chain state machine.
+    // Andy 2026-06-19 simplified: NO initial bolt; just HAIL then
+    // back-to-back diag epilogs. Steps:
+    //   0 = idle (not in chain)
+    //   1 = HAIL cycle in progress (encoded `<mycall>: @ALLCALL ACK`)
+    //   2 = epilog diag 1 (bolt repaint, ~1 sec gap after HAIL)
+    //   3 = epilog diag 2 (bolt repaint, back-to-back with #2)
+    // stopTx() advances the step; QTimer schedules the next TX.
+    int m_visibleHailStep{0};
+    // [BUILD 331-visHailEpi4] Double-fire guard. stopTx() can be
+    // called multiple times for ONE TX cycle (btxok-edge + waveform-
+    // poll both fire it within the same guiUpdate tick). Without this
+    // guard the chain advances multiple steps per TX cycle, skipping
+    // intermediate TXes. Set true when a new TX is armed (slot start
+    // or QTimer callback), cleared by the advancement block so further
+    // stopTx calls within the same cycle are no-ops.
+    bool m_visibleHailAdvanceArmed{false};
     // [BUILD 298] When set non-zero, an in-flight chunked-ARQ send
     // was initiated by "Send using ARQ" (text), as opposed to
     // "Send file…" (file transfer). sendComplete / sendFailed on a

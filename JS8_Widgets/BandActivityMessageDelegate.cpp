@@ -42,6 +42,13 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
         QStyleOptionViewItem opt = option;
         initStyleOption(&opt, index);
         QString text = opt.text;
+        // [BUILD 331-todo79] Render-side strip of newlines / carriage
+        // returns / tabs. Source data is untouched; only paint output
+        // is cleaned so the row stays on one line with no column
+        // misalignment.
+        text.replace(QChar('\n'), QChar(' '))
+            .replace(QChar('\r'), QChar(' '))
+            .replace(QChar('\t'), QChar(' '));
         opt.text.clear();
         QApplication::style()->drawControl(QStyle::CE_ItemViewItem, &opt, painter);
 
@@ -114,6 +121,11 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
     for (int i = 0; i < n; i++) {
         auto map = groups[i].toMap();
         QString text = map["text"].toString();
+        // [BUILD 331-todo79] Render-side newline / CR / tab strip,
+        // mirror of the single-group path above.
+        text.replace(QChar('\n'), QChar(' '))
+            .replace(QChar('\r'), QChar(' '))
+            .replace(QChar('\t'), QChar(' '));
 
         QRect regionRect(rect.x() + i * regionWidth, rect.y(),
                          regionWidth, rect.height());

@@ -636,7 +636,8 @@ if(type == "STATION.SET_SPOT") {
         } else if (!m_chunkedArq) {
             err = "chunked-ARQ manager not initialised";
         } else {
-            auto const result = m_chunkedArq->sendChunked(peer, text);
+            auto const result =
+                m_chunkedArq->sendChunked(peer, text, m_nSubMode);
             if (!result.ok) {
                 err = result.error;
             } else {

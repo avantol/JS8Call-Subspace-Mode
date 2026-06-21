@@ -250,6 +250,15 @@ struct SendState {
     bool           wasMsgCmd{false};
     QString        msgAddressee;   // populated only for "MSG TO: <addr>"
     QString        originalBody;   // pre-chunked body, needed for inbox deposit
+
+    // [BUILD 331-arqTimeoutLock] Submode captured at sendChunked() time
+    // — the mode the chunk's audio actually goes out in. Used by
+    // armAckTimer to compute the per-chunk ACK timeout (passed to
+    // AckTimeoutFn). Locking the mode at TX-commit time eliminates the
+    // race where the operator changes mode between the timer-arm read
+    // and the actual TX (which would have given the chunk a timer for
+    // the WRONG mode — too short on slower→faster switches, etc.).
+    int            txSubmode{0};
 };
 
 /**
@@ -356,17 +365,19 @@ class Manager : public QObject {
     void setTxIdleCheck(IdleCheckFn fn) { m_txIdleCheck = std::move(fn); }
 
     /**
-     * @brief Callback returning the ACK-wait timeout in milliseconds,
-     *        evaluated at arm time so a mid-QSO mode switch (e.g.
-     *        Subspace → Turbo) takes effect immediately. Defaults to
-     *        DEFAULT_ACK_TIMEOUT_MS if unset.
+     * @brief Callback returning the ACK-wait timeout in milliseconds
+     *        FOR THE GIVEN SUBMODE. The Manager passes the submode that
+     *        was captured at chunk-TX-commit time (state.txSubmode),
+     *        guaranteeing the timer matches the mode the chunk actually
+     *        went out in — not the mode the operator might have just
+     *        switched to. Defaults to DEFAULT_ACK_TIMEOUT_MS if unset.
      *
      * Typical UI wiring:
-     *     mgr->setAckTimeoutFn([this]{
-     *         return ChunkedArq::ackTimeoutMsForSubmode(m_nSubMode);
+     *     mgr->setAckTimeoutFn([](int submode){
+     *         return ChunkedArq::ackTimeoutMsForSubmode(submode);
      *     });
      */
-    using AckTimeoutFn = std::function<int()>;
+    using AckTimeoutFn = std::function<int(int submode)>;
     void setAckTimeoutFn(AckTimeoutFn fn) { m_ackTimeoutFn = std::move(fn); }
 
     /**
@@ -479,7 +490,8 @@ class Manager : public QObject {
      * (one-at-a-time per peer). On success, populates msgId and
      * totalChunks for the caller's tracking.
      */
-    SendResult sendChunked(QString const &peer, QString const &body);
+    SendResult sendChunked(QString const &peer, QString const &body,
+                           int submode);
 
     /**
      * @brief Notify the manager that we received a chunked DATA frame.
