@@ -6046,19 +6046,6 @@ void UI_Constructor::on_sendVisibleHailAction_triggered() {
     if (!m_modulator) {
         return;
     }
-    // [BUILD 331-avHailSunset] Time-limited test feature. After
-    // 2026-06-25 (local date), the audio-visual HAIL is no longer
-    // available; clicking the menu item shows an info dialog instead.
-    // The menu item itself remains visible so operators see the
-    // entry exists and learn it was a time-limited experiment.
-    if (QDate::currentDate() > QDate(2026, 6, 25)) {
-        JS8MessageBox::information_message(
-            this, QStringLiteral("Audio-visual HAIL — limited-time test"),
-            QStringLiteral("This feature was only available for a limited "
-                           "time test. Check the Subspace discussion group "
-                           "for current availability."));
-        return;
-    }
     if (m_nSubMode != Varicode::JS8CallFT2) {
         JS8MessageBox::information_message(
             this, QStringLiteral("Subspace required"),
@@ -7846,11 +7833,16 @@ void UI_Constructor::updateTextDisplay() {
     // Send-file pattern). Operators discover via the dialog, not
     // via a silently-greyed item.
     if (m_sendVisibleHailAction) {
-        bool const arqTxBusy =
-            m_chunkedArq && m_chunkedArq->hasActiveTxSession();
+        // [BUILD 331-avHailGate] Gate expanded to mirror Send-file
+        // (!isTransmitting) AND catch RX-side ARQ traffic too
+        // (hasActiveSession covers both m_sends and m_recv assemblies).
+        // Rationale: an AV HAIL fires PTT and a 3-cycle sequence; must
+        // not interrupt an in-flight ARQ super-message either direction.
+        bool const arqBusy =
+            m_chunkedArq && m_chunkedArq->hasActiveSession();
         bool const visHailBusy = m_visibleHailStep != 0;
         m_sendVisibleHailAction->setEnabled(
-            canTransmit && !arqTxBusy && !visHailBusy);
+            canTransmit && !isTransmitting && !arqBusy && !visHailBusy);
     }
     // [BUILD 309 TODO #70(b) — FINAL] Chevron is a borderless ghost
     // button (styled at construction in UI_Constructor.cpp): always

@@ -111,6 +111,28 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
             toggleTx(true);
     });
 
+    // [BUILD 331+ TODO #82] BELL — soft summons. Pings the recipient
+    // with the configured "bell" notification sound (default
+    // DingDing.wav). No protocol reply expected; this is a UX-level
+    // attention-getter for slow-mode QSO. Placed immediately under
+    // GRID (set-my-grid), just above the separator that ends the
+    // parameter-bearing-commands group. Disabled for @ALLCALL AND
+    // any group call — BELL is per-recipient, never broadcast.
+    auto bellAction = menu->addAction(
+        QString("%1 BELL - Trigger the BELL notification sound on the receiver's side")
+            .arg(call)
+            .trimmed());
+    bellAction->setDisabled(isAllCall || isGroupCall);
+    connect(bellAction, &QAction::triggered, this, [this]() {
+        QString selectedCall = callsignSelected();
+        if (selectedCall.isEmpty()) {
+            return;
+        }
+        addMessageText(QString("%1 BELL").arg(selectedCall), true);
+        if (m_config.transmit_directed())
+            toggleTx(true);
+    });
+
     menu->addSeparator();
 
     auto snrQueryAction = menu->addAction(
@@ -158,26 +180,6 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 GRID?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
-    });
-
-    // [BUILD 331-bell TODO #80] BELL — soft summons. Pings the
-    // recipient with a configurable chime (default DingDing.wav).
-    // No reply expected from the protocol; this is a UX-level
-    // attention-getter for slow-mode QSO. Disabled for @ALLCALL AND
-    // any group call — BELL is per-recipient, never broadcast.
-    auto bellAction = menu->addAction(
-        QString("%1 BELL - Ring the recipient with a chime")
-            .arg(call)
-            .trimmed());
-    bellAction->setDisabled(isAllCall || isGroupCall);
-    connect(bellAction, &QAction::triggered, this, [this]() {
-        QString selectedCall = callsignSelected();
-        if (selectedCall.isEmpty()) {
-            return;
-        }
-        addMessageText(QString("%1 BELL").arg(selectedCall), true);
         if (m_config.transmit_directed())
             toggleTx(true);
     });

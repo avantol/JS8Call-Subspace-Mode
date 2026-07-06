@@ -2441,6 +2441,22 @@ void Configuration::impl::read_settings() {
         }
     }
     settings_->endGroup();
+
+    // [BUILD 331+ TODO #80 ext] First-run defaults for the BELL
+    // notification. Only applied when the "bell" group has no entry
+    // yet in QSettings (i.e. fresh install). Existing user-set values
+    // for BELL — sound path, enabled, Subspace-only — are NOT
+    // overwritten. The loader above only adds keys to the in-memory
+    // maps when the QSettings group exists, so .contains("bell") is
+    // a reliable "user has touched BELL settings" probe.
+    if (!notifications_enabled_.contains(QStringLiteral("bell"))) {
+        notifications_enabled_[QStringLiteral("bell")]  = true;
+        notifications_subspace_[QStringLiteral("bell")] = false;
+        QString const bellDefaultPath = QStringLiteral(
+            "/usr/share/js8call-subspace/sounds/DingDing.wav");
+        notifications_paths_[QStringLiteral("bell")] =
+            QFile::exists(bellDefaultPath) ? bellDefaultPath : QString();
+    }
 }
 
 void Configuration::impl::find_audio_devices() {
