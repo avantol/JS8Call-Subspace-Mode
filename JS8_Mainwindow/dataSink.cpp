@@ -77,6 +77,51 @@ void smo(float const *const a, float *const b, int const npts, int const nadd) {
 
 //-------------------------------------------------------------- dataSink()
 void UI_Constructor::dataSink(qint64 frames) {
+    // [BUILD 332+ dataSinkSkip] Skip the entire FFT/waterfall/legacy-
+    // decoder pipeline during our own Subspace (FT2) TX. Rationale:
+    // operators who enable their radio's "Monitor" function have
+    // their own outgoing signal routed back into the receiver; without
+    // this gate that signal gets FFT'd, painted on the waterfall, and
+    // (harmlessly) fed to a decoder that will immediately return
+    // because of its own m_transmitting gate. Skipping here also
+    // freezes waterfall scroll for the TX duration, keeping the
+    // last meaningful RX data visible longer.
+    //
+    // Safety: Detector::writeData keeps filling the L2 ring buffer
+    // independently, so FT2 async decode of incoming ACK/NACK is
+    // unaffected. Static locals (ja, k0, ssum, lastCycle) self-heal
+    // via line 276 (ja = k) and cycle-boundary ssum reset on the
+    // first post-TX dataSink call. Legacy JS8 decoder is already
+    // gated on m_transmitting at decode() line ~1726.
+    //
+    // Waterfall scroll: mainwindow::dataSink is the only feeder of
+    // spectrum data into WideGraph::dataSink, but WideGraph runs its
+    // own 4 Hz draw timer that scrolls the pixmap regardless of new
+    // data. To visibly freeze scroll during our TX, flip
+    // WideGraph::setPaused(true) on entry and restore it on the first
+    // post-TX call. s_txPausedWaterfall tracks that WE were the one
+    // who paused, so we don't clobber the user's Monitor-toggle state.
+    //
+    // Note on d2 / L2 ring content during TX: Detector::writeData is
+    // gated by Detector::m_txSuppress (set true here around Subspace
+    // TX from mainwindow) and writes zeros into both buffers for the
+    // TX duration. That kills at-source any Monitor-loopback signal
+    // that would otherwise (a) render on the waterfall via FFT and
+    // (b) get picked up by the L2 async decoder and painted as an
+    // own-call annotate label. No downstream cleanup needed here.
+    static bool s_txPausedWaterfall = false;
+    if (m_transmitting && m_nSubMode == Varicode::JS8CallFT2) {
+        if (!s_txPausedWaterfall && m_wideGraph) {
+            m_wideGraph->setPaused(true);
+            s_txPausedWaterfall = true;
+        }
+        return;
+    }
+    if (s_txPausedWaterfall && m_wideGraph) {
+        m_wideGraph->setPaused(!m_monitoring);
+        s_txPausedWaterfall = false;
+    }
+
     constexpr int NMAX = JS8_NTMAX * 12000;
     constexpr int nfft3 = 16384;
     constexpr std::array nch = {1, 2, 4, 9, 18, 36, 72};

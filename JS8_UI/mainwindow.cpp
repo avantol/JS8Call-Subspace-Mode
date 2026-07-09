@@ -3100,6 +3100,13 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         }
 
         m_transmitting = true;
+        // [TX-SUPPRESS] Subspace TX: force the audio-input side to
+        // write zeros into d2 and the L2 ring so an operator's radio
+        // Monitor loopback can't paint our own signal on the waterfall
+        // nor trigger the L2 decoder to label our own callsign.
+        if (m_nSubMode == Varicode::JS8CallFT2 && m_detector) {
+            m_detector->setTxSuppress(true);
+        }
         transmitDisplay(true);
         statusUpdate();
 
@@ -3938,6 +3945,13 @@ void UI_Constructor::stopTx() {
 
     m_btxok = false;
     m_transmitting = false;
+    // [TX-SUPPRESS] Release the audio-input suppression flag now that
+    // our TX has ended so incoming RX audio flows through d2 / L2 ring
+    // again. Set for both modes to be safe; audio thread is a no-op
+    // when suppress was already false.
+    if (m_detector) {
+        m_detector->setTxSuppress(false);
+    }
     m_iptt = 0;
     m_lastTxStopTime = DriftingDateTime::currentDateTimeUtc();
     if (!m_tx_watchdog) {
@@ -6049,34 +6063,18 @@ void UI_Constructor::on_sendVisibleHailAction_triggered() {
     if (m_nSubMode != Varicode::JS8CallFT2) {
         JS8MessageBox::information_message(
             this, QStringLiteral("Subspace required"),
-            QStringLiteral("Visible Hail transmits on the Subspace (FT2) "
-                           "submode. Switch to ⚡ first."));
+            QStringLiteral("Audio-Visual HAIL transmits in Subspace "
+                           "mode. Switch to ⚡ first."));
         return;
     }
     if (m_transmitting || m_tune) {
         return;  // ignore if already TX-ing
     }
-    // [BUILD 331-avHailGroupDialog] When a group / @ALLCALL is
-    // selected as the active peer, show the "Select a call sign"
-    // dialog instead of silently disabling the menu. Matches the
-    // existing Send-ARQ / Send-file pattern — operators learn what
-    // to do, rather than seeing a greyed menu item with no
-    // explanation.
-    {
-        QString const selCall = callsignSelected();
-        if (isGroupCallIncluded(selCall) || isAllCallIncluded(selCall)) {
-            JS8MessageBox::information_message(
-                this,
-                QStringLiteral("Select a call sign"),
-                QStringLiteral("Audio-visual HAIL targets a single "
-                               "station. Pick one from Call Activity "
-                               "or type it as the first word in the "
-                               "outgoing box. Group targets "
-                               "(@ALLCALL, @PUBLIC, custom groups) "
-                               "are not supported for this action."));
-            return;
-        }
-    }
+    // [BUILD 331+ avHailNoPeerGate] AV HAIL is a broadcast HAIL
+    // (`<mycall>: @ALLCALL ACK`) plus two diag epilog frames — it
+    // does NOT address a specific peer. Fires regardless of what's
+    // selected in Call Activity (or nothing at all). Earlier group /
+    // @ALLCALL gate + "Select a call sign" dialog removed.
 
     QString const myCallUp = m_config.my_callsign().trimmed().toUpper();
     QString const hailText =
@@ -8033,6 +8031,20 @@ QString UI_Constructor::callsignSelected(bool) {
 // --- Selection spec: central entry points ---
 
 void UI_Constructor::selectCallsign(QString call, int submode) {
+    if (call.isEmpty())
+        return;
+
+    // [TODO #84] Strip trailing punctuation from the selected
+    // callsign. Clicking a message whose freetext begins with
+    // "KN4WRX," would otherwise capture "KN4WRX," and send a
+    // directed reply to that literal — invalid callsign on the
+    // wire. Leading affixes like /P/M and '@' groups are preserved
+    // (only trailing non-alphanumeric characters strip).
+    while (!call.isEmpty()) {
+        QChar const c = call.back();
+        if (c.isLetterOrNumber() || c == QLatin1Char('/')) break;
+        call.chop(1);
+    }
     if (call.isEmpty())
         return;
 

@@ -209,8 +209,22 @@ qint64 Detector::writeData(char const *const data, qint64 const maxSize) {
             // the buffer is indexed via (pos % m_l2RingSize).
             std::int64_t l2pos =
                 m_l2RingBuf ? m_l2RingPos->load(std::memory_order_relaxed) : 0;
+            // Subspace TX suppression: during our own FT2 TX, skip
+            // BOTH the d2 write and the L2 ring write, and skip
+            // advancing kin / l2pos. Downsampler still runs so filter
+            // state stays coherent. Writing zeros here would pollute
+            // the noise-floor / RMS estimates that the L2 decoder and
+            // the waterfall FFT depend on; skipping outright leaves
+            // both buffers holding contiguous real-audio content
+            // (pre-TX joined seamlessly with post-TX), which is what
+            // gives an accurate noise floor. Toggled from the GUI
+            // thread via setTxSuppress().
+            bool const suppress =
+                m_txSuppress.load(std::memory_order_relaxed);
             for (std::size_t i = 0; i < m_samplesPerFFT; ++i) {
                 auto sample = m_filter.downSample(&m_buffer[i * Filter::NDOWN]);
+                if (suppress) continue;
+
                 if (d2ok)
                     dec_data.d2[dec_data.params.kin++] = sample;
 
