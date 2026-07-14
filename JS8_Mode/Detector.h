@@ -95,18 +95,9 @@ class Detector : public AudioDevice {
         m_l2RingPos = pos;
     }
 
-    // Subspace TX suppression: while set, samples are neither written
-    // into d2 nor into the L2 ring, and the kin / l2pos counters are
-    // not advanced during our TX. Downsampler still runs so filter
-    // state stays coherent. Writing zeros instead would pull down the
-    // noise-floor / RMS estimates that both the waterfall FFT and the
-    // L2 async decoder rely on for sync thresholds; skipping outright
-    // leaves both buffers holding contiguous real-audio content
-    // (pre-TX joined seamlessly with post-TX, with no zero-filled gap).
-    // Toggled from the GUI thread; audio thread reads relaxed atomic.
-    void setTxSuppress(bool suppress) {
-        m_txSuppress.store(suppress, std::memory_order_relaxed);
-    }
+    // [BUILD 334] build-333's setTxSuppress/m_txSuppress removed —
+    // the TX-time write skip spliced the L2 ring and caused async-ARQ
+    // losses adjacent to our own transmissions. See Detector.cpp.
 
     // Accessors
 
@@ -149,9 +140,6 @@ class Detector : public AudioDevice {
     std::int16_t *m_l2RingBuf = nullptr;
     int m_l2RingSize = 0;
     std::atomic<std::int64_t> *m_l2RingPos = nullptr;
-
-    // Subspace TX-suppression flag (see setTxSuppress above).
-    std::atomic<bool> m_txSuppress{false};
 };
 
 #endif

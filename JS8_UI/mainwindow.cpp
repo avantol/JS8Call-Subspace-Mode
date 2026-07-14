@@ -2366,9 +2366,16 @@ void UI_Constructor::decodeDone() {
 
     // cleanup old cached messages (messages > submode period old)
 
+    // [POS-DEDUP 2026-07-14] Entry value is now FrameCacheEntry
+    // (recent occurrences). Evict on the NEWEST occurrence's age.
+    // Safe floor: the L2 ring holds 7.5 s, so an entry older than
+    // one period (>= 15 s via the mode-agnostic key 0) can no longer
+    // be re-decoded from the ring and carries no dedup value.
     std::erase_if(m_messageDupeCache, [](auto const &it) {
-        return it.second.secsTo(QDateTime::currentDateTimeUtc()) >
-               JS8::Submode::period(it.first.submode);
+        return it.second.n == 0 ||
+               it.second.occ[0].when.secsTo(
+                   QDateTime::currentDateTimeUtc()) >
+                   JS8::Submode::period(it.first.submode);
     });
 
     decodeBusy(false);
@@ -2777,7 +2784,7 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
     // FT2 per-period diagnostic: log once per period at the TX delay window
     if (m_nSubMode == Varicode::JS8CallFT2 && time_is_in_tx_delay &&
         m_iptt == 0 && !m_tune) {
-        qWarning() << "[FT2-TX] prepareSending state:"
+        qCDebug(mainwindow_js8) << "[FT2-TX] prepareSending state:"
                     << "sec=" << seconds_into_the_period
                     << "timeToSend=" << m_timeToSend
                     << "btxok=" << m_btxok
@@ -2831,16 +2838,18 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
 // 297 unifies the pad at 250ms in Modulator.cpp for BOTH modes, so
 // relaxed TX now puts the same amount of silence before the Costas
 // as non-relaxed. Expected: relaxed mode now decodes reliably too.
-// [BUILD 309 TODO #72] Platform-gated: enable async (relaxed) ARQ TX
-// on Windows / macOS where the audio stack is clean; force period-
-// aligned on Linux. Empirical evidence from 2026-06-17 testing:
-// Linux PipeWire-mediated TX produces ~8x more mid-chunk frame loss
-// than Windows audio for the same code, causing the chunked-ARQ
-// retry rate to spike. Linux uptake is low and period-aligned ARQ
-// is proven clean on Linux, so just disable the async path there.
-#if !defined(Q_OS_LINUX)
+// [BUILD 334 TODO #72 CLOSED] Async ARQ TX enabled on ALL platforms.
+// The build-309 Linux platform gate is removed: the "Linux async
+// frame loss" was never the TX audio stack — it was the receiver's
+// input pipeline discarding the partial downsample block at every
+// 60 s period wrap (Detector::writeData, inherited from WSJT-X;
+// see Detector.cpp for the full story). Aligned traffic dodged the
+// discard by arithmetic (16 x 3.75 s = 60 s); async traffic walked
+// into it. With the discard removed (build 334), async transfers
+// run clean on Linux: 22/22 chunks, zero retries, wired A/B
+// 2026-07-14. Also fixed en route: PulseAudio tail truncation
+// (Modulator 250 ms post-roll) and position-keyed decode dedup.
 #define ARQ_TX_ASYNC 1
-#endif
     //
     // ^^ Comment-out the #define line above for the period-aligned
     //    test build. Uncomment for the async build.
@@ -3000,7 +3009,7 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
             m_currentMessage = QString::fromLatin1(msgsent).trimmed();
             m_currentMessageBits = msgibits;
 
-            qWarning() << "[FT2-TX] native frame:" << frame
+            qCDebug(mainwindow_js8) << "[FT2-TX] native frame:" << frame
                        << "bits=" << m_i3bit
                        << "itone[0..4]=" << itone[0] << itone[1]
                        << itone[2] << itone[3] << itone[4];
@@ -3100,13 +3109,11 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         }
 
         m_transmitting = true;
-        // [TX-SUPPRESS] Subspace TX: force the audio-input side to
-        // write zeros into d2 and the L2 ring so an operator's radio
-        // Monitor loopback can't paint our own signal on the waterfall
-        // nor trigger the L2 decoder to label our own callsign.
-        if (m_nSubMode == Varicode::JS8CallFT2 && m_detector) {
-            m_detector->setTxSuppress(true);
-        }
+        // [BUILD 334] build-333 TX-SUPPRESS removed — the Detector
+        // now captures continuously through our own TX (pre-333
+        // behavior); the ring splice it created broke async ARQ
+        // reception adjacent to our transmissions. Waterfall still
+        // doesn't paint own TX (dataSink gate + WideGraph pause).
         transmitDisplay(true);
         statusUpdate();
 
@@ -3203,7 +3210,7 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
     if (m_nSubMode == Varicode::JS8CallFT2 && m_transmitting && m_iptt == 1
         && !m_tune
         && okToStopTx) {
-        qWarning() << "[FT2-TX] waveform poll: done, triggering stopTx()"
+        qCDebug(mainwindow_js8) << "[FT2-TX] waveform poll: done, triggering stopTx()"
                    << "arqFullRelaxStopTx=" << arqFullRelaxStopTx
                    << "audioActuallyStarted=" << audioActuallyStarted;
         stopTx();
@@ -3917,7 +3924,7 @@ void UI_Constructor::stopTx() {
             (tAudioStart > 0 && tAudioEnd > 0) ? (tAudioEnd - tAudioStart) : -1;
         qint64 const msAudioEndToStopTx =
             (tAudioEnd > 0) ? (nowMsCadence - tAudioEnd) : -1;
-        qWarning() << "[AUDIO-CADENCE] tPtt=" << ttsPtt
+        qCDebug(mainwindow_js8) << "[AUDIO-CADENCE] tPtt=" << ttsPtt
                    << "tAudioStart=" << tAudioStart
                    << "tAudioEnd=" << tAudioEnd
                    << "msPttToAudioStart=" << msPttToAudioStart
@@ -3945,13 +3952,6 @@ void UI_Constructor::stopTx() {
 
     m_btxok = false;
     m_transmitting = false;
-    // [TX-SUPPRESS] Release the audio-input suppression flag now that
-    // our TX has ended so incoming RX audio flows through d2 / L2 ring
-    // again. Set for both modes to be safe; audio thread is a no-op
-    // when suppress was already false.
-    if (m_detector) {
-        m_detector->setTxSuppress(false);
-    }
     m_iptt = 0;
     m_lastTxStopTime = DriftingDateTime::currentDateTimeUtc();
     if (!m_tx_watchdog) {
@@ -4014,7 +4014,7 @@ void UI_Constructor::stopTx() {
     bool shouldContinue = prepareNextMessageFrame();
 #endif
     if (m_nSubMode == Varicode::JS8CallFT2)
-        qWarning() << "[FT2-TX] stopTx: shouldContinue=" << shouldContinue
+        qCDebug(mainwindow_js8) << "[FT2-TX] stopTx: shouldContinue=" << shouldContinue
                    << "m_auto=" << m_auto << "m_txFrameCount=" << m_txFrameCount;
     if (!shouldContinue) {
         // TODO: jsherer - split this up...
@@ -9317,7 +9317,7 @@ void UI_Constructor::l2DecodeDone() {
     auto now = QDateTime::currentMSecsSinceEpoch();
     auto delay = m_l2DecodeFinishedMs > 0 ? now - m_l2DecodeFinishedMs : -1;
     if (delay > 500)
-        qWarning() << "[FT2-L2] signal delivery delay:" << delay << "ms";
+        qCDebug(mainwindow_js8) << "[FT2-L2] signal delivery delay:" << delay << "ms";
     m_l2Decoding = false;
     // Immediately start next decode — no waiting for timer.
     l2TryDecode("chain");
@@ -9412,7 +9412,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
             // audio at +3 dB SNR. Need to see every sync-scan pass'
             // best score to determine if the decoder even SAW the
             // frame's Costas tones, or if sync detection failed.
-            qWarning() << "[RX-PROBE] L2 sync scan:" << syncMs << "ms"
+            qCDebug(mainwindow_js8) << "[RX-PROBE] L2 sync scan:" << syncMs << "ms"
                        << "nfreqs=" << nScanFreqs
                        << "sync=" << syncBest << "freq=" << syncFreq
                        << "ibest=" << syncIbest << "idf=" << syncIdf;
@@ -9474,7 +9474,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
         // scan probe above so we can see which decode passes found
         // a frame vs which missed. Critical: ndecoded=0 with high
         // syncBest means sync detected the frame but LDPC failed.
-        qWarning() << "[RX-PROBE] L2 decode took" << elapsed << "ms"
+        qCDebug(mainwindow_js8) << "[RX-PROBE] L2 decode took" << elapsed << "ms"
                    << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
                    << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
                    << "sync=" << syncBest;
@@ -9497,7 +9497,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
             std::int64_t age = curPos - m_l2KnownPos[i];
             if (age > FT2_L2_RINGSIZE) {
                 // This known frame is old enough to have left the buffer
-                qWarning() << "[FT2-L2] expiring known frame" << i
+                qCDebug(mainwindow_js8) << "[FT2-L2] expiring known frame" << i
                             << "age=" << age;
                 int remaining = m_l2NKnown - i - 1;
                 if (remaining > 0) {

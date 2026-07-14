@@ -162,12 +162,27 @@ void Detector::resetBufferContent() {
 qint64 Detector::writeData(char const *const data, qint64 const maxSize) {
     QMutexLocker mutex(&m_lock);
 
-    // When ns has wrapped around to zero, restart the buffers.
+    // When ns has wrapped around to zero, restart the d2 buffer.
+    //
+    // [BUILD 334 TODO #72 ROOT CAUSE] The original WSJT-X code also
+    // zeroed m_bufferPos here, discarding the partially-accumulated
+    // downsample block — up to ~341 ms of input audio, silently
+    // spliced out of BOTH d2 and the L2 ring at every period wrap
+    // (60 s). Harmless in a synchronous protocol (the period
+    // boundary is dead air by design, and 16 x 3.75 s = 60 s keeps
+    // aligned Subspace frames clear of it), but fatal for async ARQ:
+    // the wrap lands mid-frame ~67% of the time, excising ~7 symbols
+    // and one of the four Costas arrays. Proven 2026-07-14 via ring
+    // dumps: repeated interior 170 ms excisions, 14.4 s cumulative
+    // ring deficit over 101 minutes, one event per wrap. The partial
+    // block now carries across the wrap: the ring is continuous, and
+    // d2's first samples after kin=0 predate the boundary by up to
+    // one block — a small constant dt bias the period decoder's
+    // search tolerates (and Subspace never uses that decoder).
 
     int const ns = secondInPeriod();
     if (ns < m_ns) {
         dec_data.params.kin = 0;
-        m_bufferPos = 0;
     }
     m_ns = ns;
 
@@ -209,22 +224,17 @@ qint64 Detector::writeData(char const *const data, qint64 const maxSize) {
             // the buffer is indexed via (pos % m_l2RingSize).
             std::int64_t l2pos =
                 m_l2RingBuf ? m_l2RingPos->load(std::memory_order_relaxed) : 0;
-            // Subspace TX suppression: during our own FT2 TX, skip
-            // BOTH the d2 write and the L2 ring write, and skip
-            // advancing kin / l2pos. Downsampler still runs so filter
-            // state stays coherent. Writing zeros here would pollute
-            // the noise-floor / RMS estimates that the L2 decoder and
-            // the waterfall FFT depend on; skipping outright leaves
-            // both buffers holding contiguous real-audio content
-            // (pre-TX joined seamlessly with post-TX), which is what
-            // gives an accurate noise floor. Toggled from the GUI
-            // thread via setTxSuppress().
-            bool const suppress =
-                m_txSuppress.load(std::memory_order_relaxed);
+            // [BUILD 334 REVERT of build-333 txSkip] Samples flow
+            // unconditionally, own-TX included — pre-333 behavior.
+            // The TX-time skip spliced pre-TX audio directly against
+            // post-TX audio in the L2 ring; under async ARQ the
+            // peer's follow-on frames and ACKs arrive adjacent to
+            // that splice, and the two dominant async-only failure
+            // classes (leading-frame losses, ACK timeouts) both map
+            // to own-TX adjacency. Operator decision 2026-07-14:
+            // eliminate the splice as an issue.
             for (std::size_t i = 0; i < m_samplesPerFFT; ++i) {
                 auto sample = m_filter.downSample(&m_buffer[i * Filter::NDOWN]);
-                if (suppress) continue;
-
                 if (d2ok)
                     dec_data.d2[dec_data.params.kin++] = sample;
 

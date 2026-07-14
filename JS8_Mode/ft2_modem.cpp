@@ -34,6 +34,7 @@
 #include <mutex>
 #include <vector>
 
+
 namespace FT2 {
 
 // ---------------------------------------------------------------------------
@@ -1108,6 +1109,38 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
     float syncmin_scan = (ndepth0 >= 3) ? 0.50f : 0.60f;
     bool dobigfft = true;
 
+    // [TOP-K SYNC 2026-07-13 TODO #72] Per candidate frequency, collect
+    // the top few non-overlapping time-offset sync peaks instead of the
+    // single strongest. In an ARQ session every frame shares one
+    // frequency, so winner-take-all position selection let a strong
+    // already-decoded frame still inside the 7.5 s window monopolize
+    // the frequency's only decode slot — Phase 2 then discarded it as
+    // a known duplicate and the pass ended with nothing, starving any
+    // fresh frame at the same frequency for its entire window
+    // residence (observed as silent mid-chunk frame loss under async
+    // ARQ TX). Multiple hits per frequency let the existing known-bits
+    // dupe check do its job per position: stale peaks get discarded,
+    // fresh ones decode. Distinct frames are >= one PTT interval
+    // (>= 5000 decimated samples) apart, so half-frame suppression
+    // around each picked peak can't split one frame into two hits.
+    //
+    // [topkSync2 REGRESSION FIX 2026-07-13] Top-K applies ONLY to the
+    // single-candidate SYNC-HIT path (nfqso_only, ncand==1) — which is
+    // where the frame starvation occurs. In the FULL-SCAN path,
+    // getCandidates returns up to ~300 candidates with a deliberately
+    // low single-frame threshold; taking 4 peaks per candidate let
+    // ~13 noise candidates fill all MAXHITS(50) hit slots before the
+    // scan ever reached the real signal's frequency — total decode
+    // failure (A/B confirmed by WM8Q 2026-07-13: stock 333 decoded,
+    // first topkSync build decoded nothing on the identical strong
+    // signal). Full scan keeps the original one-peak-per-candidate
+    // behavior; the fast path gets the top-K fix.
+    const int KPEAKS = (ncand == 1) ? 4 : 1;           // max distinct frames in 7.5 s
+    constexpr int SCAN_STEP = 8;
+    const int ndmax_scan = NDMAX - NN*NSS + 320;
+    const int nbins      = (ndmax_scan + 688) / SCAN_STEP + 1;
+    const int sepBins    = (NN*NSS / 2) / SCAN_STEP;   // half-frame separation
+
     for (int icand = 0; icand < ncand && nhits < MAXHITS; icand++) {
         float f0   = candidate[icand][0];
         float snr0 = candidate[icand][1] - 1.0f;
@@ -1123,34 +1156,45 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
         sum2 /= (float)NP;
         if (sum2 > 0.f) { float inv=1.f/sqrtf(sum2); for(int n=0;n<NP;n++) cd2[n]*=inv; }
 
-        // Coarse scan: DT step 8, freq offset ±12 step 3
-        int   ibest_c = -1, idfbest_c = 0;
-        float smax_c  = -99.f;
+        // Coarse scan: DT step 8, freq offset ±12 step 3 — record the
+        // best sync per time bin (best over idf), not one global max.
+        std::vector<float> binSync(nbins, -99.f);
+        std::vector<int>   binIdf(nbins, 0);
         for (int idf = -12; idf <= 12; idf += 3) {
             const Cx *ctwk = g.ctwk2[idf + 16];
-            int ndmax_scan = NDMAX - NN*NSS + 320;
-            for (int istart = -688; istart <= ndmax_scan; istart += 8) {
+            int b = 0;
+            for (int istart = -688; istart <= ndmax_scan; istart += SCAN_STEP, ++b) {
                 float sync; sync2d(cd2, istart, ctwk, sync);
-                if (sync > smax_c) { smax_c=sync; ibest_c=istart; idfbest_c=idf; }
+                if (sync > binSync[b]) { binSync[b] = sync; binIdf[b] = idf; }
             }
         }
 
         // For single-frame (nknown==0): the normalization at sum2/=NP
         // dilutes the sync score because the frame occupies only NN*NSS
-        // of NP samples. Boost smax_c by sqrt(NP/(NN*NSS)) ≈ sqrt(9.7) ≈ 3.1
+        // of NP samples. Boost by sqrt(NP/(NN*NSS)) ≈ sqrt(9.7) ≈ 3.1
         // to compensate. This makes single-frame sync scores comparable
         // to multi-frame scores without changing the detector math.
-        float smax_adj = smax_c;
-        if (nknown == 0) {
-            static const float normBoost = sqrtf((float)NP / (float)(NN * NSS));
-            smax_adj *= normBoost;
-        }
-        if (smax_adj >= syncmin_scan) {
+        static const float normBoost = sqrtf((float)NP / (float)(NN * NSS));
+
+        // Greedy peak-pick: take the strongest bin, suppress a half-
+        // frame around it, repeat up to KPEAKS times. Stop as soon as
+        // the best remaining peak falls below threshold — anything
+        // after it is weaker still.
+        for (int k = 0; k < KPEAKS && nhits < MAXHITS; ++k) {
+            int bmax = -1; float smax_c = -99.f;
+            for (int b = 0; b < nbins; ++b)
+                if (binSync[b] > smax_c) { smax_c = binSync[b]; bmax = b; }
+            if (bmax < 0) break;
+            float const smax_adj = (nknown == 0) ? smax_c * normBoost : smax_c;
+            if (smax_adj < syncmin_scan) break;
             hit_freq[nhits]  = f0;
-            hit_ibest[nhits] = ibest_c;
-            hit_idf[nhits]   = idfbest_c;
+            hit_ibest[nhits] = -688 + bmax * SCAN_STEP;
+            hit_idf[nhits]   = binIdf[bmax];
             hit_snr[nhits]   = snr0;
             nhits++;
+            for (int b = std::max(0, bmax - sepBins);
+                 b < std::min(nbins, bmax + sepBins + 1); ++b)
+                binSync[b] = -99.f;
         }
     }
 
@@ -1161,7 +1205,16 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
     int8_t prev_bits[MAXDEC][77] = {};
 
     float smaxthresh = (ndepth0 >= 3) ? 0.65f : 0.80f;
+    // [BUILD 334] l2parity experiment (nsq 12, matching the never-
+    // validated decodeFT2 port) reverted: it produced no measurable
+    // improvement (12 retries vs 10) and is untested at low SNR
+    // (ghost-decode risk). Original inherited value restored.
     int   nsync_qual_min = (ndepth0 >= 3) ? 18 : 20;
+
+    // [2026-07-14 TEST A] hit-probe logging removed: the per-pass
+    // qWarning I/O (unbuffered TraceFile flush, 10-30 lines/s) is
+    // itself a suspect for RX capture overruns causing mid-frame
+    // sample loss. Re-add with BUFFERED logging if needed again.
 
     for (int ihit = 0; ihit < nhits && local_ndecoded < MAXDEC; ihit++) {
         float f0     = hit_freq[ihit];
@@ -1243,7 +1296,10 @@ void triggeredDecodeFT2(const int16_t *iwave, int nfqso, int nfa, int nfb,
         float llra[2*ND], llrb[2*ND], llrc[2*ND], llrd[2*ND], llre[2*ND];
         extractLLR(bitmetrics, llra, llrb, llrc, llrd, llre);
 
-        // Adaptive pass count by sync quality
+        // Adaptive pass count by sync quality (Build 46). The
+        // build-334 l2parity experiment (always 5 variants) showed no
+        // improvement and was reverted; revisit only with a low-SNR
+        // A/B if L2 sensitivity ever needs a squeeze.
         int npassmax = 5;
         if (nsq > 28)         npassmax = 1;
         else if (nsq > 22)    npassmax = 2;

@@ -185,7 +185,24 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                            known_bits, nknown, nfqso_only, sync_score);
 
     if (ndecoded > 0)
-        qWarning() << "[FT2-L2] ft2_triggered_decode returned ndecoded=" << ndecoded;
+        qDebug() << "[FT2-L2] ft2_triggered_decode returned ndecoded=" << ndecoded;
+
+    // [GARBAGE-STATE FIX 2026-07-13 TODO #72] Frames rejected by the
+    // garbage filter below must not update caller-visible decoder
+    // state. Previously decoded_bits_out / decoded_freq_out carried
+    // ALL raw decodes, so a noise artifact (CRC14-passing garbage at
+    // a random frequency) would (a) steer m_l2SignalFreq to that
+    // frequency, blinding the ±100 Hz sync monitor, and (b) enter the
+    // known-frames list, flipping nknown>0 which TRIPLES the single-
+    // frame candidate threshold in ft2_triggered_decode's full scan
+    // (cand_syncmin 0.20 -> 0.60) — making the decoder deaf to lone
+    // frames (ARQ ACKs) for the garbage entry's 7.5 s lifetime.
+    // Observed 2026-07-13: remote missed WM8Q's ACK for 10+ s while a
+    // filtered artifact at 603 Hz sat in its known list. Only frames
+    // that PASS the filter now reach the outputs.
+    std::int8_t keptBits[77 * 20] = {};
+    int nKept = 0;
+    float keptFreq = 0.0f;
 
     std::size_t count = 0;
     for (int d = 0; d < ndecoded; ++d) {
@@ -261,18 +278,26 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
             .l2 = true
         });
 
+        // Filter passed — this frame may update caller-visible state.
+        std::memcpy(keptBits + nKept * 77, bits, 77);
+        if (nKept == 0)
+            keptFreq = freq;
+        ++nKept;
+
         ++count;
     }
 
-    // Return raw decoded bits so caller can build known-frame list
+    // Return decoded bits (filter-passing frames only) so caller can
+    // build the known-frame list without garbage entries.
     if (decoded_bits_out && ndecoded_out) {
-        std::memcpy(decoded_bits_out, msgbits_out, 77 * 20);
-        *ndecoded_out = ndecoded;
+        std::memcpy(decoded_bits_out, keptBits, 77 * 20);
+        *ndecoded_out = nKept;
     }
 
-    // Return first decoded frequency so caller can target future decodes
-    if (decoded_freq_out && ndecoded > 0)
-        *decoded_freq_out = freq_out[0];
+    // Return first filter-passing frequency so caller can target
+    // future decodes — never a garbage artifact's frequency.
+    if (decoded_freq_out && nKept > 0)
+        *decoded_freq_out = keptFreq;
 
     return count;
 }

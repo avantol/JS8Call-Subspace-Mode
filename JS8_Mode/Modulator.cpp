@@ -44,7 +44,7 @@ void Modulator::start(double const frequency, int const submode,
 
     ++m_txCycleCount;
     const State current_state = m_state.load();
-    qWarning() << "[FT2-TX] Modulator::start() cycle#" << m_txCycleCount
+    qCDebug(modulator_js8) << "[FT2-TX] Modulator::start() cycle#" << m_txCycleCount
                << "freq=" << frequency
                << "submode=" << submode << "state=" << (int)current_state
                << "tuning=" << m_tuning;
@@ -96,7 +96,7 @@ void Modulator::start(double const frequency, int const submode,
         m_ft2Wave = m_boltWaveform.data();
         m_ft2WaveLen = m_boltWaveform.size();
         m_useFullFrameBolt.store(false);
-        qWarning() << "[FT2-TX] ⚡ FULL-FRAME bolt: playing"
+        qCDebug(modulator_js8) << "[FT2-TX] ⚡ FULL-FRAME bolt: playing"
                     << m_boltWaveform.size() << "samples ("
                     << (m_boltWaveform.size() * 1000 / FRAME_RATE)
                     << "ms) at" << frequency << "Hz";
@@ -158,7 +158,7 @@ void Modulator::start(double const frequency, int const submode,
         // (see setBoltOnlyWaveform).
         constexpr unsigned UNIFIED_PRE_SILENCE_MS = 250;
         m_silentFrames = UNIFIED_PRE_SILENCE_MS * FRAME_RATE / MS_PER_SEC;
-        qWarning() << "[TX-CADENCE] Modulator path: UNIFIED"
+        qCDebug(modulator_js8) << "[TX-CADENCE] Modulator path: UNIFIED"
                    << "periodOffsetMS=" << periodOffsetMS
                    << "padMS=" << UNIFIED_PRE_SILENCE_MS
                    << "silentFrames=" << m_silentFrames
@@ -185,7 +185,7 @@ void Modulator::start(double const frequency, int const submode,
             m_state.store(State::Active);
         }
         m_stream = stream;
-        qWarning() << "[FT2-TX] Modulator::start() warm restart from KeepAlive"
+        qCDebug(modulator_js8) << "[FT2-TX] Modulator::start() warm restart from KeepAlive"
                     << "cycle#" << m_txCycleCount
                     << "ft2Mode=" << m_ft2Mode
                     << "state=" << (int)m_state.load();
@@ -215,7 +215,7 @@ void Modulator::start(double const frequency, int const submode,
 
         m_stream = stream;
         if (m_stream) {
-            qWarning() << "[FT2-TX] Modulator::start() calling m_stream->restart()"
+            qCDebug(modulator_js8) << "[FT2-TX] Modulator::start() calling m_stream->restart()"
                         << "cycle#" << m_txCycleCount
                         << "ft2Mode=" << m_ft2Mode
                         << "ft2WaveLen=" << m_ft2WaveLen
@@ -244,7 +244,7 @@ void Modulator::tune(bool const tuning) {
  * @param quickClose
  */
 void Modulator::stop(bool const quickClose) {
-    qWarning() << "[FT2-TX] Modulator::stop() quickClose=" << quickClose
+    qCDebug(modulator_js8) << "[FT2-TX] Modulator::stop() quickClose=" << quickClose
                << "cycle#" << m_txCycleCount
                << "state=" << (int)m_state.load();
     if (quickClose) {
@@ -379,11 +379,27 @@ qint64 Modulator::readData(char *const data, qint64 const maxSize) {
                     QDateTime::currentMSecsSinceEpoch(),
                     std::memory_order_relaxed);
             }
-            // After waveform ends, stay Active and feed silence until
-            // stop() is called by stopTx(). Don't set State::Idle here —
-            // that causes readData to return 0, triggering QAudioSink
-            // UnderrunError which kills audio after a few cycles.
-            // Fall through to silence padding below.
+            // [POST-ROLL 2026-07-13 TODO #72] Written silent tail —
+            // m_ic keeps advancing so isFT2WaveformDone() (and thus
+            // stopTx) only fires after the post-roll has been written.
+            // The queued-but-unplayed span in PulseAudio's client
+            // buffer is then padding, not the trailing Costas array,
+            // so a server-side rewind can't destroy the frame. See
+            // Modulator.h FT2_POSTROLL_FRAMES for the full rationale.
+            while (samples != samplesEnd &&
+                   m_ic >= static_cast<unsigned>(m_ft2WaveLen) &&
+                   m_ic < static_cast<unsigned>(m_ft2WaveLen)
+                              + FT2_POSTROLL_FRAMES) {
+                samples = load(0, samples);
+                ++framesGenerated;
+                ++m_ic;
+            }
+            // After waveform + post-roll end, stay Active and feed
+            // silence until stop() is called by stopTx(). Don't set
+            // State::Idle here — that causes readData to return 0,
+            // triggering QAudioSink UnderrunError which kills audio
+            // after a few cycles. Fall through to silence padding
+            // below.
         } else
 #endif
         {

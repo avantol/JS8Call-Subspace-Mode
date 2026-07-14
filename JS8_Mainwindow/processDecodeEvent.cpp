@@ -87,19 +87,49 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                            << "frame=" << decodedtext.frame()
                            << "msg=" << decodedtext.message();
 
+                // [POS-DEDUP 2026-07-14 TODO #72] Duplicate identity
+                // is (frame bits, buffer position). The monotonic L2
+                // ring counter exists for exactly this: the same
+                // physical transmission re-decoded from the ring has
+                // the same absPos (build 295 invariant) no matter how
+                // much later the pass runs — suppress it FOREVER, not
+                // just for 8 s (stale post-known-expiry re-decodes
+                // were slipping past the time window every ~15 s and
+                // injecting phantom frames into active ARQ chunk
+                // assemblies). Conversely, identical bits at a
+                // distant position (every ARQ chunk's first frame is
+                // bit-identical "K9AVT: WM8Q ") is a NEW transmission
+                // — distinct occurrences are >= one PTT floor apart
+                // (45000 samples @12k), so one frame length (30240)
+                // discriminates unambiguously. Frames without absPos
+                // (standard period decoder) keep the legacy
+                // time-window rule.
+                constexpr std::int64_t POS_DUPE_SPAN = 30240;
                 if (auto const it = m_messageDupeCache.find(dedupeKey);
                     it != m_messageDupeCache.end()) {
-                    auto ageSecs = it->second.secsTo(QDateTime::currentDateTimeUtc());
-                    // FT2 L2: 90K buffer holds ~7.5s, same frame can re-decode
-                    // from non-overlapping buffer positions up to 7.5s apart.
-                    // Use 8s dedup window for FT2, half-period for other modes.
-                    auto window = (decodedtext.submode() == Varicode::JS8CallFT2)
-                        ? 8.0
-                        : 0.5 * JS8::Submode::period(decodedtext.submode());
-                    if (ageSecs < window) {
-                        qCDebug(mainwindow_js8) << "[DECODE-EVENT] DUPLICATE, skipping frame=" << decodedtext.frame()
-                                   << "age=" << ageSecs << "s, window=" << window << "s";
-                        return;
+                    auto const now = QDateTime::currentDateTimeUtc();
+                    auto const window =
+                        (decodedtext.submode() == Varicode::JS8CallFT2)
+                            ? 8.0
+                            : 0.5 * JS8::Submode::period(decodedtext.submode());
+                    for (int i = 0; i < it->second.n; ++i) {
+                        auto const &o = it->second.occ[i];
+                        bool dupe;
+                        if (ev.absPos > 0 && o.absPos > 0) {
+                            dupe = std::llabs(ev.absPos - o.absPos)
+                                       < POS_DUPE_SPAN;
+                        } else {
+                            dupe = o.when.secsTo(now) < window;
+                        }
+                        if (dupe) {
+                            qCDebug(mainwindow_js8)
+                                << "[DECODE-EVENT] DUPLICATE, skipping frame="
+                                << decodedtext.frame()
+                                << "absPos=" << ev.absPos
+                                << "matched=" << o.absPos
+                                << "age=" << o.when.secsTo(now) << "s";
+                            return;
+                        }
                     }
                 }
 #if 0
@@ -117,9 +147,9 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     << JS8::Submode::name(decodedtext.submode())
                     << "decoded text" << decodedtext.message();
 #endif
-                // if the frame is valid, cache it!
-                m_messageDupeCache.insert_or_assign(
-                    dedupeKey, QDateTime::currentDateTimeUtc());
+                // if the frame is valid, record this occurrence!
+                m_messageDupeCache[dedupeKey].add(
+                    {QDateTime::currentDateTimeUtc(), ev.absPos});
 
                 // log valid frames to ALL.txt (and correct their timestamp
                 // format)

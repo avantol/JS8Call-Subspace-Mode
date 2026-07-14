@@ -1058,8 +1058,36 @@ class UI_Constructor : public QMainWindow {
         };
     };
 
+    // [POS-DEDUP 2026-07-14 TODO #72] Dedup identity is the monotonic
+    // L2 buffer position (absPos), per the design intent of the
+    // monotonic ring counter. Each cache entry keeps the last few
+    // occurrences of a frame's bits: a new decode is a duplicate IFF
+    // its absPos falls within one frame-length of a stored occurrence
+    // (same physical transmission re-decoded from the ring). Same
+    // bits at a distant position = a genuinely new transmission (ARQ
+    // chunks all share a bit-identical first frame: "K9AVT: WM8Q " is
+    // exactly one frame) and must pass regardless of arrival time.
+    // Frames without absPos (standard period decoder) fall back to
+    // the legacy time-window check via `when`.
+    struct FrameOccurrence {
+        QDateTime    when;
+        std::int64_t absPos;   // 0 = unknown (standard decoder)
+    };
+    struct FrameCacheEntry {
+        static constexpr int MAX_OCC = 3;
+        FrameOccurrence occ[MAX_OCC];
+        int n = 0;
+        void add(FrameOccurrence const &o) {
+            // keep the newest MAX_OCC occurrences (shift-down ring)
+            for (int i = std::min(n, MAX_OCC - 1); i > 0; --i)
+                occ[i] = occ[i - 1];
+            occ[0] = o;
+            n = std::min(n + 1, MAX_OCC);
+        }
+    };
     using FrameCache =
-        std::unordered_map<FrameCacheKey, QDateTime, FrameCacheKey::Hash>;
+        std::unordered_map<FrameCacheKey, FrameCacheEntry,
+                           FrameCacheKey::Hash>;
     using BandActivity = QMap<int, QList<ActivityDetail>>;
 
     QQueue<DecodeParams> m_decoderQueue;

@@ -39,10 +39,25 @@ class Modulator final : public AudioDevice {
         auto s = m_state.load();
         return s == State::Idle || s == State::KeepAlive;
     }
+    // [POST-ROLL 2026-07-13 TODO #72] 250 ms of written silence after
+    // the FT2 waveform, symmetric with the 250 ms pre-roll (build 297).
+    // PulseAudio's client buffer holds ~200 ms of not-yet-played audio
+    // when the waveform-done poll fires stopTx; server-side buffer
+    // rewinds can discard that queued tail (proven on-wire 2026-07-13:
+    // modulator wrote 2507 ms, wire carried 2320 ms — the trailing
+    // Costas array vanished, ~5% of frames, Linux/Pulse only; WASAPI
+    // has no rewind concept, which is why Windows TX never showed it).
+    // With the post-roll, any discarded tail eats padding, not Costas.
+    // The PTT interval floor (3750 ms) already spaces frames, so the
+    // extra 250 ms costs no throughput.
+    static constexpr int FT2_POSTROLL_FRAMES = 12000;  // 250 ms @ 48 kHz
+
     bool isFT2WaveformDone() const {
         auto s = m_state.load();
         return s == State::Idle || s == State::KeepAlive
-            || (m_ft2Mode && m_ic >= static_cast<unsigned>(m_ft2WaveLen));
+            || (m_ft2Mode &&
+                m_ic >= static_cast<unsigned>(m_ft2WaveLen)
+                            + FT2_POSTROLL_FRAMES);
     }
 
     // [AUDIO-CADENCE PROBE 2026-06-09] Wall-clock timestamps captured

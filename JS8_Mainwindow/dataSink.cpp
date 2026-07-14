@@ -102,13 +102,14 @@ void UI_Constructor::dataSink(qint64 frames) {
     // post-TX call. s_txPausedWaterfall tracks that WE were the one
     // who paused, so we don't clobber the user's Monitor-toggle state.
     //
-    // Note on d2 / L2 ring content during TX: Detector::writeData is
-    // gated by Detector::m_txSuppress (set true here around Subspace
-    // TX from mainwindow) and writes zeros into both buffers for the
-    // TX duration. That kills at-source any Monitor-loopback signal
-    // that would otherwise (a) render on the waterfall via FFT and
-    // (b) get picked up by the L2 async decoder and painted as an
-    // own-call annotate label. No downstream cleanup needed here.
+    // Note on d2 / L2 ring content during TX: as of Build 334 the
+    // Detector captures CONTINUOUSLY through our own TX (build-333's
+    // m_txSuppress was removed — cutting the ring is architecturally
+    // wrong; the ring must stay continuous for the async decoder).
+    // Consequence: with a radio Monitor loopback, our own TX audio is
+    // in the buffers and may decode post-TX as an own-call label —
+    // tracked as TODO #89 for a display-side fix. This early-return
+    // only stops the waterfall FFT/paint during TX, not capture.
     static bool s_txPausedWaterfall = false;
     if (m_transmitting && m_nSubMode == Varicode::JS8CallFT2) {
         if (!s_txPausedWaterfall && m_wideGraph) {
