@@ -301,14 +301,16 @@ void UI_Constructor::onChunkedSendFailed(QString const &peer, int msgId,
     // success path; Warning icon distinguishes at a glance.
     QString body;
     if (total <= 0) {
-        // Pre-flight rejection (busy / too_long) — no chunks were
-        // ever in flight. Show just the reason.
-        body = tr("To: %1\n"
-                  "Super-message #%2 rejected before send.\n\n"
-                  "Reason: %3")
-                   .arg(peer)
-                   .arg(msgId)
-                   .arg(reason);
+        // Pre-flight rejection — no chunks were ever in flight.
+        // [TODO #90 2026-07-14] Plain language for the one case an
+        // operator can act on (message length); every other pre-
+        // flight reason is already in the log (qCWarning above) and
+        // gets NO dialog — jargon reasons confused more than helped.
+        if (reason == QLatin1String("too_long")) {
+            body = tr("Message is too long.");
+        } else {
+            return; // logged; no dialog
+        }
     } else {
         body = tr("To: %1\n"
                   "Super-message #%2\n\n"

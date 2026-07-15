@@ -68,11 +68,16 @@ void SpeechBalloon::showAtTarget() {
     }
 
     // Place the balloon so the tail tip lands GAP_TO_TARGET_PX away
-    // from the target's nearest edge, centered on that edge.
-    QPoint const tgtCenterGlobal = m_target->mapToGlobal(
-        QPoint(m_target->width() / 2, m_target->height() / 2));
-    QRect const tgtRectGlobal(m_target->mapToGlobal(QPoint(0, 0)),
-                              m_target->size());
+    // from the target's nearest edge, centered on that edge. An
+    // override rect (target-local) narrows the anchor to a region of
+    // the widget, e.g. a single menu title inside the menu bar.
+    QRect const local = m_targetRectOverride.isValid()
+                            ? m_targetRectOverride
+                            : QRect(QPoint(0, 0), m_target->size());
+    QPoint const tgtCenterGlobal =
+        m_target->mapToGlobal(local.center());
+    QRect const tgtRectGlobal(m_target->mapToGlobal(local.topLeft()),
+                              local.size());
 
     QPoint pos;
     switch (m_tailSide) {

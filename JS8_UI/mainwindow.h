@@ -56,6 +56,7 @@
 #include "JS8_UI/WideGraph.h"
 #include "JS8_UI/MessagePanel.h"
 #include "LogQSO.h"
+#include "SpotMapWindow.h"
 #include "MessageReplyDialog.h"
 #include "ui_mainwindow.h"
 
@@ -390,6 +391,7 @@ class UI_Constructor : public QMainWindow {
     void on_actionShow_Band_Heartbeats_and_ACKs_triggered(bool checked);
     void on_actionShow_Call_Activity_triggered(bool checked);
     void on_actionShow_Waterfall_triggered(bool checked);
+    void on_actionShow_Spots_Map_triggered(bool checked);
     void on_actionShow_Waterfall_Controls_triggered(bool checked);
     void on_actionShow_Waterfall_Time_Drift_Controls_triggered(bool checked);
     void on_actionReset_Window_Sizes_triggered();
@@ -726,6 +728,7 @@ class UI_Constructor : public QMainWindow {
 
     QScopedPointer<WideGraph> m_wideGraph;
     QScopedPointer<LogQSO> m_logDlg;
+    QScopedPointer<SpotMapWindow> m_spotMapWindow; // "Spots Map" view
     QScopedPointer<HelpTextWindow> m_shortcuts;
     QScopedPointer<HelpTextWindow> m_prefixes;
     QScopedPointer<HelpTextWindow> m_mouseCmnds;

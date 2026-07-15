@@ -2030,6 +2030,8 @@ background-color: #22ff22;
     <addaction name="actionShow_Waterfall_Controls"/>
     <addaction name="actionShow_Waterfall_Time_Drift_Controls"/>
     <addaction name="separator"/>
+    <addaction name="actionShow_Spots_Map"/>
+    <addaction name="separator"/>
     <addaction name="actionShow_Fullscreen"/>
     <addaction name="actionShow_Statusbar"/>
     <addaction name="actionShow_Tooltips"/>
@@ -2201,6 +2203,20 @@ background-color: #22ff22;
    </property>
    <property name="shortcut">
     <string>F4</string>
+   </property>
+  </action>
+  <action name="actionShow_Spots_Map">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Show Spots &amp;Map</string>
+   </property>
+   <property name="toolTip">
+    <string>Live map of where your signal is being heard (PSK Reporter)</string>
    </property>
   </action>
   <action name="actionReset_Window_Sizes">

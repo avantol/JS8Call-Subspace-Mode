@@ -379,6 +379,11 @@ UI_Constructor::~UI_Constructor() {
 
 //-------------------------------------------------------- writeSettings()
 void UI_Constructor::writeSettings() {
+    // Spots Map persists in its own settings group; must run while the
+    // window's visibility state is still meaningful (pre-close).
+    if (m_spotMapWindow)
+        m_spotMapWindow->saveSettings();
+
     m_settings->beginGroup("UI_Constructor");
     m_settings->setValue("geometry", saveGeometry());
     m_settings->setValue("geometryNoControls", m_geometryNoControls);
@@ -1027,6 +1032,17 @@ void UI_Constructor::on_actionShow_Waterfall_triggered(bool checked) {
     ui->bandHorizontalWidget->setVisible(checked);
 }
 
+void UI_Constructor::on_actionShow_Spots_Map_triggered(bool checked) {
+    if (checked) {
+        m_spotMapWindow->setBand(m_lastBand);
+        m_spotMapWindow->show();
+        m_spotMapWindow->raise();
+        m_spotMapWindow->activateWindow();
+    } else {
+        m_spotMapWindow->close();
+    }
+}
+
 void UI_Constructor::on_actionShow_Waterfall_Controls_triggered(bool checked) {
     m_wideGraph->setControlsVisible(checked);
     if (checked && !ui->bandHorizontalWidget->isVisible()) {
@@ -1102,6 +1118,10 @@ void UI_Constructor::openSettings(int tab) {
         if (m_config.my_callsign() != callsign ||
             m_config.my_grid() != my_grid) {
             statusUpdate();
+            // Spots Map: caches and subscription are keyed to the
+            // station — clear and resubscribe.
+            m_spotMapWindow->setStation(m_config.my_callsign(),
+                                        m_config.my_grid());
         }
 
         enable_DXCC_entity(m_config.DXCC()); // sets text window proportions and
@@ -1381,6 +1401,7 @@ void UI_Constructor::updateCurrentBand() {
     }
 
     m_wideGraph->setBand(band_name);
+    m_spotMapWindow->setBand(band_name);
 
     qCDebug(mainwindow_js8) << "setting band" << band_name;
 
@@ -3789,7 +3810,22 @@ void UI_Constructor::startTx() {
             // For now we treat it identically (cancel). If a future use
             // case wants busy → plain-TX fallthrough, branch on result.
             // error here.
-            ui->extFreeTextMsgEdit->clear();
+            //
+            // [TODO #90 2026-07-14] Two fixes on this branch:
+            // (a) do NOT clear the outgoing box — sendRestoreRequested
+            //     (direct connection) has ALREADY restored the
+            //     operator's text inside the sendChunked() call above;
+            //     the old clear() here wiped that restore (defeating
+            //     TODO #51) and made the text silently vanish.
+            // (b) reset the Send button state. The early return left
+            //     startTxButton CHECKED, so the operator's next click
+            //     couldn't re-fire toggled(true) — Send appeared dead
+            //     until a mode switch. Blocker prevents the
+            //     toggled(false) → resetMessage → haltAll chain.
+            {
+                QSignalBlocker const block(ui->startTxButton);
+                ui->startTxButton->setChecked(false);
+            }
             return;
         } else {
             // sendChunked already emitted wantToTransmit for chunk 1,
@@ -6618,9 +6654,13 @@ void UI_Constructor::buildSavedMessagesMenu(QMenu *menu) {
         connect(action, &QAction::triggered, this, [this, macro]() {
             auto values = buildMacroValues();
             addMessageText(replaceMacros(macro, values, true));
-
-            if (m_config.transmit_directed())
-                toggleTx(true);
+            // [2026-07-14 operator request] No auto-send on saved-
+            // message selection (previously fired toggleTx(true) when
+            // transmit_directed() was set): the operator needs the
+            // chance to choose plain Send vs "Send using ARQ" from
+            // the chevron. The box is populated and focused; sending
+            // is always an explicit second click now.
+            ui->extFreeTextMsgEdit->setFocus();
         });
     }
 

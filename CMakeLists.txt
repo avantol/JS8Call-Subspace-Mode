@@ -293,6 +293,7 @@ target_sources(
   JS8_Mode/JS8Submode.cpp
   JS8_Mode/Modulator.cpp
   JS8_Network/NetworkServerLookup.cpp
+  JS8_Network/MqttClient.cpp
   JS8_Network/PSKReporter.cpp
   JS8_Network/SpotClient.cpp
   JS8_Network/TCPClient.cpp
@@ -310,6 +311,8 @@ target_sources(
   JS8_UI/Configuration.cpp
   JS8_UI/About.cpp
   JS8_UI/LogQSO.cpp
+  JS8_UI/SpotMapGeoData.cpp
+  JS8_UI/SpotMapWindow.cpp
   JS8_UI/mainwindow.cpp
   JS8_UI/MessageReplyDialog.cpp
   JS8_UI/MessagePanel.cpp

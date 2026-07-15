@@ -53,6 +53,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
       m_wideGraph(new WideGraph(m_settings)),
       // no parent so that it has a taskbar icon
       m_logDlg(new LogQSO(program_title(), m_settings, &m_config, nullptr)),
+      // no parent so that it has a taskbar icon
+      m_spotMapWindow(new SpotMapWindow(m_settings, &m_config, nullptr)),
       m_lastDialFreq{0},
       m_detector{new Detector{JS8_RX_SAMPLE_RATE, JS8_NTMAX}},
       m_FFTSize{6912 / 2}, // conservative value to avoid buffer overruns
@@ -420,6 +422,23 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(m_logDlg.data(), &LogQSO::acceptQSO, this,
             &UI_Constructor::acceptQSO);
     connect(this, &UI_Constructor::finished, m_logDlg.data(), &LogQSO::close);
+
+    // "Spots Map": close with the app, sync the menu checkbox when the
+    // operator closes the window directly, and seed the station so the
+    // MQTT client begins accumulating spot history at launch.
+    connect(this, &UI_Constructor::finished, m_spotMapWindow.data(),
+            &SpotMapWindow::close);
+    connect(m_spotMapWindow.data(), &SpotMapWindow::closed, this, [this]() {
+        ui->actionShow_Spots_Map->setChecked(false);
+    });
+    m_spotMapWindow->setStation(m_config.my_callsign(), m_config.my_grid());
+    // Reopen the Spots Map at startup if it was open at last exit
+    // (one-time — NOT in a menu aboutToShow handler).
+    if (m_spotMapWindow->wasVisibleAtShutdown()) {
+        ui->actionShow_Spots_Map->setChecked(true);
+        m_spotMapWindow->setBand(m_lastBand);
+        m_spotMapWindow->show();
+    }
 
     // Network message handling
     connect(m_messageClient, &MessageClient::message, this,
@@ -1929,27 +1948,54 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     QTimer::singleShot(500, this, &UI_Constructor::initializeDummyData);
     QTimer::singleShot(500, this, &UI_Constructor::initializeGroupMessage);
 
-    // [BUILD 314] First-run discovery: the ARQ button + Mode-menu
-    // entry are both gone, so a new operator has no surface hinting
-    // that ARQ + file transfer live behind the Send-chevron. Pop a
-    // speech balloon pointing at the chevron on first launch, set a
-    // sticky QSettings flag so subsequent launches are quiet.
-    // Deferred 1500 ms so the main window is fully shown and the
-    // chevron has its global position before we anchor to it.
-    if (!m_settings->value("FirstRunArqHintShown", false).toBool()) {
+    // [BUILD 314, extended] First-run discovery balloons. Exactly ONE
+    // balloon may show per startup — hints are checked in priority
+    // order and a suppressed hint keeps its flag unset, so it shows
+    // on a later startup instead. Deferred 1500 ms so the main window
+    // is fully shown and anchors have their global positions.
+    {
         QPointer<UI_Constructor> const self(this);
         QTimer::singleShot(1500, this, [self]() {
-            if (!self || !self->m_sendMenuButton) return;
-            auto *balloon = new SpeechBalloon(
-                tr("\xf0\x9f\x91\x8b  Click here to to use the ARQ protocol "
-                   "(reliable delivery) to send or relay a message or to send a file. "
-                   "Use '@ALLCALL QUERY ARQ?' to find ARQ-ready stations. "
-                   "Click anywhere to dismiss."),
-                self->m_sendMenuButton);
-            balloon->setTailSide(SpeechBalloon::TailSide::Bottom);
-            balloon->setAutoDismissMs(45000);
-            balloon->showAtTarget();
-            self->m_settings->setValue("FirstRunArqHintShown", true);
+            if (!self) return;
+
+            // Priority 1: ARQ / Send-chevron discovery (Build 314).
+            if (!self->m_settings->value("FirstRunArqHintShown", false)
+                     .toBool() &&
+                self->m_sendMenuButton) {
+                auto *balloon = new SpeechBalloon(
+                    tr("\xf0\x9f\x91\x8b  Click here to to use the ARQ protocol "
+                       "(reliable delivery) to send or relay a message or to send a file. "
+                       "Use '@ALLCALL QUERY ARQ?' to find ARQ-ready stations. "
+                       "Click anywhere to dismiss."),
+                    self->m_sendMenuButton);
+                balloon->setTailSide(SpeechBalloon::TailSide::Bottom);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("FirstRunArqHintShown", true);
+                return; // one balloon per startup
+            }
+
+            // Priority 2: Spots Map discovery (Build 334 era).
+            if (!self->m_settings
+                     ->value("FirstRunSpotsMapHintShown", false)
+                     .toBool()) {
+                auto *bar = self->menuBar();
+                auto *balloon = new SpeechBalloon(
+                    tr("Select the 'Spots Map' here to see who has "
+                       "heard you recently. To help others get "
+                       "spotted, select 'Enable spotting to reporting "
+                       "networks' in Settings | Reporting. "
+                       "Click to dismiss."),
+                    bar);
+                balloon->setTargetRectOverride(bar->actionGeometry(
+                    self->ui->menuWindow->menuAction()));
+                balloon->setTailSide(SpeechBalloon::TailSide::Top);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("FirstRunSpotsMapHintShown",
+                                           true);
+                return; // one balloon per startup
+            }
         });
     }
 

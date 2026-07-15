@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPointer>
+#include <QRect>
 #include <QString>
 #include <QWidget>
 
@@ -45,6 +46,15 @@ class SpeechBalloon : public QWidget {
     void setTailSide(TailSide side) { m_tailSide = side; updateShape(); }
     void setAutoDismissMs(int ms)   { m_autoDismissMs = ms; }
 
+    /**
+     * Point at a sub-rectangle of the target widget (target-local
+     * coordinates) instead of the whole widget — e.g. one menu
+     * title's actionGeometry() within a menu bar.
+     */
+    void setTargetRectOverride(QRect const &localRect) {
+        m_targetRectOverride = localRect;
+    }
+
     /** Compute position relative to target and show. */
     void showAtTarget();
 
@@ -58,6 +68,7 @@ class SpeechBalloon : public QWidget {
 
     QString             m_text;
     QPointer<QWidget>   m_target;
+    QRect               m_targetRectOverride; // local coords; invalid = whole widget
     TailSide            m_tailSide{TailSide::Top};
     int                 m_autoDismissMs{0};
     int                 m_cornerRadius{8};
