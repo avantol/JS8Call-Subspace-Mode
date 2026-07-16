@@ -352,6 +352,7 @@ class UI_Constructor : public QMainWindow {
                                       int            msgId);
     // TX-side handler for the "Send File…" button.
     void on_sendFileButton_clicked();
+    void on_sendWebLinkAction_triggered();
     // [BUILD 298] TX-side handler for the "Send using ARQ" menu action.
     // Enables ARQ for this one send, fires the normal Send path, and
     // arranges for ARQ to auto-disable on sendComplete / sendFailed.
@@ -411,6 +412,7 @@ class UI_Constructor : public QMainWindow {
     void on_actionOpen_log_directory_triggered();
     void on_actionCopyright_Notice_triggered();
     void on_actionUser_Guide_triggered();
+    void on_actionSubspace_Guide_triggered();
     bool decode(qint32 k);
     bool isDecodeReady(int submode, qint32 k, qint32 k0,
                        qint32 *pCurrentDecodeStart, qint32 *pNextDecodeStart,
@@ -668,6 +670,10 @@ class UI_Constructor : public QMainWindow {
     // enabled state — the chevron button itself stays enabled full-
     // time for discoverability; gating lives on the action.
     QAction *m_sendFileAction{nullptr};
+    // [BUILD 338] "Send web link (URL)…" — below Send file. Prompts
+    // for a URL, wraps it in link.txt, sends via ARQ file transfer
+    // (receiver renders it clickable per TODO #95).
+    QAction *m_sendWebLinkAction{nullptr};
     // [BUILD 298] "Send using ARQ" menu action — first item in the
     // Send options menu, replaces the standalone ARQ-toggle button.
     // Enable state is updated live from updateButtonDisplay using
@@ -708,6 +714,12 @@ class UI_Constructor : public QMainWindow {
     // cannot parse an enum declaration there.
     enum class GreetingSeedResult { Seeded, DraftBlocked, InvalidCall };
     GreetingSeedResult trySeedOutgoingGreeting(QString const &call);
+    // [BUILD 338] Shared by "Send file…" and "Send web link (URL)…":
+    // pre-flight peer resolution (dialogs shown inside; empty return
+    // = abort) and the transfer pipeline from a file path onward.
+    QString resolveArqFilePeer();
+    void startFileTransferViaArq(QString const &filePath,
+                                 QString const &peer);
     // [BUILD 336 TODO #97] Wall-clock ms of the last accepted AVHAIL?
     // remote trigger — global once-per-hour rate limit / replay guard
     // (the protocol has no anti-replay; a replayed trigger must not

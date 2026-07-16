@@ -9,7 +9,10 @@
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 #include "JS8_Main/FileTransfer.h"
 
+#include <QFile>
 #include <QFileDialog>
+#include <QInputDialog>
+#include <QUrl>
 #include <QStandardPaths>
 #include <QToolButton>
 
@@ -793,8 +796,55 @@ void UI_Constructor::on_menuControl_aboutToShow() {
 }
 
 void UI_Constructor::on_actionUser_Guide_triggered() {
+    // [BUILD 338] "Basic JS8 Operation" — video walkthrough replaced
+    // the legacy User Guide PDF (Andy 2026-07-16).
     QDesktopServices::openUrl(
-        QUrl("https://js8call-improved.com/downloads/JS8Call_User_Guide.pdf"));
+        QUrl("https://www.youtube.com/watch?v=PV-BNN3adxU"));
+}
+
+// [BUILD 338] "Subspace Edition Guide" — curated how-to index. Each
+// row: description + clickable link to the groups.io walkthrough.
+// Modeless so the operator can follow a link and keep the list open.
+void UI_Constructor::on_actionSubspace_Guide_triggered() {
+    struct Entry { char const *desc; char const *url; };
+    static constexpr Entry kEntries[] = {
+        {"How to use the ARQ protocol",
+         "https://groups.io/g/Subspace/message/190"},
+        {"How to send a web link (URL)",
+         "https://groups.io/g/Subspace/message/262"},
+        {"How to start a QSO from the Spots Map",
+         "https://groups.io/g/Subspace/message/259"},
+        {"How to use audio-visual HAIL and BELL",
+         "https://groups.io/g/Subspace/message/217"},
+        {"How to transfer a file",
+         "https://groups.io/g/Subspace/message/212"},
+        {"How to search for a call sign",
+         "https://groups.io/g/Subspace/message/263"},
+        {"How to relay a message using the ARQ protocol",
+         "https://groups.io/g/Subspace/message/265"},
+        {"How to compensate for QSB during an ARQ message send",
+         "https://groups.io/g/Subspace/message/266"},
+    };
+    QString html = QStringLiteral(
+        "<table cellspacing=\"0\" cellpadding=\"4\">");
+    for (auto const &e : kEntries) {
+        html += QStringLiteral(
+                    "<tr><td>%1&nbsp;&nbsp;</td>"
+                    "<td><a href=\"%2\">%2</a></td></tr>")
+                    .arg(QString::fromUtf8(e.desc).toHtmlEscaped(),
+                         QString::fromUtf8(e.url));
+    }
+    html += QStringLiteral("</table>");
+
+    auto *box = new QMessageBox(this);
+    box->setWindowTitle(tr("Subspace Edition Guide"));
+    box->setTextFormat(Qt::RichText);
+    box->setText(html);
+    box->setIcon(QMessageBox::NoIcon);
+    box->setStandardButtons(QMessageBox::Close);
+    box->setWindowModality(Qt::NonModal);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->show();
 }
 
 void UI_Constructor::on_actionEnable_Monitor_RX_toggled(bool checked) {
@@ -6274,7 +6324,10 @@ void UI_Constructor::on_sendUsingArqAction_triggered() {
 // point for ARQ file transfer. Pick a local file ≤ 30 KB → build the
 // wire body (header b32 + payload b32) → hand to ChunkedArq, which
 // chunks + ACKs + retries via the existing protocol.
-void UI_Constructor::on_sendFileButton_clicked() {
+// [BUILD 338] Pre-flight peer resolution shared by "Send file…" and
+// "Send web link (URL)…". Shows the operator dialogs itself; an
+// empty return means abort.
+QString UI_Constructor::resolveArqFilePeer() {
     // Pre-flight gates. [FILE-XFER build 282] ARQ is no longer a
     // pre-flight bail — it auto-enables for the transfer (and
     // restores to its prior state on sendComplete / sendFailed). We
@@ -6285,7 +6338,7 @@ void UI_Constructor::on_sendFileButton_clicked() {
             this, QStringLiteral("ARQ unavailable"),
             QStringLiteral("Chunked-ARQ manager is not initialized; "
                            "cannot send file."));
-        return;
+        return {};
     }
     QString peer = callsignSelected().trimmed();
     if (peer.isEmpty()) {
@@ -6312,8 +6365,14 @@ void UI_Constructor::on_sendFileButton_clicked() {
                            "@PUBLIC, custom groups) are not "
                            "supported because the protocol needs a "
                            "single station to ACK."));
-        return;
+        return {};
     }
+    return peer;
+}
+
+void UI_Constructor::on_sendFileButton_clicked() {
+    QString const peer = resolveArqFilePeer();
+    if (peer.isEmpty()) return;
 
     QString const filePath = QFileDialog::getOpenFileName(
         this,
@@ -6322,6 +6381,72 @@ void UI_Constructor::on_sendFileButton_clicked() {
         QStringLiteral("Any file (*)"));
     if (filePath.isEmpty()) return;  // user cancelled
 
+    startFileTransferViaArq(filePath, peer);
+}
+
+// [BUILD 338] "Send web link (URL)…" — prompt for a URL, wrap it in
+// link.txt, and send it via the normal ARQ file-transfer pipeline.
+// The receiver's file dialog renders it as a clickable link (#95).
+void UI_Constructor::on_sendWebLinkAction_triggered() {
+    QString const peer = resolveArqFilePeer();
+    if (peer.isEmpty()) return;
+
+    bool ok = false;
+    QString const entered = QInputDialog::getText(
+        this, tr("Send web link (URL)"),
+        tr("Paste the web link to send to %1:\n"
+           "(must contain 'http://' or 'https://')").arg(peer),
+        QLineEdit::Normal, QString(), &ok).trimmed();
+    if (!ok || entered.isEmpty()) return;  // user cancelled
+
+    QUrl const url = QUrl::fromUserInput(entered);
+    // Enforce exactly what the dialog states: the pasted text must
+    // carry an explicit http(s) scheme (no bare-domain guessing).
+    if (!entered.contains(QStringLiteral("http://"),
+                          Qt::CaseInsensitive) &&
+        !entered.contains(QStringLiteral("https://"),
+                          Qt::CaseInsensitive)) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("Not a web link"),
+            QStringLiteral("\"%1\" doesn't contain 'http://' or "
+                           "'https://'.").arg(entered));
+        return;
+    }
+    if (!url.isValid() ||
+        (url.scheme() != QStringLiteral("http") &&
+         url.scheme() != QStringLiteral("https"))) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("Not a web link"),
+            QStringLiteral("\"%1\" doesn't look like a valid http(s) "
+                           "link.").arg(entered));
+        return;
+    }
+
+    QString const linkPath = QDir::cleanPath(
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+        + QStringLiteral("/link.txt"));
+    QFile linkFile(linkPath);
+    if (!linkFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        JS8MessageBox::warning_message(
+            this, QStringLiteral("File error"),
+            QStringLiteral("Could not create %1.").arg(linkPath));
+        return;
+    }
+    linkFile.write(url.toString(QUrl::FullyEncoded).toUtf8());
+    linkFile.write("\n");
+    linkFile.close();
+
+    qCWarning(chunkedarq_js8)
+        << "[FT-TX] web link wrapped in" << linkPath
+        << "url=" << url.toString() << "peer=" << peer;
+
+    startFileTransferViaArq(linkPath, peer);
+}
+
+// [BUILD 338] Transfer pipeline from a file path onward — everything
+// "Send file…" did after its file picker.
+void UI_Constructor::startFileTransferViaArq(QString const &filePath,
+                                             QString const &peer) {
     QFileInfo const fi(filePath);
     if (!fi.exists() || !fi.isReadable()) {
         JS8MessageBox::warning_message(
@@ -7960,6 +8085,9 @@ void UI_Constructor::updateTextDisplay() {
         // chunked-ARQ session on top of one already running.
         bool const arqTxBusy = m_chunkedArq && m_chunkedArq->hasActiveTxSession();
         m_sendFileAction->setEnabled(canTransmit && !isTransmitting && !arqTxBusy);
+        if (m_sendWebLinkAction)
+            m_sendWebLinkAction->setEnabled(
+                canTransmit && !isTransmitting && !arqTxBusy);
     }
     // [BUILD 331-visHailEpi8] Gate "Send audio-visual HAIL" menu item.
     // Disabled while a Visible Hail sequence is already in flight
@@ -8143,6 +8271,7 @@ void UI_Constructor::updateTxButtonDisplay() {
         // menu action mirrors Send's disabled state (no TX while
         // queued / transmitting).
         if (m_sendFileAction) m_sendFileAction->setEnabled(false);
+        if (m_sendWebLinkAction) m_sendWebLinkAction->setEnabled(false);
     } else {
         QString const buttonText =
             m_txFrameCountEstimate > 0
@@ -8160,6 +8289,8 @@ void UI_Constructor::updateTxButtonDisplay() {
         // a file to send". Chevron button itself stays enabled
         // full-time for discoverability.
         if (m_sendFileAction) m_sendFileAction->setEnabled(canTransmit);
+        if (m_sendWebLinkAction)
+            m_sendWebLinkAction->setEnabled(canTransmit);
     }
 }
 

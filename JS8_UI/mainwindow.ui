@@ -2005,6 +2005,7 @@ background-color: #22ff22;
     <addaction name="actionAbout"/>
     <addaction name="separator"/>
     <addaction name="actionUser_Guide"/>
+    <addaction name="actionSubspace_Guide"/>
    </widget>
    <widget class="QMenu" name="menuConfig">
     <property name="title">
@@ -2160,7 +2161,12 @@ background-color: #22ff22;
   </action>
   <action name="actionUser_Guide">
    <property name="text">
-    <string>JS8Call User Guide</string>
+    <string>Basic JS8 Operation</string>
+   </property>
+  </action>
+  <action name="actionSubspace_Guide">
+   <property name="text">
+    <string>Subspace Edition Guide</string>
    </property>
   </action>
   <action name="actionShow_Band_Activity">

@@ -1870,7 +1870,22 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     "~1 KB binary). Perfect for certain forms where spaces may be meaningful. Sent reliably with per-sub-message "
                     "ACK/NACK and SHA-256 verify. The file is compressed "
                     "using GZIP and encoded using Base32, but is NOT encrypted. "
-                    "Encryption is not permitted on amateur bands,");
+                    "Encryption is not permitted on amateur bands. "
+                    "Tip: a text file can carry web links — the "
+                    "receiver gets them as clickable URLs.");
+
+                // [BUILD 338] "Send web link (URL)…" — directly below
+                // Send file. Prompts for a URL, wraps it in link.txt,
+                // sends via the same ARQ file-transfer pipeline; the
+                // receiver renders it as a clickable link (TODO #95).
+                m_sendWebLinkAction =
+                    menu->addAction(QStringLiteral("Send web link (URL)…"));
+                connect(m_sendWebLinkAction, &QAction::triggered,
+                        this,
+                        &UI_Constructor::on_sendWebLinkAction_triggered);
+                m_sendWebLinkAction->setToolTip(
+                    "Send a web link (URL) by copying / pasting and "
+                    "transmit");
 
                 // [BUILD 331-visHailEpi8] "Send audio-visual HAIL" —
                 // third item. Three-cycle sequence: standard Subspace
