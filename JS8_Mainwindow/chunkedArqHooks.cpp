@@ -33,6 +33,8 @@
 #include "JS8_Main/FileTransfer.h"
 
 #include <QDir>
+#include <QFile>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 namespace {
@@ -741,6 +743,64 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
                            /*isNewLine=*/true,
                            /*isLast=*/true,
                            m_nSubMode);
+
+        // [BUILD 337 TODO #95] If the received file is TEXT and
+        // contains http(s) URLs, show them in the confirmation
+        // dialog as clickable links. Security rules: EVERYTHING is
+        // HTML-escaped before injection (a hostile file must not
+        // inject markup), only well-formed http(s) URLs linkify, and
+        // the FULL URL is the link text — the receiver sees exactly
+        // where a link goes before clicking. Binary files (NUL in
+        // the first 64 KB) are skipped entirely.
+        QFile saved(savedPath);
+        if (saved.open(QIODevice::ReadOnly)) {
+            QByteArray const head = saved.read(64 * 1024);
+            saved.close();
+            if (!head.contains('\0')) {
+                static QRegularExpression const kUrlRe{
+                    QStringLiteral(R"(\bhttps?://[^\s<>"']+)"),
+                    QRegularExpression::CaseInsensitiveOption};
+                QStringList urls;
+                auto it = kUrlRe.globalMatch(QString::fromUtf8(head));
+                while (it.hasNext() && urls.size() < 10) {
+                    QString u = it.next().captured(0);
+                    // Trailing sentence punctuation isn't part of
+                    // the URL.
+                    while (!u.isEmpty() &&
+                           QStringLiteral(").,;:!?'").contains(u.back())) {
+                        u.chop(1);
+                    }
+                    if (!u.isEmpty() && !urls.contains(u)) {
+                        urls << u;
+                    }
+                }
+                if (!urls.isEmpty()) {
+                    QString html =
+                        QStringLiteral("<p>File received from %1:"
+                                       "<br>%2</p>"
+                                       "<p>Link%3 found in the file:"
+                                       "</p>")
+                            .arg(fromCopy.toHtmlEscaped(),
+                                 headerCopy.name.toHtmlEscaped(),
+                                 urls.size() > 1 ? QStringLiteral("s")
+                                                 : QString());
+                    for (QString const &u : urls) {
+                        html += QStringLiteral(
+                                    "<a href=\"%1\">%1</a><br>")
+                                    .arg(u.toHtmlEscaped());
+                    }
+                    auto *linkBox = new QMessageBox(this);
+                    linkBox->setWindowTitle(tr("File received"));
+                    linkBox->setTextFormat(Qt::RichText);
+                    linkBox->setText(html);
+                    linkBox->setIcon(QMessageBox::Information);
+                    linkBox->setStandardButtons(QMessageBox::Ok);
+                    linkBox->setWindowModality(Qt::NonModal);
+                    linkBox->setAttribute(Qt::WA_DeleteOnClose);
+                    linkBox->show();
+                }
+            }
+        }
     });
 
     box->show();

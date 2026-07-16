@@ -7731,6 +7731,42 @@ UI_Constructor::evaluateArqGateForText(QString const &text) const {
         !dirFrame.isEmpty() && !isFreetextCmd &&
         !isMsgCmd && !isRelayCmd;
 
+    // [BUILD 337 TODO #93 / #75(b)] packDirectedMessage classifies by
+    // the LEADING token, so a free-text body that merely starts with
+    // a word spelling a command ("NO PROBLEM SEE YOU LATER", "73 AND
+    // GOOD LUCK", "SNR WAS GREAT") got mislabeled as a directed
+    // command and refused ARQ. A body is a REAL directed command only
+    // if it reduces to the bare token (± its numeric arg) — anything
+    // with trailing free text arms ARQ normally.
+    if (arqBodyIsDirectedCmd) {
+        QString remainder = probe.toUpper().trimmed();
+        auto stripLeading = [&remainder](QString const &tok) {
+            if (tok.isEmpty()) return;
+            if (remainder == tok) {
+                remainder.clear();
+            } else if (remainder.startsWith(tok + QStringLiteral(" "))) {
+                remainder = remainder.mid(tok.length() + 1).trimmed();
+            }
+        };
+        stripLeading(dirTo.trimmed().toUpper());   // addressee, if present
+        stripLeading(cmdTrimmed.toUpper());        // the command token
+        stripLeading(dirNum.trimmed().toUpper());  // optional numeric arg
+        // The typed arg may differ from the normalized dirNum
+        // ("+10" vs "10") — a lone signed number left over still
+        // belongs to the command, not to free text.
+        if (!remainder.isEmpty() && !dirNum.trimmed().isEmpty()) {
+            static QRegularExpression const kLeadingSignedNumRe{
+                QStringLiteral(R"(^[+-]?\d+\s*)")};
+            if (auto const nm = kLeadingSignedNumRe.match(remainder);
+                nm.hasMatch()) {
+                remainder = remainder.mid(nm.capturedLength()).trimmed();
+            }
+        }
+        if (!remainder.isEmpty()) {
+            arqBodyIsDirectedCmd = false; // trailing free text → ARQ ok
+        }
+    }
+
     // TYPING macro — not in directed_cmds so packDirectedMessage can't
     // catch it, but must not arm ARQ.
     if (!arqBodyIsDirectedCmd) {
