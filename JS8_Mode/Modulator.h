@@ -60,6 +60,20 @@ class Modulator final : public AudioDevice {
                             + FT2_POSTROLL_FRAMES);
     }
 
+    // [BUILD 336 TODO #94] Expected playout of the CURRENT FT2
+    // waveform (incl. post-roll) in ms — lets the guiUpdate stuck-TX
+    // safety scale its cap to the waveform actually playing instead
+    // of assuming single-frame length (the Visible Hail composite is
+    // ~8.8 s). Heuristic read across threads: m_ft2WaveLen is set in
+    // start() before any samples play, and the safety only consults
+    // this seconds later.
+    int ft2ExpectedDurationMs() const {
+        return m_ft2WaveLen > 0
+            ? static_cast<int>((static_cast<qint64>(m_ft2WaveLen)
+                                + FT2_POSTROLL_FRAMES) * 1000 / 48000)
+            : 0;
+    }
+
     // [AUDIO-CADENCE PROBE 2026-06-09] Wall-clock timestamps captured
     // INSIDE readData() at the moment we WRITE the first waveform sample
     // into the audio-device buffer and the moment we WRITE the last one.

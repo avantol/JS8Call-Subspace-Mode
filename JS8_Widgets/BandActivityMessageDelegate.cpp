@@ -22,11 +22,58 @@ QString boldCallsigns(const QString &text) {
 }
 }
 
+namespace {
+// [TODO #79 REOPENED 2026-07-15] Strip EVERY character Qt's text
+// layout treats as a line break — the build-331 fix handled only
+// \n \r \t, but U+2028 LINE SEP, U+2029 PARA SEP, U+0085 NEL,
+// vertical tab and form feed also break lines. The probe qWarning
+// dumps the exact code points seen so the specimen identifies which
+// breaker is arriving on the air (remove probe once confirmed).
+QString stripLineBreaks(QString text) {
+    bool found = false;
+    for (QChar &c : text) {
+        ushort const u = c.unicode();
+        if (u == u'\n' || u == u'\r' || u == u'\t' || u == 0x0B ||
+            u == 0x0C || u == 0x85 || u == 0x2028 || u == 0x2029) {
+            found = true;
+            c = QChar(' ');
+        }
+    }
+    if (found) {
+        static int probeBudget = 20;
+        if (probeBudget > 0) {
+            --probeBudget;
+            qWarning() << "[BAND-ACT #79] line-break char(s) in message;"
+                       << "text=" << text.left(60);
+        }
+    }
+    return text;
+}
+} // namespace
+
 BandActivityMessageDelegate::BandActivityMessageDelegate(QObject *parent)
     : QStyledItemDelegate(parent) {}
 
 QVariantList BandActivityMessageDelegate::getGroups(const QModelIndex &index) {
     return index.data(Qt::UserRole).toList();
+}
+
+// [TODO #79 REOPENED] Row height was the OTHER half of the two-line
+// symptom: with no sizeHint override, the default implementation
+// measured the RAW DisplayRole text — a message with an embedded
+// line break produced a double-height row even though paint draws a
+// single stripped line. Measure the stripped text instead.
+QSize BandActivityMessageDelegate::sizeHint(
+    const QStyleOptionViewItem &option, const QModelIndex &index) const {
+    QStyleOptionViewItem opt = option;
+    initStyleOption(&opt, index);
+    opt.text = stripLineBreaks(opt.text);
+    QSize sz = QStyledItemDelegate::sizeHint(opt, index);
+    // Never taller than one text line (+ padding) regardless of what
+    // the style computes.
+    QFontMetrics const fm(opt.font);
+    sz.setHeight(qMin(sz.height(), fm.height() + 8));
+    return sz;
 }
 
 void BandActivityMessageDelegate::paint(QPainter *painter,
@@ -41,14 +88,7 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
     if (groups.size() <= 1) {
         QStyleOptionViewItem opt = option;
         initStyleOption(&opt, index);
-        QString text = opt.text;
-        // [BUILD 331-todo79] Render-side strip of newlines / carriage
-        // returns / tabs. Source data is untouched; only paint output
-        // is cleaned so the row stays on one line with no column
-        // misalignment.
-        text.replace(QChar('\n'), QChar(' '))
-            .replace(QChar('\r'), QChar(' '))
-            .replace(QChar('\t'), QChar(' '));
+        QString text = stripLineBreaks(opt.text);
         opt.text.clear();
         QApplication::style()->drawControl(QStyle::CE_ItemViewItem, &opt, painter);
 
@@ -120,12 +160,7 @@ void BandActivityMessageDelegate::paint(QPainter *painter,
 
     for (int i = 0; i < n; i++) {
         auto map = groups[i].toMap();
-        QString text = map["text"].toString();
-        // [BUILD 331-todo79] Render-side newline / CR / tab strip,
-        // mirror of the single-group path above.
-        text.replace(QChar('\n'), QChar(' '))
-            .replace(QChar('\r'), QChar(' '))
-            .replace(QChar('\t'), QChar(' '));
+        QString text = stripLineBreaks(map["text"].toString());
 
         QRect regionRect(rect.x() + i * regionWidth, rect.y(),
                          regionWidth, rect.height());

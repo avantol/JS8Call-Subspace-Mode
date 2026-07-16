@@ -71,13 +71,24 @@ void MqttClient::setState(State const state, QString const &detail) {
     m_state = state;
     QString text;
     switch (state) {
-    case State::Idle:           text = QStringLiteral("offline");        break;
-    case State::TcpConnecting:  text = QStringLiteral("connecting…");    break;
-    case State::MqttConnecting: text = QStringLiteral("handshaking…");   break;
-    case State::Subscribing:    text = QStringLiteral("subscribing…");   break;
-    case State::Up:             text = QStringLiteral("connected");      break;
+    case State::Idle:
+        text = QStringLiteral("offline");
+        break;
+    case State::TcpConnecting:
+        text = QStringLiteral("connecting to %1…").arg(m_host);
+        break;
+    case State::MqttConnecting:
+        text = QStringLiteral("handshaking with %1…").arg(m_host);
+        break;
+    case State::Subscribing:
+        text = QStringLiteral("subscribing…");
+        break;
+    case State::Up:
+        text = QStringLiteral("connected to %1").arg(m_host);
+        break;
     case State::BackoffWait:
-        text = QStringLiteral("reconnecting in %1 s")
+        text = QStringLiteral("reconnecting to %1 in %2 s")
+                   .arg(m_host)
                    .arg((m_backoffMs + 999) / 1000);
         break;
     }

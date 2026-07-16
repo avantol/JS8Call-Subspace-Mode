@@ -3022,6 +3022,35 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
                 ft2_txwave, FT2_NWAVE);
             ft2_txwave_len = FT2_NWAVE;
 
+            // [BUILD 336 TODO #94] Visible Hail single-TX composite:
+            // append both diag bolts back-to-back after the encoded
+            // HAIL frame and stage the whole thing via the Modulator
+            // full-frame override. One waveform → one PTT cycle → no
+            // inter-frame re-key for CAT contention to swallow (the
+            // old 3-cycle chain lost bolts on slow machines when the
+            // per-frame PTT re-key got delayed past its window).
+            // Idempotent under m_restart: re-staging builds the same
+            // composite. m_visibleHailActive stays set until stopTx.
+            if (m_visibleHailActive && m_modulator) {
+                double const ft2BandMidHz = freq() + m_XIT + 62.5;
+                auto const bolt =
+                    SubspacePreamble::generateFullFrameBolt(ft2BandMidHz);
+                QVector<float> composite;
+                composite.reserve(ft2_txwave_len + 2 * bolt.size());
+                composite.append(
+                    QVector<float>(ft2_txwave,
+                                   ft2_txwave + ft2_txwave_len));
+                composite.append(bolt);
+                composite.append(bolt);
+                qWarning() << "[FT2-TX] Visible Hail: composite staged,"
+                           << "hail=" << ft2_txwave_len
+                           << "bolt=" << bolt.size() << "x2 total="
+                           << composite.size() << "samples ("
+                           << (composite.size() / 48) << "ms)";
+                m_modulator->setFullFrameBoltWaveform(
+                    std::move(composite));
+            }
+
             // Fill msgsent so the status label shows the TX message
             std::fill_n(std::begin(msgsent), 22, ' ');
             std::copy_n(std::begin(message), 12, std::begin(msgsent));
@@ -3237,7 +3266,11 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         stopTx();
     }
 
-    // FT2 safety: force stop if TX has been running too long (stuck Modulator)
+    // FT2 safety: force stop if TX has been running too long (stuck
+    // Modulator). [BUILD 336 TODO #94] Cap scales with the waveform
+    // actually playing (+3 s margin for period-boundary wait and
+    // poll lag, floor 5 s) — the flat 5 s cap assumed single-frame
+    // TX and would truncate the ~8.8 s Visible Hail composite.
     if (m_nSubMode == Varicode::JS8CallFT2 && m_transmitting && m_iptt == 1
         && !m_tune) {
         static qint64 ft2TxStartMs = 0;
@@ -3247,9 +3280,12 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         if (ft2TxStartMs > 0) {
             qint64 elapsed = DriftingDateTime::currentMSecsSinceEpoch()
                              - ft2TxStartMs;
-            if (elapsed > 5000) {
-                qWarning() << "[FT2-TX] SAFETY: TX exceeded 5s, forcing stopTx()"
-                            << "elapsed=" << elapsed << "ms";
+            qint64 const capMs =
+                qMax(5000, m_modulator->ft2ExpectedDurationMs() + 3000);
+            if (elapsed > capMs) {
+                qWarning() << "[FT2-TX] SAFETY: TX exceeded" << capMs
+                            << "ms cap, forcing stopTx() elapsed="
+                            << elapsed << "ms";
                 ft2TxStartMs = 0;
                 stopTx();
             }
@@ -4081,62 +4117,18 @@ void UI_Constructor::stopTx() {
     monitor(true);
     statusUpdate();
 
-    // [BUILD 331-visHailEpi4] Visible-Hail chain advancement.
-    // ft2WaveformDone signal is dead code for FT2 mode. FT2 TX
-    // completion is detected by guiUpdate's isFT2WaveformDone() poll
-    // → stopTx(). We advance the chain state machine HERE.
-    //
-    // Double-fire guard: stopTx() can be called multiple times for
-    // ONE TX cycle (btxok-edge + waveform-poll both fire it within
-    // the same guiUpdate tick). Without the m_visibleHailAdvanceArmed
-    // flag, the chain over-advances and skips intermediate TXes (and
-    // may crash if downstream state assumes a clean per-step flow).
-    if (m_visibleHailStep != 0 && m_visibleHailAdvanceArmed) {
-        m_visibleHailAdvanceArmed = false;  // consume the arming
-        int const completedStep = m_visibleHailStep;
-        QPointer<UI_Constructor> const self(this);
-        // Defensive: only arm next TX if Modulator is still valid.
-        auto armBoltCycle = [self]() {
-            if (!self || !self->m_modulator) return;
-            double const audioFreqHz = self->freq() + self->m_XIT;
-            double const ft2BandMidHz = audioFreqHz + 62.5;
-            auto bolt =
-                SubspacePreamble::generateFullFrameBolt(ft2BandMidHz);
-            self->m_modulator->setFullFrameBoltWaveform(std::move(bolt));
-            QString const myCallUp =
-                self->m_config.my_callsign().trimmed().toUpper();
-            QString const hailText =
-                myCallUp + QStringLiteral(": @ALLCALL ACK");
-            if (self->ui && self->ui->extFreeTextMsgEdit) {
-                self->ui->extFreeTextMsgEdit->setPlainText(hailText);
-            }
-            // Re-arm advance guard so the NEXT stopTx (after this
-            // TX completes) can advance the chain again.
-            self->m_visibleHailAdvanceArmed = true;
-            self->toggleTx(true);
-        };
-        switch (completedStep) {
-            case 1:  // HAIL done → epilog diag 1 (back-to-back, no
-                     // silent space — Andy 2026-06-20 dropped the gap)
-                m_visibleHailStep = 2;
-                qWarning() << "[FT2-TX] Visible Hail: HAIL done → "
-                              "scheduling epilog diag 1 back-to-back";
-                QTimer::singleShot(100, this, armBoltCycle);
-                break;
-            case 2:  // diag 1 done → diag 2 (back-to-back)
-                m_visibleHailStep = 3;
-                qWarning() << "[FT2-TX] Visible Hail: diag 1 done → "
-                              "scheduling diag 2 back-to-back";
-                QTimer::singleShot(100, this, armBoltCycle);
-                break;
-            case 3:  // diag 2 done → sequence complete
-                m_visibleHailStep = 0;
-                qWarning() << "[FT2-TX] Visible Hail: sequence complete";
-                break;
-            default:
-                m_visibleHailStep = 0;
-                break;
-        }
+    // [BUILD 336 TODO #94] Visible Hail completion. The whole
+    // sequence (HAIL + both diag bolts) plays as ONE composite
+    // waveform under a single PTT cycle, so the first stopTx after
+    // it ends the sequence — no chain state machine, no per-frame
+    // re-key, no double-fire guard (clearing the flag is idempotent).
+    if (m_visibleHailActive) {
+        m_visibleHailActive = false;
+        qWarning() << "[FT2-TX] Visible Hail: sequence complete "
+                      "(single-TX composite)";
+        // [BUILD 336 TODO #87] Remote-triggered hail: put the mode
+        // speed back where the operator had it.
+        restoreVisibleHailSubmodeIfPending();
     }
 }
 
@@ -6092,8 +6084,69 @@ void UI_Constructor::on_typingMacroButton_clicked() {
 // Chain step 1 runs here (bolt TX). Chain step 2 (the HAIL TX) is
 // scheduled in the ft2WaveformDone handler when it sees the
 // m_visibleHailPendingHail flag set.
+// [BUILD 336 TODO #87] Restore the operator's original mode speed
+// after a REMOTE-triggered AVHAIL? sequence. Deferred 500 ms
+// (symmetric with the trigger's switch-to-Subspace delay) so the
+// mode change never lands inside stopTx teardown. No-op when no
+// restore is pending (manual menu hails).
+void UI_Constructor::restoreVisibleHailSubmodeIfPending() {
+    if (m_visibleHailRestoreSubmode < 0)
+        return;
+    int const restoreTo = m_visibleHailRestoreSubmode;
+    m_visibleHailRestoreSubmode = -1;
+    qWarning() << "[FT2-TX] Visible Hail: restoring original submode"
+               << restoreTo;
+    QPointer<UI_Constructor> const self(this);
+    QTimer::singleShot(500, this, [self, restoreTo]() {
+        if (!self) return;
+        self->setSubmode(restoreTo);
+    });
+}
+
+// [BUILD 336] Click-to-call seed. Overwritable box states: empty, a
+// bare callsign, or "<call> <greeting>" (this feature's own seed —
+// repeated clicks switch stations). Anything else is a real draft and
+// is never clobbered. Any selected callsign is CLEARED before seeding
+// (selection is not a guard — guarding on it silently ate clicks).
+UI_Constructor::GreetingSeedResult
+UI_Constructor::trySeedOutgoingGreeting(QString const &call) {
+    bool compound = false;
+    if (!Varicode::isValidCallsign(call.trimmed(), &compound)) {
+        qWarning() << "[SEED-GREETING] ignored, not a valid callsign:"
+                   << call;
+        return GreetingSeedResult::InvalidCall;
+    }
+    QString const greeting =
+        replaceMacros(m_config.standard_greeting(), buildMacroValues(),
+                      true).trimmed();
+    QString probe = ui->extFreeTextMsgEdit->toPlainText().trimmed();
+    if (!greeting.isEmpty() && probe.endsWith(greeting)) {
+        probe = probe.chopped(greeting.size()).trimmed();
+    }
+    bool probeCompound = false;
+    if (!probe.isEmpty() &&
+        !Varicode::isValidCallsign(probe, &probeCompound)) {
+        qWarning() << "[SEED-GREETING] suppressed, outgoing box has"
+                      " draft text";
+        return GreetingSeedResult::DraftBlocked;
+    }
+    clearSelection();
+    QString seeded = call.trimmed();
+    if (!greeting.isEmpty()) {
+        seeded += QLatin1Char(' ') + greeting;
+    }
+    ui->extFreeTextMsgEdit->setPlainText(seeded);
+    auto cursor = ui->extFreeTextMsgEdit->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    ui->extFreeTextMsgEdit->setTextCursor(cursor);
+    qWarning() << "[SEED-GREETING] created outgoing message for"
+               << call;
+    return GreetingSeedResult::Seeded;
+}
+
 void UI_Constructor::on_sendVisibleHailAction_triggered() {
     if (!m_modulator) {
+        restoreVisibleHailSubmodeIfPending();
         return;
     }
     if (m_nSubMode != Varicode::JS8CallFT2) {
@@ -6104,6 +6157,10 @@ void UI_Constructor::on_sendVisibleHailAction_triggered() {
         return;
     }
     if (m_transmitting || m_tune) {
+        // A remote-triggered hail that can't fire must still put the
+        // mode speed back — don't leave the receiver parked in
+        // Subspace with no hail sent.
+        restoreVisibleHailSubmodeIfPending();
         return;  // ignore if already TX-ing
     }
     // [BUILD 331+ avHailNoPeerGate] AV HAIL is a broadcast HAIL
@@ -6117,19 +6174,23 @@ void UI_Constructor::on_sendVisibleHailAction_triggered() {
         myCallUp + QStringLiteral(": @ALLCALL ACK");
 
     // [BUILD 331-visHailEpi2] Andy 2026-06-19: NO initial bolt. The
-    // sequence is now HAIL → diag1 → diag2 (back-to-back). The
-    // standard encoded HAIL fires first so the encoded ID gets out
-    // BEFORE the visual diag lines that follow it on the waterfall.
+    // sequence is HAIL → diag1 → diag2 (back-to-back). The standard
+    // encoded HAIL goes first so the encoded ID gets out BEFORE the
+    // visual diag lines that follow it on the waterfall.
+    //
+    // [BUILD 336 TODO #94] Single-TX composite: guiUpdate's FT2
+    // tone-gen block sees m_visibleHailActive, appends both diag
+    // bolts to the encoded HAIL waveform, and stages the composite
+    // via the Modulator full-frame override — the whole sequence
+    // plays under ONE PTT cycle. No per-frame re-key, no chain state
+    // machine.
     if (ui->extFreeTextMsgEdit) {
         ui->extFreeTextMsgEdit->setPlainText(hailText);
     }
-    qWarning() << "[FT2-TX] Visible Hail: HAIL first =" << hailText;
+    qWarning() << "[FT2-TX] Visible Hail: single-TX composite armed,"
+               << "HAIL =" << hailText;
 
-    // Arm the chain. Step 1 = HAIL cycle in progress; on completion
-    // → step 2 (epilog-diag-1, ~1 sec gap), step 3 (epilog-diag-2,
-    // back-to-back with #2).
-    m_visibleHailStep = 1;
-    m_visibleHailAdvanceArmed = true;
+    m_visibleHailActive = true;
 
     toggleTx(true);
 }
@@ -7114,17 +7175,20 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
             qWarning() << "[HAIL-DIAG] loop cancelled: stop button (longterm)";
         m_hb_loop->onLoopCancel();
         m_cq_loop->onLoopCancel();
-        // [BUILD 331-avHailHalt] Operator-initiated Halt cancels the
-        // entire audio-visual HAIL sequence — current frame stops AND
-        // the chain state machine resets so no further epilog frames
-        // get scheduled. Without this, the stopTx tail's switch would
-        // happily advance the chain and fire diag 1 / diag 2 even
-        // though the operator just hit Halt.
-        if (m_visibleHailStep != 0) {
+        // [BUILD 336 TODO #94] Operator-initiated Halt cancels the
+        // audio-visual HAIL: clear the lifecycle flag and drop any
+        // staged-but-unconsumed composite so it can't hijack the
+        // next unrelated TX (an empty vector clears the Modulator's
+        // one-shot override flag).
+        if (m_visibleHailActive) {
             qWarning() << "[FT2-TX] Visible Hail: aborted by operator "
-                          "Halt at step" << m_visibleHailStep;
-            m_visibleHailStep = 0;
-            m_visibleHailAdvanceArmed = false;
+                          "Halt";
+            m_visibleHailActive = false;
+            if (m_modulator)
+                m_modulator->setFullFrameBoltWaveform({});
+            // [BUILD 336 TODO #87] Aborted remote-triggered hail
+            // still restores the operator's original mode speed.
+            restoreVisibleHailSubmodeIfPending();
         }
     }
 }
@@ -7863,7 +7927,7 @@ void UI_Constructor::updateTextDisplay() {
     }
     // [BUILD 331-visHailEpi8] Gate "Send audio-visual HAIL" menu item.
     // Disabled while a Visible Hail sequence is already in flight
-    // (m_visibleHailStep != 0) AND while an ARQ super-message is in
+    // (m_visibleHailActive) AND while an ARQ super-message is in
     // progress (don't interrupt either with another visible hail).
     // [BUILD 331-avHailGroupDialog] Group/@ALLCALL selection NO
     // LONGER disables the menu — instead the slot itself shows a
@@ -7878,7 +7942,7 @@ void UI_Constructor::updateTextDisplay() {
         // not interrupt an in-flight ARQ super-message either direction.
         bool const arqBusy =
             m_chunkedArq && m_chunkedArq->hasActiveSession();
-        bool const visHailBusy = m_visibleHailStep != 0;
+        bool const visHailBusy = m_visibleHailActive;
         m_sendVisibleHailAction->setEnabled(
             canTransmit && !isTransmitting && !arqBusy && !visHailBusy);
     }

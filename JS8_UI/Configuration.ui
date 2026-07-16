@@ -674,6 +674,40 @@
                     </property>
                    </widget>
                   </item>
+                  <item row="2" column="0">
+                   <layout class="QHBoxLayout" name="standard_greeting_label_layout">
+                    <item>
+                     <widget class="QLabel" name="label_standard_greeting">
+                      <property name="text">
+                       <string>Standard greeting:</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
+                     <widget class="QToolButton" name="standard_greeting_info_button">
+                      <property name="toolTip">
+                       <string>More info about the standard greeting</string>
+                      </property>
+                      <property name="text">
+                       <string>&#9432;</string>
+                      </property>
+                      <property name="autoRaise">
+                       <bool>true</bool>
+                      </property>
+                     </widget>
+                    </item>
+                   </layout>
+                  </item>
+                  <item row="2" column="1">
+                   <widget class="QLineEdit" name="standard_greeting_line_edit">
+                    <property name="toolTip">
+                     <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Greeting appended after the callsign when clicking a station on the Spots Map or double-clicking a callsign on the waterfall. Macros like &amp;lt;MYCALL&amp;gt; and &amp;lt;MYGRID4&amp;gt; are substituted.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                    </property>
+                    <property name="text">
+                     <string>HW CPY?</string>
+                    </property>
+                   </widget>
+                  </item>
                  </layout>
                 </widget>
                </item>

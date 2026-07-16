@@ -126,6 +126,11 @@ class Configuration final : public QObject {
     QString hb_message() const;
     QString cq_message() const;
     QString reply_message() const;
+    // [BUILD 336] "Standard greeting" (Settings | General | Behavior,
+    // Customization) — appended after the callsign by the click-to-
+    // call features (Spots Map dot click, waterfall label double-
+    // click). Macro substitution happens at USE time, not here.
+    QString standard_greeting() const;
     QFont table_font() const;
     QFont text_font() const;
     QFont rx_text_font() const;

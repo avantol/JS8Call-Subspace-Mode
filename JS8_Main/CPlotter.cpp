@@ -450,6 +450,48 @@ void CPlotter::annotateCall(QString const &call,
     update();
 }
 
+QString CPlotter::callAt(QPoint const &widgetPos) const {
+    // Labels are rotated vertical strips painted into the waterfall
+    // pixmap (which the widget draws at y = 30, below the scale).
+    // For entry e: x spans [e.x - ascent, e.x + descent], y spans
+    // [topY, topY + lenPx] where topY = m_waterfallRow - e.row (the
+    // label scrolls down one pixel per waterfall row). "Very close"
+    // counts: a few px of slop on every edge.
+    constexpr int SLOP_PX = 6;
+    QFont f = font();
+    f.setPointSize(10); // same size annotateCall paints with
+    QFontMetrics const fm{f};
+    int const ascent = fm.ascent();
+    int const descent = fm.descent();
+    int const wfY = widgetPos.y() - 30;
+    for (auto const &e : m_recentLabels) {
+        qint64 const topY = m_waterfallRow - e.row;
+        if (widgetPos.x() < e.x - ascent - SLOP_PX ||
+            widgetPos.x() > e.x + descent + SLOP_PX)
+            continue;
+        if (wfY < topY - SLOP_PX || wfY > topY + e.lenPx + SLOP_PX)
+            continue;
+        return e.call;
+    }
+    return {};
+}
+
+void CPlotter::mouseDoubleClickEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton) {
+        // Click-to-call is only effective ABOVE 1000 Hz (Andy
+        // 2026-07-16) — keeps the heartbeat sub-band and low region
+        // from being one accidental double-click away from a
+        // directed message.
+        if (freqFromX(event->pos().x()) > 1000.0f) {
+            if (QString const call = callAt(event->pos());
+                !call.isEmpty()) {
+                Q_EMIT callDoubleClicked(call);
+            }
+        }
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
 void CPlotter::paintLabelAt(QPainter &p,
                             LabelEntry const &e,
                             qint64 const yOffset) {

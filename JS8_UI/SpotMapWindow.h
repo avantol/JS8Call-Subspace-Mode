@@ -45,6 +45,10 @@ class SpotMapWindow final : public QWidget {
 
     void saveSettings();
     bool wasVisibleAtShutdown() const; // for startup restore
+    // Transient toast overlay (bottom-center, auto-hides ~2.5 s) —
+    // feedback for click actions, e.g. "Copied K9AVT to outgoing
+    // message".
+    void showToast(QString const &text);
 
   public slots:
     void setBand(QString const &band);
@@ -52,6 +56,10 @@ class SpotMapWindow final : public QWidget {
 
   signals:
     void closed();
+    // [BUILD 336 TODO #96 first slice] Left-click on a spot dot.
+    // Main window decides what to do with it (currently: seed the
+    // outgoing text box when it's empty and no call is selected).
+    void spotClicked(QString const &callsign);
 
   protected:
     void paintEvent(QPaintEvent *) override;
@@ -59,6 +67,8 @@ class SpotMapWindow final : public QWidget {
     void closeEvent(QCloseEvent *) override;
     void showEvent(QShowEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
+    void mousePressEvent(QMouseEvent *) override;
+    void changeEvent(QEvent *) override; // activation → hint toast
 
   private slots:
     void onMqttMessage(QString const &topic, QByteArray const &payload);
@@ -103,6 +113,10 @@ class SpotMapWindow final : public QWidget {
     QTimer m_replotTimer; // debounce
     QTimer m_pruneTimer;
     bool m_restoreVisible = false;
+
+    // Toast overlay (lazy-created by showToast()).
+    class QLabel *m_toast = nullptr;
+    QTimer m_toastTimer;
 
     // On-map display options (defaults per operator, 2026-07-14;
     // on-map toggle UI to follow — details TBD).

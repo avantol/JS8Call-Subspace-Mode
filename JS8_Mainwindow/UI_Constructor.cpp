@@ -432,6 +432,51 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         ui->actionShow_Spots_Map->setChecked(false);
     });
     m_spotMapWindow->setStation(m_config.my_callsign(), m_config.my_grid());
+    // [BUILD 336 TODO #96 first slice] Clicking a spot dot seeds the
+    // outgoing text box with that callsign. Rules (Andy 2026-07-16):
+    // any selected callsign is CLEARED first (selection is not a
+    // guard — the first cut guarded on it and silently ate every
+    // click while something was selected); the box is overwritten
+    // when empty OR holding nothing but a bare callsign (a previous
+    // click's seed — repeated clicks switch stations); real draft
+    // text is never clobbered. Every suppression logs — no silent
+    // misses. Confirmed with a toast on the map window.
+    connect(m_spotMapWindow.data(), &SpotMapWindow::spotClicked, this,
+            [this](QString const &call) {
+                switch (trySeedOutgoingGreeting(call)) {
+                case GreetingSeedResult::Seeded:
+                    m_spotMapWindow->showToast(
+                        tr("Copied %1 to outgoing message")
+                            .arg(call.trimmed()));
+                    break;
+                case GreetingSeedResult::DraftBlocked:
+                    m_spotMapWindow->showToast(tr(
+                        "Clear or send current outgoing message first"));
+                    break;
+                case GreetingSeedResult::InvalidCall:
+                    break; // logged by the helper
+                }
+            });
+    // [BUILD 336] Waterfall: double-click on (or very near) a painted
+    // callsign label — same seed logic; feedback via the status bar
+    // (the waterfall has no toast overlay).
+    connect(m_wideGraph.data(), &WideGraph::callDoubleClicked, this,
+            [this](QString const &call) {
+                switch (trySeedOutgoingGreeting(call)) {
+                case GreetingSeedResult::Seeded:
+                    statusBar()->showMessage(
+                        tr("Copied %1 to outgoing message")
+                            .arg(call.trimmed()), 5000);
+                    break;
+                case GreetingSeedResult::DraftBlocked:
+                    statusBar()->showMessage(tr(
+                        "Clear or send current outgoing message first"),
+                        5000);
+                    break;
+                case GreetingSeedResult::InvalidCall:
+                    break; // logged by the helper
+                }
+            });
     // Reopen the Spots Map at startup if it was open at last exit
     // (one-time — NOT in a menu aboutToShow handler).
     if (m_spotMapWindow->wasVisibleAtShutdown()) {
@@ -1994,6 +2039,31 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 balloon->showAtTarget();
                 self->m_settings->setValue("FirstRunSpotsMapHintShown",
                                            true);
+                return; // one balloon per startup
+            }
+
+            // Priority 3: waterfall double-click-to-call discovery
+            // (Build 336). Only when the waterfall window is visible
+            // — otherwise the flag stays unset and the hint shows on
+            // a later startup.
+            if (!self->m_settings
+                     ->value("FirstRunWaterfallDblClickHintShown",
+                             false)
+                     .toBool() &&
+                self->m_wideGraph && self->m_wideGraph->isVisible()) {
+                auto *balloon = new SpeechBalloon(
+                    tr("Double-click on any call sign on the waterfall "
+                       "to create an outgoing message. "
+                       "Click here to dismiss."),
+                    self->m_wideGraph.data());
+                balloon->setTargetRectOverride(
+                    QRect(self->m_wideGraph->width() / 2 - 60, 40,
+                          120, 24));
+                balloon->setTailSide(SpeechBalloon::TailSide::Top);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue(
+                    "FirstRunWaterfallDblClickHintShown", true);
                 return; // one balloon per startup
             }
         });

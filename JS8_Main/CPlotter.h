@@ -170,6 +170,9 @@ class CPlotter final : public QWidget {
   signals:
 
     void changeFreq(int);
+    // [BUILD 336] Double-click landed on (or very near) a painted
+    // callsign label. Payload: the callsign.
+    void callDoubleClicked(QString const &call);
 
   protected:
     // Event Handlers
@@ -180,6 +183,7 @@ class CPlotter final : public QWidget {
     void wheelEvent(QWheelEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
+    void mouseDoubleClickEvent(QMouseEvent *) override;
 
   private:
     // Replot data storage; alternatives of nothing at all, a
@@ -241,6 +245,9 @@ class CPlotter final : public QWidget {
     };
     void paintLabelAt(QPainter &p, LabelEntry const &e,
                       qint64 yOffset);
+    // [BUILD 336] Hit-test a widget-coordinate point against the
+    // painted callsign labels; empty string when nothing is close.
+    QString callAt(QPoint const &widgetPos) const;
     std::deque<LabelEntry> m_recentLabels;
     qint64 m_waterfallRow = 0;  // monotonic 1-per-scroll counter
 

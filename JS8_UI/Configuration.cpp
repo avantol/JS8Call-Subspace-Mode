@@ -589,6 +589,7 @@ class Configuration::impl final : public QDialog {
     QString cq_;
     QString hb_;
     QString reply_;
+    QString standardGreeting_;
     int callsign_aging_;
     int activity_aging_;
     QColor color_primary_highlight_;
@@ -1183,6 +1184,10 @@ QString Configuration::cq_message() const {
 
 QString Configuration::reply_message() const { return m_->reply_.trimmed(); }
 
+QString Configuration::standard_greeting() const {
+    return m_->standardGreeting_.trimmed();
+}
+
 int Configuration::callsign_aging() const { return m_->callsign_aging_; }
 
 int Configuration::activity_aging() const { return m_->activity_aging_; }
@@ -1365,6 +1370,8 @@ Configuration::impl::impl(Configuration *self, QDir const &temp_directory,
         new QRegularExpressionValidator{message_alphabet, this});
     ui_->reply_message_line_edit->setValidator(
         new QRegularExpressionValidator{message_alphabet, this});
+    ui_->standard_greeting_line_edit->setValidator(
+        new QRegularExpressionValidator{message_alphabet, this});
     ui_->cq_message_line_edit->setValidator(
         new QRegularExpressionValidator{message_alphabet, this});
     ui_->hb_message_line_edit->setValidator(
@@ -1380,6 +1387,7 @@ Configuration::impl::impl(Configuration *self, QDir const &temp_directory,
     setUppercase(ui_->info_message_line_edit);
     setUppercase(ui_->status_message_line_edit);
     setUppercase(ui_->reply_message_line_edit);
+    setUppercase(ui_->standard_greeting_line_edit);
     setUppercase(ui_->cq_message_line_edit);
     setUppercase(ui_->hb_message_line_edit);
     setUppercase(ui_->groups_line_edit);
@@ -1602,6 +1610,14 @@ Configuration::impl::impl(Configuration *self, QDir const &temp_directory,
                "message adds SNR and grid information, if you want."));
     });
 
+    connect(ui_->standard_greeting_info_button, &QToolButton::clicked, this,
+            [this]() {
+        QMessageBox::information(
+            this, tr("Standard greeting"),
+            tr("Double-click on waterfall or click on spots map creates "
+               "an outgoing message using this text."));
+    });
+
     connect(ui_->subdivisions_info_button, &QToolButton::clicked, this,
             [this]() {
         QMessageBox::information(
@@ -1773,6 +1789,7 @@ void Configuration::impl::initialize_models() {
         cq_.toUpper().replace("CQCQCQ", "CQ CQ CQ"));
     ui_->hb_message_line_edit->setText(hb_.toUpper());
     ui_->reply_message_line_edit->setText(reply_.toUpper());
+    ui_->standard_greeting_line_edit->setText(standardGreeting_.toUpper());
     ui_->use_dynamic_grid->setChecked(use_dynamic_info_);
 
     ui_->tableForegroundLabel->setStyleSheet(
@@ -2130,6 +2147,8 @@ void Configuration::impl::read_settings() {
     cq_ =
         settings_->value("CQMessage", QString{"CQ CQ CQ <MYGRID4>"}).toString();
     reply_ = settings_->value("Reply", QString{"HW CPY?"}).toString();
+    standardGreeting_ =
+        settings_->value("StandardGreeting", QString{"HW CPY?"}).toString();
     next_color_cq_ = color_cq_ =
         settings_->value("colorCQ", "#66ff66").toString();
     next_color_primary_highlight_ = color_primary_highlight_ =
@@ -2526,6 +2545,7 @@ void Configuration::impl::write_settings() {
     settings_->setValue("CQMessage", cq_);
     settings_->setValue("HBMessage", hb_);
     settings_->setValue("Reply", reply_);
+    settings_->setValue("StandardGreeting", standardGreeting_);
     settings_->setValue("CallsignAging", callsign_aging_);
     settings_->setValue("ActivityAging", activity_aging_);
     settings_->setValue("colorCQ", color_cq_);
@@ -3218,6 +3238,7 @@ void Configuration::impl::accept() {
     cq_ = ui_->cq_message_line_edit->text().toUpper();
     hb_ = ui_->hb_message_line_edit->text().toUpper();
     reply_ = ui_->reply_message_line_edit->text().toUpper();
+    standardGreeting_ = ui_->standard_greeting_line_edit->text().toUpper();
     eot_ = ui_->eot_line_edit->text();
     mfi_ = ui_->mfi_line_edit->text();
     my_info_ = ui_->info_message_line_edit->text().toUpper();

@@ -23,6 +23,7 @@
 #include <QPainterPath>
 #include <QMouseEvent>
 #include <QSettings>
+#include <QLabel>
 #include <QToolTip>
 
 #include <algorithm>
@@ -101,17 +102,18 @@ void SpotMapWindow::rebuildTopics() {
         m_mqtt->stop();
         return;
     }
-    // Topic levels can't contain '/', which portable suffixes like
-    // WM8Q/P would introduce — subscribe on the BASE callsign level
-    // and verify the payload's sender field on arrival instead.
-    QString baseCall = m_myCall.toUpper();
-    if (int const slash = baseCall.indexOf(QLatin1Char('/')); slash > 0)
-        baseCall.truncate(slash);
+    // The broker encodes '/' in callsigns as '.' at the topic level
+    // — verified live 2026-07-15 with WM8Q/P: topic level "WM8Q.P",
+    // payload sc "WM8Q/P". Subscribe on the EXACT call, dot-encoded;
+    // the payload filter then exact-matches sc against m_myCall.
+    QString topicCall = m_myCall.toUpper();
+    topicCall.replace(QLatin1Char('/'), QLatin1Char('.'));
 
     // pskr/filter/v2/{band}/{mode}/{sender}/{receiver}/{senderLoc}/...
     // All bands (caches fill in the background), mode JS8 (spotters
     // report our transmissions with the "JS8" mode string).
-    QString topic = QStringLiteral("pskr/filter/v2/+/JS8/%1/#").arg(baseCall);
+    QString topic =
+        QStringLiteral("pskr/filter/v2/+/JS8/%1/#").arg(topicCall);
 
     // Documented debug hook: flood-filter override for protocol
     // bring-up without transmitting, e.g.
@@ -123,7 +125,7 @@ void SpotMapWindow::rebuildTopics() {
         topic = ov;
     }
 
-    m_mqtt->setClientIdPrefix(QStringLiteral("JS8Call_%1").arg(baseCall));
+    m_mqtt->setClientIdPrefix(QStringLiteral("JS8Call_%1").arg(topicCall));
     m_mqtt->setTopics({topic});
     m_debugDumpsLeft = 20;
     m_mqtt->start();
@@ -172,18 +174,21 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
         return;
     }
 
-    // Verify the sender really is us (topic matching is on the base
-    // call; payload carries the exact sender callsign).
+    // Verify the sender is EXACTLY us. The topic subscribe uses the
+    // base callsign level (topic levels can't contain '/'), so the
+    // stream is a superset when running with a /P /M suffix — but
+    // WM8Q and WM8Q/P are distinct stations operationally, and this
+    // map must show only the EXACT configured call's spots (full-
+    // callsign-compare rule; no base-call fallback here).
+    // NOTE: how the broker encodes a suffixed call at the topic
+    // level is unverified — when operating /P, watch the first-N
+    // debug dumps (mqttclient.js8) to confirm suffixed spots arrive
+    // on the base-level subscription at all.
     QString const sender = o.value(QStringLiteral("sc")).toString();
     if (!sender.isEmpty() &&
         sender.compare(m_myCall, Qt::CaseInsensitive) != 0) {
-        QString base = m_myCall.toUpper();
-        if (int const slash = base.indexOf(QLatin1Char('/')); slash > 0)
-            base.truncate(slash);
-        if (sender.compare(base, Qt::CaseInsensitive) != 0) {
-            ++m_skippedSpots;
-            return;
-        }
+        ++m_skippedSpots;
+        return;
     }
 
     QString const receiverCall = o.value(QStringLiteral("rc")).toString();
@@ -580,7 +585,7 @@ void SpotMapWindow::redraw() {
     if (spots.isEmpty()) {
         p.setPen(QColor(150, 150, 170));
         p.drawText(QRectF{0, center.y() - 30, static_cast<qreal>(w), 60},
-                   Qt::AlignCenter, tr("no spots in the last 15 minutes"));
+                   Qt::AlignCenter, tr("No new spots yet"));
     }
 
     // Legend: SNR gradient bar.
@@ -646,6 +651,58 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         QToolTip::hideText();
     }
     QWidget::mouseMoveEvent(event);
+}
+
+void SpotMapWindow::showToast(QString const &text) {
+    if (!m_toast) {
+        m_toast = new QLabel(this);
+        m_toast->setStyleSheet(
+            QStringLiteral("QLabel { background-color: rgba(30,30,30,220);"
+                           " color: white; border-radius: 6px;"
+                           " padding: 6px 14px; font-weight: bold; }"));
+        m_toast->setAlignment(Qt::AlignCenter);
+        m_toast->hide();
+        m_toastTimer.setSingleShot(true);
+        connect(&m_toastTimer, &QTimer::timeout, m_toast, &QLabel::hide);
+    }
+    m_toast->setText(text);
+    m_toast->adjustSize();
+    m_toast->move((width() - m_toast->width()) / 2,
+                  height() - m_toast->height() - 24);
+    m_toast->show();
+    m_toast->raise();
+    m_toastTimer.start(2500);
+}
+
+void SpotMapWindow::mousePressEvent(QMouseEvent *event) {
+    // [BUILD 336 TODO #96 first slice] Left-click a spot dot → emit
+    // its callsign. Same nearest-within-radius hit-test as hover.
+    if (event->button() == Qt::LeftButton) {
+        QPointF const m = event->position();
+        ScreenSpot const *best = nullptr;
+        double bestD2 = 12.0 * 12.0;
+        for (auto const &ss : m_screenSpots) {
+            double const dx = ss.pos.x() - m.x();
+            double const dy = ss.pos.y() - m.y();
+            if (double const d2 = dx * dx + dy * dy; d2 < bestD2) {
+                bestD2 = d2;
+                best = &ss;
+            }
+        }
+        if (best) {
+            Q_EMIT spotClicked(best->spot.receiverCall);
+        }
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void SpotMapWindow::changeEvent(QEvent *event) {
+    // Hint toast whenever the map window gains focus (Andy
+    // 2026-07-16) — teaches the click-to-copy affordance in place.
+    if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+        showToast(tr("Click on a call sign to create an outgoing message"));
+    }
+    QWidget::changeEvent(event);
 }
 
 void SpotMapWindow::showEvent(QShowEvent *) { requestReplot(); }

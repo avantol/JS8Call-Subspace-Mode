@@ -10,6 +10,7 @@
 #include "JS8_Main/ChunkedArq.h"
 
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QTimer>
 
 void UI_Constructor::processCommandActivity() {
@@ -493,24 +494,89 @@ void UI_Constructor::processCommandActivity() {
         int freq = -1;
 
         // [BUILD 331-avHail2] Hidden AVHAIL? remote-trigger command.
-        // When a peer addresses us with "AVHAIL?" body, switch to
-        // Subspace (FT2) submode and fire an audio-visual HAIL. Stay
-        // in Subspace after — don't auto-revert. NOT in the directed-
-        // to-XXX menu (operators invoke via TCP API or manual typing).
-        // Guarded: not-allcall, not-already-in-AV-HAIL, not-transmitting.
-        if (!isAllCall && d.cmd == QStringLiteral(" ") &&
-            d.text.toUpper().contains(QStringLiteral("AVHAIL?")) &&
-            m_visibleHailStep == 0 && !m_transmitting) {
-            qWarning() << "[AVHAIL?] remote-trigger received from"
-                       << d.from
-                       << "→ switching to Subspace + firing AV HAIL";
-            setSubmode(Varicode::JS8CallFT2);
-            QPointer<UI_Constructor> const self(this);
-            QTimer::singleShot(500, this, [self]() {
-                if (!self) return;
-                self->on_sendVisibleHailAction_triggered();
-            });
-            continue;
+        // When a peer addresses us with an EXACT "AVHAIL?" body,
+        // switch to Subspace (FT2) submode and fire an audio-visual
+        // HAIL. NOT in the directed-to-XXX menu (operators invoke via
+        // TCP API or manual typing).
+        //
+        // [BUILD 336 TODO #87] The original mode speed is captured
+        // here and restored once the hail completes (stopTx).
+        //
+        // [BUILD 336 avHailFleet] Hardened + fleet-capable:
+        //  - EXACT body match (d.text == "AVHAIL?"), no longer
+        //    contains() — a message merely mentioning AVHAIL? (e.g.
+        //    someone asking what it is) must not key the transmitter.
+        //  - @ALLCALL form accepted: one trigger lights every
+        //    Subspace station at once. Response delay is randomized
+        //    over 5 s so fleet PTT-ups aren't phase-locked and the
+        //    encoded HAILs at different offsets stay decodable at the
+        //    trigger end. Whitelist / blacklist already ran above.
+        //  - Consent / politeness gates (TODO #97, Andy 2026-07-15):
+        //    response inhibited when AUTO (autoreply) is off, when the
+        //    outgoing text box has ANY operator text (the hail path
+        //    would clobber a draft), or when a callsign is selected
+        //    (operator is mid-workflow). Every suppression logs at
+        //    qWarning — silent misses cost a full gate-by-gate hunt.
+        //  - Rate-limit / replay guard (TODO #97): global once-per-
+        //    hour cap — a replayed trigger (no anti-replay exists in
+        //    the protocol; 2026-06-08 P1RATE incident) can't chain-
+        //    key the station.
+        if (d.cmd == QStringLiteral(" ") && !m_visibleHailActive &&
+            !m_transmitting) {
+            // d.text is the message BODY ONLY (to/cmd/extra live in
+            // their own fields; the "FROM: TO body ♢" shape seen in
+            // logs and DIRECTED.TXT is display text assembled above).
+            // Same convention as the BELL handler below. Exact match:
+            // the body must BE "AVHAIL?", not merely contain it.
+            QString const body = d.text.toUpper().simplified();
+            if (body == QStringLiteral("AVHAIL?")) {
+                if (!ui->actionModeAutoreply->isChecked()) {
+                    qWarning() << "[AVHAIL?] suppressed: auto-reply off"
+                               << "from=" << d.from;
+                    continue;
+                }
+                if (!ui->extFreeTextMsgEdit->toPlainText()
+                         .trimmed().isEmpty()) {
+                    qWarning() << "[AVHAIL?] suppressed: outgoing box"
+                                  " not empty, from=" << d.from;
+                    continue;
+                }
+                if (!callsignSelected().trimmed().isEmpty()) {
+                    qWarning() << "[AVHAIL?] suppressed: a callsign is"
+                                  " selected, from=" << d.from;
+                    continue;
+                }
+                qint64 const nowMs =
+                    DriftingDateTime::currentMSecsSinceEpoch();
+                if (m_lastAvhailResponseMs > 0 &&
+                    nowMs - m_lastAvhailResponseMs < 3600000) {
+                    qWarning() << "[AVHAIL?] suppressed: rate limit"
+                               << "(once per hour), from=" << d.from
+                               << "elapsedMin="
+                               << ((nowMs - m_lastAvhailResponseMs)
+                                   / 60000);
+                    continue;
+                }
+                m_lastAvhailResponseMs = nowMs;
+                int delayMs = 500;
+                if (isAllCall) {
+                    delayMs += QRandomGenerator::global()->bounded(5000);
+                }
+                qWarning() << "[AVHAIL?] remote-trigger received from"
+                           << d.from << "allcall=" << isAllCall
+                           << "delay=" << delayMs
+                           << "→ switching to Subspace + firing AV HAIL";
+                m_visibleHailRestoreSubmode =
+                    (m_nSubMode != Varicode::JS8CallFT2) ? m_nSubMode
+                                                         : -1;
+                setSubmode(Varicode::JS8CallFT2);
+                QPointer<UI_Constructor> const self(this);
+                QTimer::singleShot(delayMs, this, [self]() {
+                    if (!self) return;
+                    self->on_sendVisibleHailAction_triggered();
+                });
+                continue;
+            }
         }
 
         // [BUILD 331-bell TODO #80] BELL command. Peer addresses us

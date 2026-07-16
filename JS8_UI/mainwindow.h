@@ -364,6 +364,7 @@ class UI_Constructor : public QMainWindow {
     // is scheduled in the ft2WaveformDone handler when
     // m_visibleHailPendingHail is set.
     void on_sendVisibleHailAction_triggered();
+    void restoreVisibleHailSubmodeIfPending();
     void onChunkedProgressUpdate(int chunkId, int total, int retries);
     void onChunkedProgressEnd();
 
@@ -673,31 +674,45 @@ class UI_Constructor : public QMainWindow {
     // evaluateArqGateForText.
     QAction *m_sendArqAction{nullptr};
     // [BUILD 331-visibleHail] "Send Visible Hail" menu action — third
-    // item. Two-cycle sequence: bolt frame (3.75 s, painted ⚡
-    // silhouette as Hellschreiber-style audio raster), one full silent
-    // cycle gap, then standard Subspace HAIL frame (3.75 s of the
-    // encoded `<mycall>: @ALLCALL ACK` directed message). Total
-    // duration ~11.25 s. The visual + the encoded ID together
-    // announce the operator's presence to BOTH eyeballs-on-waterfall
-    // AND software-decoder peers.
+    // item. One composite transmission: the encoded Subspace HAIL
+    // frame (`<mycall>: @ALLCALL ACK`, 2.52 s) followed back-to-back
+    // by two painted ⚡ diag frames (Hellschreiber-style audio
+    // raster, 3.0 s each) — ~8.8 s total under a single PTT cycle.
+    // The encoded ID + the visual together announce the operator's
+    // presence to BOTH software-decoder AND eyeballs-on-waterfall
+    // peers.
     QAction *m_sendVisibleHailAction{nullptr};
-    // [BUILD 331-visHailEpi2] Visible-Hail chain state machine.
-    // Andy 2026-06-19 simplified: NO initial bolt; just HAIL then
-    // back-to-back diag epilogs. Steps:
-    //   0 = idle (not in chain)
-    //   1 = HAIL cycle in progress (encoded `<mycall>: @ALLCALL ACK`)
-    //   2 = epilog diag 1 (bolt repaint, ~1 sec gap after HAIL)
-    //   3 = epilog diag 2 (bolt repaint, back-to-back with #2)
-    // stopTx() advances the step; QTimer schedules the next TX.
-    int m_visibleHailStep{0};
-    // [BUILD 331-visHailEpi4] Double-fire guard. stopTx() can be
-    // called multiple times for ONE TX cycle (btxok-edge + waveform-
-    // poll both fire it within the same guiUpdate tick). Without this
-    // guard the chain advances multiple steps per TX cycle, skipping
-    // intermediate TXes. Set true when a new TX is armed (slot start
-    // or QTimer callback), cleared by the advancement block so further
-    // stopTx calls within the same cycle are no-ops.
-    bool m_visibleHailAdvanceArmed{false};
+    // [BUILD 336 TODO #94] Visible Hail is ONE transmission: the
+    // encoded HAIL frame and both diag bolts are concatenated into a
+    // single composite waveform staged via the Modulator's full-frame
+    // override, played under a single PTT key/unkey. The former
+    // 3-step state machine (per-frame PTT re-key advanced from
+    // stopTx side effects) lost frames when CAT-port contention
+    // swallowed a re-key on slow machines. This flag is the sequence
+    // lifecycle: set when the hail TX is armed, cleared in stopTx()
+    // (or operator Halt). Guards the remote AVHAIL? trigger and the
+    // menu-enable gate against double-fire while the TX is pending.
+    bool m_visibleHailActive{false};
+    // [BUILD 336 TODO #87] Submode to restore after a REMOTE-triggered
+    // AVHAIL? completes (the trigger switches the receiver to Subspace
+    // to transmit the hail; the operator's original mode speed comes
+    // back afterward). -1 = no restore pending (manual menu hails
+    // never set this — the operator chose Subspace deliberately).
+    int m_visibleHailRestoreSubmode{-1};
+    // [BUILD 336] Click-to-call: seed the outgoing box with
+    // "<CALL> <standard greeting>" (Configuration::standard_greeting,
+    // macros substituted). Shared by the Spots Map dot click and the
+    // waterfall callsign-label double-click; callers translate the
+    // result into their own feedback (toast / status message).
+    // NOTE: plain private members, NOT in a slots section — moc
+    // cannot parse an enum declaration there.
+    enum class GreetingSeedResult { Seeded, DraftBlocked, InvalidCall };
+    GreetingSeedResult trySeedOutgoingGreeting(QString const &call);
+    // [BUILD 336 TODO #97] Wall-clock ms of the last accepted AVHAIL?
+    // remote trigger — global once-per-hour rate limit / replay guard
+    // (the protocol has no anti-replay; a replayed trigger must not
+    // chain-key the station). 0 = never triggered this session.
+    qint64 m_lastAvhailResponseMs{0};
     // [BUILD 298] When set non-zero, an in-flight chunked-ARQ send
     // was initiated by "Send using ARQ" (text), as opposed to
     // "Send file…" (file transfer). sendComplete / sendFailed on a
