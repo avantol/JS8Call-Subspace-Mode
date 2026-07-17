@@ -31,6 +31,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
+
 class Configuration;
 class MqttClient;
 class QSettings;
@@ -53,6 +55,9 @@ class SpotMapWindow final : public QWidget {
   public slots:
     void setBand(QString const &band);
     void setStation(QString const &callsign, QString const &grid);
+    // [BUILD 340] Dial frequency (Hz) — lets hover show each spot's
+    // AUDIO offset (spot RF f − dial) and gates double-click QSY.
+    void setDialFrequency(qint64 hz);
 
   signals:
     void closed();
@@ -60,6 +65,9 @@ class SpotMapWindow final : public QWidget {
     // Main window decides what to do with it (currently: seed the
     // outgoing text box when it's empty and no call is selected).
     void spotClicked(QString const &callsign);
+    // [BUILD 340] Double-click on a spot: QSY to the DX station's
+    // audio offset (only emitted when it's above 1000 Hz).
+    void qsyToOffset(int audioHz);
 
   protected:
     void paintEvent(QPaintEvent *) override;
@@ -68,6 +76,7 @@ class SpotMapWindow final : public QWidget {
     void showEvent(QShowEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
+    void mouseDoubleClickEvent(QMouseEvent *) override;
     void changeEvent(QEvent *) override; // activation → hint toast
 
   private slots:
@@ -81,7 +90,9 @@ class SpotMapWindow final : public QWidget {
         QDateTime when;         // clamped-to-now report time
         QString receiverCall;
         QString receiverGrid;
+        QString country;        // spotter's country (empty if ours/unknown)
         int snr = 0;            // dB as reported by the spotter
+        qint64 freqHz = 0;      // exact RF Hz the spotter logged us at
         float azimuth = 0.0f;   // degrees true, from my grid
         float distance = 0.0f;  // km or miles per Configuration::miles()
     };
@@ -100,6 +111,17 @@ class SpotMapWindow final : public QWidget {
     QSettings *m_settings;
     Configuration const *m_config;
     MqttClient *m_mqtt;
+    qint64 m_dialHz = 0;
+    // Country-name lookup by callsign (LogBook/cty.dat, injected by
+    // the main window — this widget has no logbook dependency).
+    std::function<QString(QString const &)> m_countryLookup;
+
+  public:
+    void setCountryLookup(std::function<QString(QString const &)> fn) {
+        m_countryLookup = std::move(fn);
+    }
+
+  private:
 
     QHash<QString, QVector<Spot>> m_spotsByBand;
     QString m_currentBand;
@@ -139,6 +161,8 @@ class SpotMapWindow final : public QWidget {
         Spot spot;
     };
     QVector<ScreenSpot> m_screenSpots;
+    // Nearest spot within the hit radius, or nullptr.
+    ScreenSpot const *hitTest(QPointF const &pos) const;
 };
 
 #endif

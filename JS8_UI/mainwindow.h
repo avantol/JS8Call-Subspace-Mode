@@ -738,6 +738,7 @@ class UI_Constructor : public QMainWindow {
     // skip the query entirely. FILE TRANSFERS ONLY (plain ARQ text
     // is format-agnostic).
     QString m_pendingFilePath;
+    QString m_pendingLinkUrl;   // set INSTEAD of path for link sends
     QString m_pendingFilePeer;
     int m_capQueryRetries{0};
     // Generation counter: every park/abort/resume bumps it, and each
@@ -750,6 +751,9 @@ class UI_Constructor : public QMainWindow {
     void startFileTransferWithFormat(QString const &filePath,
                                      QString const &peer,
                                      int peerLevel);
+    void sendWebLink(QString const &url, QString const &peer);
+    void dispatchArqBody(QString const &body, QString const &peer,
+                         int peerLevel);
     // [BUILD 336 TODO #97] Wall-clock ms of the last accepted AVHAIL?
     // remote trigger — global once-per-hour rate limit / replay guard
     // (the protocol has no anti-replay; a replayed trigger must not

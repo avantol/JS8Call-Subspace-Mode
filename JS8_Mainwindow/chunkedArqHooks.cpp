@@ -648,6 +648,39 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
     QString payloadBase32;       // V1: still-encoded payload
     QByteArray payloadBytes;     // V2: decoded + VERIFIED payload
     int wireVersion = 0;
+    // [BUILD 340] Web link (L/V1): NOT a file — no save dialog, no
+    // Downloads folder. Show the link directly (clickable, escaped,
+    // FULL URL as the link text — receiver sees exactly where it
+    // goes) plus a conversation-panel line for scrollback. The
+    // decoder enforces the http(s) scheme, so a corrupt or hostile
+    // payload can't produce a link to who-knows-what.
+    if (QString linkUrl; FileTransfer::splitLinkBody(body, linkUrl)) {
+        qCWarning(chunkedarq_js8)
+            << "[LT-RX] web link received — peer=" << fromCall
+            << "msgId=" << msgId << "url=" << linkUrl;
+        auto const summary =
+            QStringLiteral("%1: [web link received: %2]")
+                .arg(fromCall, linkUrl);
+        displayTextForFreq(summary, freq(),
+                           DriftingDateTime::currentDateTimeUtc(),
+                           /*isTx=*/false, /*isNewLine=*/true,
+                           /*isLast=*/true, m_nSubMode);
+        tryNotify(QStringLiteral("directed"), m_nSubMode);
+        auto *linkBox = new QMessageBox(this);
+        linkBox->setWindowTitle(tr("Web link received"));
+        linkBox->setTextFormat(Qt::RichText);
+        linkBox->setText(
+            QStringLiteral("<p>%1 sent a web link:</p>"
+                           "<p><a href=\"%2\">%2</a></p>")
+                .arg(fromCall.toHtmlEscaped(),
+                     linkUrl.toHtmlEscaped()));
+        linkBox->setIcon(QMessageBox::Information);
+        linkBox->setStandardButtons(QMessageBox::Ok);
+        linkBox->setWindowModality(Qt::NonModal);
+        linkBox->setAttribute(Qt::WA_DeleteOnClose);
+        linkBox->show();
+        return;
+    }
     if (FileTransfer::splitWireBody(body, header, payloadBase32)) {
         wireVersion = 1;
     } else if (FileTransfer::splitWireBodyV2(body, header,

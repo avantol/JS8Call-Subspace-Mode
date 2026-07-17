@@ -603,23 +603,33 @@ void UI_Constructor::processCommandActivity() {
                 // parked waiting on exactly this reply — resume it
                 // with the just-learned format. Deferred 1.5 s so RX
                 // processing settles before we key up.
-                if (!m_pendingFilePath.isEmpty() &&
+                if ((!m_pendingFilePath.isEmpty() ||
+                     !m_pendingLinkUrl.isEmpty()) &&
                     d.from.compare(m_pendingFilePeer,
                                    Qt::CaseInsensitive) == 0) {
                     QString const path = m_pendingFilePath;
+                    QString const link = m_pendingLinkUrl;
                     QString const pr = m_pendingFilePeer;
                     m_pendingFilePath.clear();
+                    m_pendingLinkUrl.clear();
                     m_pendingFilePeer.clear();
                     ++m_capQueryGen;
                     qWarning() << "[FT-TX] capability received — "
-                                  "resuming pending file transfer to"
-                               << pr << "level=" << level;
+                                  "resuming pending transfer to"
+                               << pr << "level=" << level
+                               << (link.isEmpty() ? "(file)" : "(link)");
                     QPointer<UI_Constructor> const self(this);
                     QTimer::singleShot(1500, this,
-                        [self, path, pr, level]() {
+                        [self, path, link, pr, level]() {
                             if (!self) return;
-                            self->startFileTransferWithFormat(
-                                path, pr, level);
+                            if (!link.isEmpty()) {
+                                // Cache now holds the level; sendWebLink
+                                // proceeds directly.
+                                self->sendWebLink(link, pr);
+                            } else {
+                                self->startFileTransferWithFormat(
+                                    path, pr, level);
+                            }
                         });
                 }
             }

@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QUrl>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
@@ -413,6 +414,42 @@ QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader) {
         << "envelopeBytes=" << envelope.size()
         << "wireBodyChars=" << body.size();
     return body;
+}
+
+QString buildLinkBody(QString const &url) {
+    QUrl const parsed = QUrl(url.trimmed());
+    if (!parsed.isValid() ||
+        (parsed.scheme() != QStringLiteral("http") &&
+         parsed.scheme() != QStringLiteral("https"))) {
+        qCWarning(filetransfer_js8)
+            << "[LT-TX] buildLinkBody: not an http(s) URL";
+        return QString();
+    }
+    QString const body =
+        QString::fromLatin1(PREFIX_L1) +
+        base32Encode(parsed.toString(QUrl::FullyEncoded).toUtf8());
+    qCWarning(filetransfer_js8)
+        << "[LT-TX] link body built: wireBodyChars=" << body.size();
+    return body;
+}
+
+bool splitLinkBody(QString const &body, QString &outUrl) {
+    QString const prefix = QString::fromLatin1(PREFIX_L1);
+    if (!body.startsWith(prefix)) return false;
+    QString rest = body.mid(prefix.size());
+    rest.remove(QRegularExpression(QStringLiteral("\\s+")));
+    QByteArray const bytes = base32Decode(rest);
+    if (bytes.isEmpty()) return false;
+    QUrl const parsed = QUrl(QString::fromUtf8(bytes));
+    if (!parsed.isValid() ||
+        (parsed.scheme() != QStringLiteral("http") &&
+         parsed.scheme() != QStringLiteral("https"))) {
+        qCWarning(filetransfer_js8)
+            << "[LT-RX] decoded payload is not an http(s) URL";
+        return false;
+    }
+    outUrl = parsed.toString(QUrl::FullyEncoded);
+    return true;
 }
 
 bool splitWireBodyV2(QString const &body,

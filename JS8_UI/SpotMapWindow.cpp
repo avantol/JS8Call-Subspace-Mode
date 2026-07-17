@@ -142,6 +142,10 @@ void SpotMapWindow::setStation(QString const &callsign, QString const &grid) {
     requestReplot();
 }
 
+void SpotMapWindow::setDialFrequency(qint64 const hz) {
+    m_dialHz = hz;
+}
+
 void SpotMapWindow::setBand(QString const &band) {
     if (band == m_currentBand)
         return;
@@ -198,6 +202,20 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
         ++m_skippedSpots;
         return;
     }
+    // [BUILD 340] Exact RF Hz the spotter logged us at (payload f) —
+    // hover shows the audio offset (f − dial) and double-click QSYs
+    // to it.
+    qint64 const spotFreqHz =
+        static_cast<qint64>(o.value(QStringLiteral("f")).toDouble(0));
+    // [BUILD 340] Country name for hover, only when the spotter's
+    // DXCC differs from OURS — both codes ride the topic
+    // (…/{sDXCC}/{rDXCC}); the NAME comes from the injected
+    // LogBook/cty.dat lookup by callsign.
+    QString country;
+    if (QStringList const lv = topic.split(QLatin1Char('/'));
+        lv.size() > 10 && m_countryLookup && lv.at(9) != lv.at(10)) {
+        country = m_countryLookup(receiverCall);
+    }
 
     // Band: prefer the topic level (pskr/filter/v2/{band}/...), fall
     // back to mapping the reported frequency.
@@ -225,6 +243,8 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     Spot spot;
     spot.receiverCall = receiverCall.toUpper();
     spot.receiverGrid = receiverGrid;
+    spot.country = country;
+    spot.freqHz = spotFreqHz;
     spot.snr = snr;
     spot.azimuth = vec.azimuth();
     spot.distance = vec.distance(); // km (display conversion at paint)
@@ -620,37 +640,72 @@ void SpotMapWindow::paintEvent(QPaintEvent *) {
 
 void SpotMapWindow::resizeEvent(QResizeEvent *) { requestReplot(); }
 
-void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
-    // Hover identity: nearest spot within a comfortable radius.
-    QPointF const m = event->position();
+SpotMapWindow::ScreenSpot const *
+SpotMapWindow::hitTest(QPointF const &pos) const {
     ScreenSpot const *best = nullptr;
     double bestD2 = 12.0 * 12.0;
     for (auto const &ss : m_screenSpots) {
-        double const dx = ss.pos.x() - m.x();
-        double const dy = ss.pos.y() - m.y();
+        double const dx = ss.pos.x() - pos.x();
+        double const dy = ss.pos.y() - pos.y();
         if (double const d2 = dx * dx + dy * dy; d2 < bestD2) {
             bestD2 = d2;
             best = &ss;
         }
     }
-    if (best) {
+    return best;
+}
+
+void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
+    // Hover identity: nearest spot within a comfortable radius.
+    if (ScreenSpot const *best = hitTest(event->position())) {
         bool const miles = gridInUS(m_myGrid);
         double const dist = best->spot.distance * (miles ? 0.621371 : 1.0);
         qint64 const ageSecs = best->spot.when.secsTo(
             DriftingDateTime::currentDateTimeUtc());
-        QToolTip::showText(
-            event->globalPosition().toPoint(),
-            tr("%1 (%2)\n%3 dB · %4 %5 · %6 min ago")
-                .arg(best->spot.receiverCall, best->spot.receiverGrid)
-                .arg(best->spot.snr)
-                .arg(qRound(dist))
-                .arg(miles ? tr("mi") : tr("km"))
-                .arg(ageSecs / 60),
-            this);
+        QString tip = tr("%1 (%2)\n%3 dB · %4 %5 · %6 min ago")
+                          .arg(best->spot.receiverCall,
+                               best->spot.receiverGrid)
+                          .arg(best->spot.snr)
+                          .arg(qRound(dist))
+                          .arg(miles ? tr("mi") : tr("km"))
+                          .arg(ageSecs / 60);
+        // [BUILD 340] Audio offset they heard us at (spot RF − dial),
+        // when both are known and the result is sane.
+        if (best->spot.freqHz > 0 && m_dialHz > 0) {
+            qint64 const audio = best->spot.freqHz - m_dialHz;
+            if (audio > 0 && audio < 6000) {
+                tip += tr("\n%1 Hz").arg(audio);
+            }
+        }
+        // [BUILD 340] Country, when not our own (topic DXCC compare).
+        if (!best->spot.country.isEmpty()) {
+            tip += QStringLiteral("\n") + best->spot.country;
+        }
+        QToolTip::showText(event->globalPosition().toPoint(), tip, this);
     } else {
         QToolTip::hideText();
     }
     QWidget::mouseMoveEvent(event);
+}
+
+// [BUILD 340] Double-click a spot → QSY to the DX station's audio
+// offset — only above 1000 Hz (same convention as the waterfall
+// double-click gate: keep the HB sub-band / low region safe).
+void SpotMapWindow::mouseDoubleClickEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton) {
+        if (ScreenSpot const *best = hitTest(event->position())) {
+            if (best->spot.freqHz > 0 && m_dialHz > 0) {
+                qint64 const audio = best->spot.freqHz - m_dialHz;
+                if (audio > 1000 && audio < 6000) {
+                    showToast(tr("Moved to %1's frequency (%2 Hz)")
+                                  .arg(best->spot.receiverCall)
+                                  .arg(audio));
+                    Q_EMIT qsyToOffset(static_cast<int>(audio));
+                }
+            }
+        }
+    }
+    QWidget::mouseDoubleClickEvent(event);
 }
 
 void SpotMapWindow::showToast(QString const &text) {
@@ -678,18 +733,7 @@ void SpotMapWindow::mousePressEvent(QMouseEvent *event) {
     // [BUILD 336 TODO #96 first slice] Left-click a spot dot → emit
     // its callsign. Same nearest-within-radius hit-test as hover.
     if (event->button() == Qt::LeftButton) {
-        QPointF const m = event->position();
-        ScreenSpot const *best = nullptr;
-        double bestD2 = 12.0 * 12.0;
-        for (auto const &ss : m_screenSpots) {
-            double const dx = ss.pos.x() - m.x();
-            double const dy = ss.pos.y() - m.y();
-            if (double const d2 = dx * dx + dy * dy; d2 < bestD2) {
-                bestD2 = d2;
-                best = &ss;
-            }
-        }
-        if (best) {
+        if (ScreenSpot const *best = hitTest(event->position())) {
             Q_EMIT spotClicked(best->spot.receiverCall);
         }
     }
@@ -700,7 +744,8 @@ void SpotMapWindow::changeEvent(QEvent *event) {
     // Hint toast whenever the map window gains focus (Andy
     // 2026-07-16) — teaches the click-to-copy affordance in place.
     if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
-        showToast(tr("Click on a call sign to create an outgoing message"));
+        showToast(tr("Click on a call sign to create an outgoing "
+                     "message. Double-click to QSY."));
     }
     QWidget::changeEvent(event);
 }

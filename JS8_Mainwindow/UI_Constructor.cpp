@@ -441,6 +441,20 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // click's seed — repeated clicks switch stations); real draft
     // text is never clobbered. Every suppression logs — no silent
     // misses. Confirmed with a toast on the map window.
+    // [BUILD 340] Country names for spot hover (LogBook/cty.dat by
+    // callsign; the map compares topic DXCC codes to skip our own
+    // country before calling this).
+    m_spotMapWindow->setCountryLookup([this](QString const &call) {
+        QString country;
+        bool workedCall = false, workedCountry = false;
+        m_logBook.match(call, country, workedCall, workedCountry);
+        return country;
+    });
+    // [BUILD 340] Double-click a spot → QSY to the DX station's
+    // audio offset (map gates to >1000 Hz; changeFreq has the
+    // TX-queue guard).
+    connect(m_spotMapWindow.data(), &SpotMapWindow::qsyToOffset,
+            this, &UI_Constructor::changeFreq);
     connect(m_spotMapWindow.data(), &SpotMapWindow::spotClicked, this,
             [this](QString const &call) {
                 switch (trySeedOutgoingGreeting(call)) {

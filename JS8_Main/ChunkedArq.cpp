@@ -21,7 +21,7 @@ Q_LOGGING_CATEGORY(chunkedarq_js8, "chunkedarq.js8", QtWarningMsg)
 // at the start of chunk 1, either the bare token (prefix-only
 // chunk-1 truncation) or followed by a space + content.
 static QRegularExpression const kFileXferFamilyRe{
-    QStringLiteral(R"(^F/V\d+(\s|$))")};
+    QStringLiteral(R"(^[FL]/V\d+(\s|$))")};  // F=file, L=web link
 
 namespace ChunkedArq {
 

@@ -1515,6 +1515,13 @@ void UI_Constructor::displayDialFrequency() {
     auto dial_frequency = dialFrequency();
     auto audio_frequency = freq();
 
+    // [BUILD 340] Spots Map needs the dial to convert spot RF Hz to
+    // audio offsets (hover display + double-click QSY).
+    if (m_spotMapWindow) {
+        m_spotMapWindow->setDialFrequency(
+            static_cast<qint64>(dial_frequency));
+    }
+
     // lookup band
     auto const &band_name = m_config.bands()->find(dial_frequency);
 
@@ -6422,25 +6429,11 @@ void UI_Constructor::on_sendWebLinkAction_triggered() {
         return;
     }
 
-    QString const linkPath = QDir::cleanPath(
-        QStandardPaths::writableLocation(QStandardPaths::TempLocation)
-        + QStringLiteral("/link.txt"));
-    QFile linkFile(linkPath);
-    if (!linkFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        JS8MessageBox::warning_message(
-            this, QStringLiteral("File error"),
-            QStringLiteral("Could not create %1.").arg(linkPath));
-        return;
-    }
-    linkFile.write(url.toString(QUrl::FullyEncoded).toUtf8());
-    linkFile.write("\n");
-    linkFile.close();
-
-    qCWarning(chunkedarq_js8)
-        << "[FT-TX] web link wrapped in" << linkPath
-        << "url=" << url.toString() << "peer=" << peer;
-
-    startFileTransferViaArq(linkPath, peer);
+    // [BUILD 340] Native link form (L/V1) for level >= 2 peers — no
+    // file wrapper, no save dialog at the far end, typically ONE data
+    // chunk. Level-1 peers get the legacy link.txt file transfer.
+    // Unknown capability parks on the same auto-query state machine.
+    sendWebLink(url.toString(QUrl::FullyEncoded), peer);
 }
 
 // [BUILD 338] Transfer pipeline from a file path onward — everything
@@ -6478,11 +6471,78 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
     });
 }
 
+// [BUILD 340] Web-link send with the same capability negotiation as
+// file transfers: cache hit level>=2 → native L/V1; level 1 → legacy
+// link.txt file transfer (fielded builds decode that); unknown →
+// park on the auto-query state machine (m_pendingLinkUrl).
+void UI_Constructor::sendWebLink(QString const &url,
+                                 QString const &peer) {
+    QString const key = peer.toUpper();
+    if (m_peerArqLevel.contains(key)) {
+        int const level = m_peerArqLevel.value(key);
+        if (level >= 2) {
+            QString const body = FileTransfer::buildLinkBody(url);
+            if (body.isEmpty()) {
+                JS8MessageBox::warning_message(
+                    this, QStringLiteral("Not a web link"),
+                    QStringLiteral("Could not encode the link."));
+                return;
+            }
+            qCWarning(chunkedarq_js8)
+                << "[LT-TX] native link form for peer=" << peer
+                << "(level=" << level << ")";
+            dispatchArqBody(body, peer, level);
+        } else {
+            qCWarning(chunkedarq_js8)
+                << "[LT-TX] legacy link.txt fallback for peer="
+                << peer << "(level=" << level << ")";
+            QString const linkPath = QDir::cleanPath(
+                QStandardPaths::writableLocation(
+                    QStandardPaths::TempLocation)
+                + QStringLiteral("/link.txt"));
+            QFile linkFile(linkPath);
+            if (!linkFile.open(QIODevice::WriteOnly |
+                               QIODevice::Truncate)) {
+                JS8MessageBox::warning_message(
+                    this, QStringLiteral("File error"),
+                    QStringLiteral("Could not create %1.")
+                        .arg(linkPath));
+                return;
+            }
+            linkFile.write(url.toUtf8());
+            linkFile.write("\n");
+            linkFile.close();
+            startFileTransferWithFormat(linkPath, peer, level);
+        }
+        return;
+    }
+    // Capability unknown — park the LINK on the query state machine.
+    m_pendingLinkUrl = url;
+    m_pendingFilePath.clear();
+    m_pendingFilePeer = peer;
+    m_capQueryRetries = 0;
+    int const gen = ++m_capQueryGen;
+    qCWarning(chunkedarq_js8)
+        << "[LT-TX] peer capability unknown — auto-querying" << peer
+        << "gen=" << gen;
+    statusBar()->showMessage(
+        tr("Checking %1's ARQ capabilities…").arg(peer), 20000);
+    enqueueMessage(PriorityHigh,
+                   QStringLiteral("%1 QUERY ARQ?").arg(peer), -1,
+                   nullptr);
+    QPointer<UI_Constructor> const self(this);
+    QTimer::singleShot(20000, this, [self, gen]() {
+        if (self) self->onCapQueryTimeout(gen);
+    });
+}
+
 // [BUILD 339 TODO #103] Query-state timeout: one retry, then V1
 // fallback. Guarded by generation — acts only on the attempt that
 // armed it; no-op if that attempt already resumed or aborted.
 void UI_Constructor::onCapQueryTimeout(int const gen) {
-    if (gen != m_capQueryGen || m_pendingFilePath.isEmpty()) return;
+    if (gen != m_capQueryGen ||
+        (m_pendingFilePath.isEmpty() && m_pendingLinkUrl.isEmpty()))
+        return;
     if (m_capQueryRetries < 1) {
         ++m_capQueryRetries;
         qCWarning(chunkedarq_js8)
@@ -6499,8 +6559,10 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
         return;
     }
     QString const path = m_pendingFilePath;
+    QString const link = m_pendingLinkUrl;
     QString const pr = m_pendingFilePeer;
     m_pendingFilePath.clear();
+    m_pendingLinkUrl.clear();
     m_pendingFilePeer.clear();
     ++m_capQueryGen;
     qCWarning(chunkedarq_js8)
@@ -6509,6 +6571,21 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
     statusBar()->showMessage(
         tr("No capability reply from %1 — using standard format")
             .arg(pr), 5000);
+    if (!link.isEmpty()) {
+        // Legacy link.txt fallback for the parked link.
+        QString const linkPath = QDir::cleanPath(
+            QStandardPaths::writableLocation(
+                QStandardPaths::TempLocation)
+            + QStringLiteral("/link.txt"));
+        if (QFile f(linkPath); f.open(QIODevice::WriteOnly |
+                                      QIODevice::Truncate)) {
+            f.write(link.toUtf8());
+            f.write("\n");
+            f.close();
+            startFileTransferWithFormat(linkPath, pr, 1);
+        }
+        return;
+    }
     startFileTransferWithFormat(path, pr, 1);
 }
 
@@ -6589,6 +6666,21 @@ void UI_Constructor::startFileTransferWithFormat(
         return;
     }
 
+    qCWarning(chunkedarq_js8)
+        << "[FT-TX] dispatching to ChunkedArq — peer=" << peer
+        << "name=" << header.name
+        << "bytes=" << header.bytes
+        << "wireBodyChars=" << body.size();
+    dispatchArqBody(body, peer, peerLevel);
+}
+
+// [BUILD 340] Shared ARQ dispatch tail for file AND web-link sends:
+// auto-enable ARQ (restored on sendComplete/sendFailed via msgId
+// bookkeeping), peer-level-aware chunk cap, immediate restore when
+// sendChunked rejects at pre-flight.
+void UI_Constructor::dispatchArqBody(QString const &body,
+                                     QString const &peer,
+                                     int const peerLevel) {
     // [FILE-XFER build 282] Capture ARQ state and auto-enable it for
     // this transfer. We restore the prior state when the matching
     // sendComplete / sendFailed fires (gated on msgId so concurrent
@@ -6603,12 +6695,6 @@ void UI_Constructor::startFileTransferWithFormat(
             << "[FT-TX] ARQ auto-enabled for file transfer; will "
                "restore to OFF on sendComplete/sendFailed";
     }
-
-    qCWarning(chunkedarq_js8)
-        << "[FT-TX] dispatching to ChunkedArq — peer=" << peer
-        << "name=" << header.name
-        << "bytes=" << header.bytes
-        << "wireBodyChars=" << body.size();
 
     int const sendMaxChunks = (peerLevel >= 2)
                                   ? ChunkedArq::MAX_CHUNKS_ROLLOVER
@@ -7434,12 +7520,14 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
         }
         // [BUILD 339 TODO #103] Halt also aborts a file transfer
         // waiting on the capability query.
-        if (!m_pendingFilePath.isEmpty()) {
+        if (!m_pendingFilePath.isEmpty() ||
+            !m_pendingLinkUrl.isEmpty()) {
             qCWarning(chunkedarq_js8)
-                << "[FT-TX] pending file transfer aborted by Halt "
-                   "(was awaiting capability reply from"
+                << "[FT-TX] pending file/link transfer aborted by "
+                   "Halt (was awaiting capability reply from"
                 << m_pendingFilePeer << ")";
             m_pendingFilePath.clear();
+            m_pendingLinkUrl.clear();
             m_pendingFilePeer.clear();
             ++m_capQueryGen;
         }

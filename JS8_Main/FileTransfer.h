@@ -63,6 +63,24 @@ constexpr char const *PREFIX_V2 = "F/V2 GZIP/BASE32 ";
 /// integrity (corruption check, not an adversarial defense).
 constexpr int V2_HASH_BYTES = 16;
 
+/// [BUILD 340] Web-link wire form — NOT a file: no name, no size, no
+/// hash (per-chunk CRC-16 covers transport; scheme validation at
+/// display covers sanity), no compression (URLs don't compress;
+/// qCompress ADDS 12 bytes at these sizes). Base32 exists solely
+/// because JS8 uppercases the wire and URLs are case-sensitive.
+/// Receiver shows the link directly (clickable, escaped, full URL
+/// as text) — no save dialog. Sent only to ARQ level >= 2 peers;
+/// level-1 peers get the legacy link.txt file transfer.
+constexpr char const *PREFIX_L1 = "L/V1 BASE32 ";
+
+/// Build the wire body for a web link. Empty on invalid input.
+QString buildLinkBody(QString const &url);
+
+/// Decode an L/V1 body. Returns false unless the payload decodes to
+/// a well-formed http(s) URL (scheme enforced — a corrupt or hostile
+/// payload must not produce a clickable link to who-knows-what).
+bool splitLinkBody(QString const &body, QString &outUrl);
+
 /**
  * @brief Per-file header carried in chunk 1 of a file-transfer
  *        super-message. Serialized to JSON, then base32-encoded for
