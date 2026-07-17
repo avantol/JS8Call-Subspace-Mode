@@ -46,6 +46,23 @@ constexpr int MAX_FILE_BYTES = 30 * 1024;
 /// disclosure is orthogonal.
 constexpr char const *PREFIX_V1 = "F/V1 GZIP/BASE32 ";
 
+/// [BUILD 339 TODO #103] Wire-format V2. Same regulatory-disclosure
+/// codec token; the difference is INSIDE the base32: ONE compressed
+/// envelope containing a BINARY header (u8 nameLen + name utf8 +
+/// u32be size + first 16 bytes of SHA-256) immediately followed by
+/// the raw file bytes. Eliminates V1's double-encoding tax (the
+/// 32-byte hash as a base32 STRING inside JSON, compressed
+/// pointlessly, base32'd again): measured 231 → 111 wire chars on a
+/// 16-byte file, ~2 sub-messages saved on EVERY transfer. Sender
+/// uses V2 only for peers that advertised ARQ_PROTOCOL_LEVEL >= 2
+/// via QUERY ARQ? (session-cached); V1 remains the default and is
+/// decoded forever.
+constexpr char const *PREFIX_V2 = "F/V2 GZIP/BASE32 ";
+
+/// Truncated-hash length for V2. 16 bytes is ample for transfer
+/// integrity (corruption check, not an adversarial defense).
+constexpr int V2_HASH_BYTES = 16;
+
 /**
  * @brief Per-file header carried in chunk 1 of a file-transfer
  *        super-message. Serialized to JSON, then base32-encoded for
@@ -91,6 +108,13 @@ bool headerFromJson(QString const &json, FileHeader &out);
 QString buildSendBody(QString const &filePath, FileHeader &outHeader);
 
 /**
+ * @brief V2 counterpart of buildSendBody. Body layout:
+ *          "F/V2 GZIP/BASE32 " + base32(qCompress(binaryHeader ‖ fileBytes))
+ *        outHeader.sha256 carries base32(sha256[:16]) for display.
+ */
+QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader);
+
+/**
  * @brief Given a fully-assembled super-message body that started with
  *        the PREFIX_V1 marker, decode the base32 payload, verify
  *        SHA-256 against the header, and write to disk under saveDir
@@ -122,6 +146,29 @@ QString sanitizeFilename(QString const &untrusted);
 bool splitWireBody(QString const &body,
                    FileHeader &outHeader,
                    QString &outPayloadBase32);
+
+/**
+ * @brief V2 counterpart of splitWireBody: decode + decompress the
+ *        single envelope, parse the binary header, verify size and
+ *        truncated SHA-256. On success outHeader is populated and
+ *        outPayloadBytes holds the VERIFIED raw file bytes (no
+ *        further decode step needed before writeReceivedFile).
+ */
+bool splitWireBodyV2(QString const &body,
+                     FileHeader &outHeader,
+                     QByteArray &outPayloadBytes);
+
+/**
+ * @brief Write verified file bytes to disk under saveDir with
+ *        sanitized, collision-safe naming. The write half of
+ *        assembleReceivedFile, shared by the V1 path (which decodes
+ *        and verifies first) and the V2 path (splitWireBodyV2
+ *        already verified). Returns saved path, or empty + outErr.
+ */
+QString writeReceivedFile(QString const &saveDir,
+                          FileHeader const &header,
+                          QByteArray const &bytes,
+                          QString *outErr = nullptr);
 
 }  // namespace FileTransfer
 

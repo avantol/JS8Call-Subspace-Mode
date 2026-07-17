@@ -720,6 +720,36 @@ class UI_Constructor : public QMainWindow {
     QString resolveArqFilePeer();
     void startFileTransferViaArq(QString const &filePath,
                                  QString const &peer);
+    // [BUILD 339 TODO #103] Session cache of peers' advertised ARQ
+    // protocol levels, populated from "YES <level>" replies to
+    // QUERY ARQ?. Key = FULL callsign (uppercased). A level >= 2
+    // peer gets file-transfer wire-format V2; everyone else V1. A
+    // reply WITHOUT a level never lands here — absence means V1-only
+    // for the whole session (down-level peers can't change builds
+    // without restarting, so never re-ask). Cleared only by app
+    // restart.
+    QHash<QString, int> m_peerArqLevel;
+    // [BUILD 339 TODO #103] Auto-negotiation state: a file transfer
+    // initiated toward a peer with UNKNOWN capability stashes here,
+    // auto-sends "<peer> QUERY ARQ?", and resumes when the YES
+    // <level> reply lands in the capture above (or falls back to V1
+    // after one retry + timeout — silence is NOT cached; it may be
+    // QRM, not a down-level build). Cache hits — either level —
+    // skip the query entirely. FILE TRANSFERS ONLY (plain ARQ text
+    // is format-agnostic).
+    QString m_pendingFilePath;
+    QString m_pendingFilePeer;
+    int m_capQueryRetries{0};
+    // Generation counter: every park/abort/resume bumps it, and each
+    // armed timeout captures the value — a stale timer from an
+    // earlier attempt can never act on a later attempt's pending
+    // state (observed 2026-07-17: aborted attempt #1's 20 s timer
+    // fired a bogus 1.7 s "retry" against attempt #2).
+    int m_capQueryGen{0};
+    void onCapQueryTimeout(int gen);
+    void startFileTransferWithFormat(QString const &filePath,
+                                     QString const &peer,
+                                     int peerLevel);
     // [BUILD 336 TODO #97] Wall-clock ms of the last accepted AVHAIL?
     // remote trigger — global once-per-hour rate limit / replay guard
     // (the protocol has no anti-replay; a replayed trigger must not

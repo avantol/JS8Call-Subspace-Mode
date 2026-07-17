@@ -17,6 +17,12 @@
 
 Q_LOGGING_CATEGORY(chunkedarq_js8, "chunkedarq.js8", QtWarningMsg)
 
+// [BUILD 339 TODO #103] File-transfer wire-prefix family: "F/V<n>"
+// at the start of chunk 1, either the bare token (prefix-only
+// chunk-1 truncation) or followed by a space + content.
+static QRegularExpression const kFileXferFamilyRe{
+    QStringLiteral(R"(^F/V\d+(\s|$))")};
+
 namespace ChunkedArq {
 
 // --- Wire format ------------------------------------------------------------
@@ -105,7 +111,7 @@ bool parseChunkedData(QString const &text, ParsedChunk &out) {
         return false;
     }
     int const total = match.captured("total").toInt(&ok);
-    if (!ok || total < 1 || total > MAX_CHUNKS_PER_MESSAGE || chunkId > total) {
+    if (!ok || total < 1 || total > MAX_CHUNKS_ROLLOVER || chunkId > total) {
         qCWarning(chunkedarq_js8)
             << "[ARQ-DIAG] parseChunkedData BAD-TOTAL raw=" << match.captured("total")
             << "parsed=" << total << "chunkId=" << chunkId << "text=" << text;
@@ -150,7 +156,7 @@ std::optional<QString> tryFormatChunkedDisplay(QString const &fullText) {
         return std::nullopt;
     }
     int const total = m.captured("total").toInt(&ok);
-    if (!ok || total < 1 || total > MAX_CHUNKS_PER_MESSAGE ||
+    if (!ok || total < 1 || total > MAX_CHUNKS_ROLLOVER ||
         chunkId > total) {
         return std::nullopt;
     }
@@ -321,7 +327,7 @@ static QString normalizeForWireEncoding(QString const &body) {
 }
 
 SendResult Manager::sendChunked(QString const &peer, QString const &inputBody,
-                                int submode) {
+                                int submode, int const maxChunks) {
     QString const body = normalizeForWireEncoding(inputBody);
     if (body != inputBody) {
         qCWarning(chunkedarq_js8)
@@ -342,10 +348,10 @@ SendResult Manager::sendChunked(QString const &peer, QString const &inputBody,
         return result;
     }
     auto const chunks = splitIntoChunks(body);
-    if (chunks.size() > MAX_CHUNKS_PER_MESSAGE) {
+    if (chunks.size() > maxChunks) {
         qCWarning(chunkedarq_js8)
             << "[ARQ-TX] sendChunked rejected: message would need"
-            << chunks.size() << "chunks; max is" << MAX_CHUNKS_PER_MESSAGE;
+            << chunks.size() << "chunks; max is" << maxChunks;
         emit sendFailed(peer, 0, 0, chunks.size(), 0,
                         QStringLiteral("too_long"));
         // [TODO #51 2026-06-10 build 235] restore on too_long
@@ -565,10 +571,13 @@ void Manager::onAckReceived(QString const &fromCall, int seq) {
     }
     SendState &state = sendIt.value();
     int const expectedCc = state.nextIdx + 1;
-    if (seq != expectedCc) {
+    // [BUILD 339 TODO #104] Wire seq is modulo-31; compare against
+    // the outstanding chunk's wire representation.
+    if (seq != ackWireSeq(expectedCc)) {
         qCDebug(chunkedarq_js8)
             << "[ARQ-TX] stale ACK ignored: peer=" << fromCall
-            << "seq=" << seq << "expected=" << expectedCc;
+            << "seq=" << seq << "expected=" << expectedCc
+            << "(wire" << ackWireSeq(expectedCc) << ")";
         return;
     }
     // Chunk delivered. Cancel ACK timer, advance index, fire progress,
@@ -593,10 +602,12 @@ void Manager::onNackReceived(QString const &fromCall, int seq) {
     }
     SendState &state = sendIt.value();
     int const expectedCc = state.nextIdx + 1;
-    if (seq != expectedCc) {
+    // [BUILD 339 TODO #104] Modulo-31 wire compare (see onAckReceived).
+    if (seq != ackWireSeq(expectedCc)) {
         qCDebug(chunkedarq_js8)
             << "[ARQ-TX] stale NACK ignored: peer=" << fromCall
-            << "seq=" << seq << "expected=" << expectedCc;
+            << "seq=" << seq << "expected=" << expectedCc
+            << "(wire" << ackWireSeq(expectedCc) << ")";
         return;
     }
     // Receiver explicitly NACKed our in-flight chunk. Retransmit
@@ -807,12 +818,22 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
             // the conversation panel + no file-receive dialog.
             // Cover both shapes: chunk 1 = ONLY the prefix, OR chunk 1
             // = prefix + start of header content.
-            else if (probe == QStringLiteral("F/V1 GZIP/BASE32") ||
-                     probe.startsWith(QStringLiteral("F/V1 GZIP/BASE32 "))) {
+            // [BUILD 339 TODO #103] Detect the F/V<n> prefix FAMILY,
+            // not just the V1 literal — the chunk-1 string match is
+            // the SINGLE point of file-transfer detection, and an
+            // unmatched version used to fall through to plain text
+            // delivery (base32 gibberish in the conversation panel).
+            // Any family member routes to fileMessageReceived; the
+            // UI slot does V1 → V2 → polite-unsupported triage. The
+            // regex covers both chunk-1 truncation shapes (bare
+            // "F/V1" prefix-only chunk vs prefix + header content —
+            // the build-276 trailing-space lesson).
+            else if (kFileXferFamilyRe.match(probe).hasMatch()) {
                 rx.fileXferDetected[chunk.msgId] = true;
                 qCWarning(chunkedarq_js8)
                     << "[ARQ-RX] file-transfer detected on chunk 1 — peer="
-                    << fromCall << "msgId=" << chunk.msgId;
+                    << fromCall << "msgId=" << chunk.msgId
+                    << "head=" << probe.left(12);
             }
         }
     }
@@ -926,7 +947,12 @@ void Manager::tryNack(QString const &peer, int seq) {
         return;
     }
     rx.lastNackMonoMs = nowMs;
-    QString const text = QStringLiteral("%1 NACK %2").arg(peer).arg(seq);
+    // [BUILD 339 TODO #104] seq is the ABSOLUTE chunk id; the wire
+    // numeric extra only carries 1..31, so wrap modulo-31 (safe:
+    // stop-and-wait means the sender has exactly one chunk
+    // outstanding and matches modulo too).
+    QString const text = QStringLiteral("%1 NACK %2")
+                             .arg(peer).arg(ackWireSeq(seq));
     qCWarning(chunkedarq_js8)
         << "[ARQ-RX] sending NACK peer=" << peer << "seq=" << seq
         << "delayed by" << ACK_TX_DELAY_MS << "ms for output ramp-up";
@@ -945,7 +971,9 @@ void Manager::tryNack(QString const &peer, int seq) {
 }
 
 void Manager::sendAck(QString const &peer, int seq) {
-    QString const text = QStringLiteral("%1 ACK %2").arg(peer).arg(seq);
+    // [BUILD 339 TODO #104] Absolute seq → modulo-31 wire seq.
+    QString const text = QStringLiteral("%1 ACK %2")
+                             .arg(peer).arg(ackWireSeq(seq));
     qCWarning(chunkedarq_js8)
         << "[ARQ-RX] sending ACK peer=" << peer << "seq=" << seq
         << "delayed by" << ACK_TX_DELAY_MS << "ms for output ramp-up";

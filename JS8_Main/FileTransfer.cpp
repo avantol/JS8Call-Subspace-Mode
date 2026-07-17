@@ -145,10 +145,14 @@ QString buildSendBody(QString const &filePath, FileHeader &outHeader) {
     // separator. If we exceed this, sendChunked would reject with
     // too_long downstream; catch it here with a clearer error and
     // no chunking work done.
-    constexpr int kMaxWireChars      = 31 * 60;          // 1860
+    // [BUILD 339 TODO #104] Builder cap raised to the ROLLOVER
+    // ceiling (99 chunks); the PEER-level-aware 31-vs-99 decision
+    // happens in the sender's qualification step, which needs the
+    // built body to count chunks for the negotiated format.
+    constexpr int kMaxWireChars      = 99 * 60;          // 5940
     constexpr int kHeaderAllowance   = 220;              // base32 of JSON header + safety
-    constexpr int kMaxPayloadChars   = kMaxWireChars - kHeaderAllowance;  // 1640
-    constexpr int kMaxPayloadBytes   = (kMaxPayloadChars * 5) / 8;        // 1025
+    constexpr int kMaxPayloadChars   = kMaxWireChars - kHeaderAllowance;
+    constexpr int kMaxPayloadBytes   = (kMaxPayloadChars * 5) / 8;
     if (compressed.size() > kMaxPayloadBytes) {
         qCWarning(filetransfer_js8)
             << "[FT] buildSendBody: compressed payload too large"
@@ -256,6 +260,23 @@ QString assembleReceivedFile(QString const &saveDir,
         return fail("sha256 mismatch");
     }
 
+    return writeReceivedFile(saveDir, header, bytes, outErr);
+}
+
+// [BUILD 339 TODO #103] Write half of the receive pipeline, shared
+// by V1 (assembleReceivedFile decodes + verifies, then calls this)
+// and V2 (splitWireBodyV2 verified already; the UI slot calls this
+// directly).
+QString writeReceivedFile(QString const &saveDir,
+                          FileHeader const &header,
+                          QByteArray const &bytes,
+                          QString *outErr) {
+    auto fail = [&](char const *why) {
+        if (outErr) *outErr = QString::fromLatin1(why);
+        qCWarning(filetransfer_js8) << "[FT-RX]" << why;
+        return QString();
+    };
+
     QDir dir(saveDir);
     if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
         return fail("cannot create save dir");
@@ -325,6 +346,119 @@ bool splitWireBody(QString const &body,
     if (headerJsonBytes.isEmpty()) return false;
     QString const headerJson = QString::fromUtf8(headerJsonBytes);
     if (!headerFromJson(headerJson, outHeader)) return false;
+    return true;
+}
+
+// ------------------------------------------------------------------
+// [BUILD 339 TODO #103] Wire-format V2 — single compressed envelope
+// with a binary header. See PREFIX_V2 commentary in the header.
+// ------------------------------------------------------------------
+
+QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader) {
+    QFile f(filePath);
+    if (!f.open(QIODevice::ReadOnly)) {
+        qCWarning(filetransfer_js8)
+            << "[FT] buildSendBodyV2: cannot open" << filePath;
+        return QString();
+    }
+    QByteArray const fileBytes = f.readAll();
+    f.close();
+    if (fileBytes.size() > MAX_FILE_BYTES) {
+        qCWarning(filetransfer_js8)
+            << "[FT] buildSendBodyV2: raw file too large"
+            << fileBytes.size() << ">" << MAX_FILE_BYTES;
+        return QString();
+    }
+
+    QFileInfo const fi(filePath);
+    QByteArray nameUtf8 = fi.fileName().toUtf8();
+    if (nameUtf8.size() > 255) nameUtf8 = nameUtf8.left(255);
+    QByteArray const shaFull =
+        QCryptographicHash::hash(fileBytes, QCryptographicHash::Sha256);
+    QByteArray const sha16 = shaFull.left(V2_HASH_BYTES);
+
+    // Binary header: u8 nameLen + name + u32be size + sha16.
+    QByteArray header;
+    header.append(static_cast<char>(nameUtf8.size()));
+    header.append(nameUtf8);
+    quint32 const sz = static_cast<quint32>(fileBytes.size());
+    header.append(static_cast<char>((sz >> 24) & 0xFF));
+    header.append(static_cast<char>((sz >> 16) & 0xFF));
+    header.append(static_cast<char>((sz >> 8) & 0xFF));
+    header.append(static_cast<char>(sz & 0xFF));
+    header.append(sha16);
+
+    // ONE compression envelope over header ‖ payload — V1's separate
+    // header compression was a measured net LOSS (incompressible hash
+    // + 12-byte qCompress framing + extra base32 padding boundary).
+    QByteArray const envelope = qCompress(header + fileBytes, 9);
+
+    constexpr int kMaxWireChars = 99 * 60;  // rollover ceiling; peer-aware check in sender
+    QString const b32 = base32Encode(envelope);
+    QString const body = QString::fromLatin1(PREFIX_V2) + b32;
+    if (body.size() > kMaxWireChars) {
+        qCWarning(filetransfer_js8)
+            << "[FT] buildSendBodyV2: wire body too large"
+            << body.size() << ">" << kMaxWireChars;
+        return QString();
+    }
+
+    outHeader.name = fi.fileName();
+    outHeader.bytes = fileBytes.size();
+    outHeader.sha256 = base32Encode(sha16);
+
+    qCWarning(filetransfer_js8)
+        << "[FT-TX] V2 body built: name=" << outHeader.name
+        << "rawBytes=" << outHeader.bytes
+        << "envelopeBytes=" << envelope.size()
+        << "wireBodyChars=" << body.size();
+    return body;
+}
+
+bool splitWireBodyV2(QString const &body,
+                     FileHeader &outHeader,
+                     QByteArray &outPayloadBytes) {
+    QString const prefix = QString::fromLatin1(PREFIX_V2);
+    if (!body.startsWith(prefix)) return false;
+    QString rest = body.mid(prefix.size());
+    rest.remove(QRegularExpression(QStringLiteral("\\s+")));
+    QByteArray const envelope = base32Decode(rest);
+    if (envelope.isEmpty()) return false;
+    QByteArray const plain = qUncompress(envelope);
+    // Minimum: 1 (nameLen) + 0 (name) + 4 (size) + 16 (sha16).
+    if (plain.size() < 1 + 4 + V2_HASH_BYTES) return false;
+
+    int const nameLen = static_cast<quint8>(plain.at(0));
+    int const hdrLen = 1 + nameLen + 4 + V2_HASH_BYTES;
+    if (plain.size() < hdrLen) return false;
+
+    QString const name = QString::fromUtf8(plain.mid(1, nameLen));
+    quint32 const sz =
+        (static_cast<quint8>(plain.at(1 + nameLen)) << 24) |
+        (static_cast<quint8>(plain.at(2 + nameLen)) << 16) |
+        (static_cast<quint8>(plain.at(3 + nameLen)) << 8) |
+        static_cast<quint8>(plain.at(4 + nameLen));
+    QByteArray const sha16 = plain.mid(1 + nameLen + 4, V2_HASH_BYTES);
+    QByteArray const payload = plain.mid(hdrLen);
+
+    if (payload.size() != static_cast<int>(sz)) {
+        qCWarning(filetransfer_js8)
+            << "[FT-RX] V2 size mismatch: header=" << sz
+            << "payload=" << payload.size();
+        return false;
+    }
+    QByteArray const computed =
+        QCryptographicHash::hash(payload, QCryptographicHash::Sha256)
+            .left(V2_HASH_BYTES);
+    if (computed != sha16) {
+        qCWarning(filetransfer_js8) << "[FT-RX] V2 sha mismatch";
+        return false;
+    }
+
+    outHeader.name = name;
+    outHeader.bytes = sz;
+    outHeader.sha256 = base32Encode(sha16);
+    outPayloadBytes = payload;
     return true;
 }
 

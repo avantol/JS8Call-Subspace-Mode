@@ -53,11 +53,31 @@ namespace ChunkedArq {
 // Phase-1 chunked stop-and-wait + per-chunk CRC + bounded retries +
 // auto-enable on RX. Level 2 (planned) will add HARQ Chase combining.
 // Replied verbatim as "<from>: <to> YES <level>" to "QUERY ARQ?".
-constexpr int    ARQ_PROTOCOL_LEVEL      = 1;
+// [BUILD 339 TODO #103+#104] Level 2 = file-transfer wire-format V2
+// (F/V2 single-envelope binary header) AND chunk rollover (super-
+// messages beyond 31 chunks, up to MAX_CHUNKS_ROLLOVER — the DATA
+// header's CC/TT fields were always 2-digit text; only the ACK/NACK
+// seq, carried in the directed frame's 1..31 numeric extra, wraps
+// modulo-31, unambiguous under stop-and-wait). Both capabilities
+// shipped together as one level (Andy 2026-07-17: no fielded
+// level-2-without-rollover population exists — dev builds only).
+// Advertised in the QUERY ARQ? "YES <level>" reply; senders use V2
+// and >31 chunks only for peers whose cached level is >= 2.
+constexpr int    ARQ_PROTOCOL_LEVEL      = 2;
 
 constexpr int    MSG_ID_MIN              = 1;
 constexpr int    MSG_ID_MAX              = 99;
-constexpr int    MAX_CHUNKS_PER_MESSAGE  = 31;    // bounded by wire ACK extra width (1..31)
+constexpr int    MAX_CHUNKS_PER_MESSAGE  = 31;    // level<3 peers: bounded by wire ACK extra width (1..31)
+// [BUILD 339 TODO #104] Level>=3 peers: DATA header CC/TT are 2-digit
+// text → 99 is the natural ceiling; ACK seq wraps modulo 31 on the
+// wire. ~99 chunks ≈ 26 min best-case air time — the practical bound.
+constexpr int    MAX_CHUNKS_ROLLOVER     = 99;
+// Wire-side modulus for ACK/NACK seq (packNum numeric-extra range).
+constexpr int    ACK_SEQ_MODULUS         = 31;
+// Map an absolute 1-based chunk id onto the 1..31 ACK wire range.
+constexpr int    ackWireSeq(int const absSeq) {
+    return ((absSeq - 1) % ACK_SEQ_MODULUS) + 1;
+}
 constexpr int    MAX_CHUNK_BODY_CHARS    = 60;    // body per chunk; tune for failure rate
 constexpr int    CHUNKED_MARKER_LEN      = 14;    // len("#NN.CC/TT.HHHH")
 
@@ -491,7 +511,8 @@ class Manager : public QObject {
      * totalChunks for the caller's tracking.
      */
     SendResult sendChunked(QString const &peer, QString const &body,
-                           int submode);
+                           int submode,
+                           int maxChunks = MAX_CHUNKS_PER_MESSAGE);
 
     /**
      * @brief Notify the manager that we received a chunked DATA frame.

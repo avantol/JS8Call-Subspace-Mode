@@ -579,6 +579,52 @@ void UI_Constructor::processCommandActivity() {
             }
         }
 
+        // [BUILD 339 TODO #103] Passive capture of ARQ capability
+        // replies. A peer answering our QUERY ARQ? sends
+        // "<us> YES <level>" — and since YES is a directed-command
+        // token, it arrives as cmd=" YES" with the bare level digits
+        // in d.text (VERIFIED in sender log 2026-07-17: cmd=" YES"
+        // text="2"; the first-cut freetext match never fired). Cache
+        // the level (full callsign, session-long) so file transfers
+        // pick wire-format V2 for level >= 2 peers. Exact-digits
+        // match so "YES MSG ID n" (text="MSG ID n") doesn't count.
+        // Passive observer: NO continue — the reply still displays.
+        if (!isAllCall && d.cmd == QStringLiteral(" YES")) {
+            static QRegularExpression const kArqLevelReplyRe{
+                QStringLiteral(R"(^(\d{1,3})$)")};
+            if (auto const lm = kArqLevelReplyRe.match(
+                    d.text.toUpper().simplified());
+                lm.hasMatch()) {
+                int const level = lm.captured(1).toInt();
+                m_peerArqLevel[d.from.toUpper()] = level;
+                qWarning() << "[ARQ] peer capability cached:"
+                           << d.from << "level=" << level;
+                // [BUILD 339 TODO #103] A file transfer may be
+                // parked waiting on exactly this reply — resume it
+                // with the just-learned format. Deferred 1.5 s so RX
+                // processing settles before we key up.
+                if (!m_pendingFilePath.isEmpty() &&
+                    d.from.compare(m_pendingFilePeer,
+                                   Qt::CaseInsensitive) == 0) {
+                    QString const path = m_pendingFilePath;
+                    QString const pr = m_pendingFilePeer;
+                    m_pendingFilePath.clear();
+                    m_pendingFilePeer.clear();
+                    ++m_capQueryGen;
+                    qWarning() << "[FT-TX] capability received — "
+                                  "resuming pending file transfer to"
+                               << pr << "level=" << level;
+                    QPointer<UI_Constructor> const self(this);
+                    QTimer::singleShot(1500, this,
+                        [self, path, pr, level]() {
+                            if (!self) return;
+                            self->startFileTransferWithFormat(
+                                path, pr, level);
+                        });
+                }
+            }
+        }
+
         // [BUILD 331-bell TODO #80] BELL command. Peer addresses us
         // with "<us> BELL" — we play the configured "bell" sound
         // (DingDing.wav recommended). Soft summons for a QSO.

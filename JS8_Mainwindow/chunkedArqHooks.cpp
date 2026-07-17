@@ -645,13 +645,46 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
     // "F/V1 <header-b32> <payload-b32>" wire form. Decode header,
     // confirm with operator, verify SHA-256, write to disk.
     FileTransfer::FileHeader header;
-    QString payloadBase32;
-    if (!FileTransfer::splitWireBody(body, header, payloadBase32)) {
+    QString payloadBase32;       // V1: still-encoded payload
+    QByteArray payloadBytes;     // V2: decoded + VERIFIED payload
+    int wireVersion = 0;
+    if (FileTransfer::splitWireBody(body, header, payloadBase32)) {
+        wireVersion = 1;
+    } else if (FileTransfer::splitWireBodyV2(body, header,
+                                             payloadBytes)) {
+        wireVersion = 2;
+    } else {
+        // [BUILD 339 TODO #103] F/V-family body that neither decoder
+        // accepts: either a NEWER format than this build supports, or
+        // corruption that survived per-chunk CRC. Polite notice
+        // instead of silence (and never base32 gibberish — the family
+        // detector kept it out of the conversation panel).
+        static QRegularExpression const verRe{
+            QStringLiteral(R"(^F/V(\d+))")};
+        auto const vm = verRe.match(body);
+        QString const verText = vm.hasMatch() ? vm.captured(1)
+                                              : QStringLiteral("?");
         qCWarning(chunkedarq_js8)
             << "[FT-RX] body parse failed — peer=" << fromCall
-            << "msgId=" << msgId << "bodyLen=" << body.size();
+            << "msgId=" << msgId << "bodyLen=" << body.size()
+            << "wireVersion=" << verText;
+        auto *box = new QMessageBox(this);
+        box->setWindowTitle(tr("File transfer not supported"));
+        box->setText(tr("%1 sent a file in format F/V%2, which this "
+                        "build cannot decode.\n\nIf the format is "
+                        "newer than this build, update to receive "
+                        "it; otherwise the transfer arrived "
+                        "corrupted.").arg(fromCall, verText));
+        box->setIcon(QMessageBox::Information);
+        box->setStandardButtons(QMessageBox::Ok);
+        box->setWindowModality(Qt::NonModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        box->show();
         return;
     }
+    qCWarning(chunkedarq_js8)
+        << "[FT-RX] wire format V" << wireVersion
+        << "accepted — peer=" << fromCall << "msgId=" << msgId;
 
     qCWarning(chunkedarq_js8)
         << "[FT-RX] header parsed — peer=" << fromCall
@@ -687,12 +720,15 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
     // time so a Settings change between receive and accept is
     // honored (Phase 2 makes the dir operator-configurable).
     QString const payloadCopy = payloadBase32;
+    QByteArray const bytesCopy = payloadBytes;
+    int const verCopy = wireVersion;
     QString const fromCopy    = fromCall;
     FileTransfer::FileHeader const headerCopy = header;
     int const msgIdCopy = msgId;
 
     connect(box, &QMessageBox::finished, this,
-            [this, box, payloadCopy, fromCopy, headerCopy, msgIdCopy]
+            [this, box, payloadCopy, bytesCopy, verCopy, fromCopy,
+             headerCopy, msgIdCopy]
             (int result) {
         Q_UNUSED(box);  // WA_DeleteOnClose handles cleanup.
         QMessageBox::StandardButton const choice =
@@ -709,8 +745,14 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
             QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
             + QStringLiteral("/Subspace-FileTransfer"));
         QString err;
-        QString const savedPath = FileTransfer::assembleReceivedFile(
-            saveDir, headerCopy, payloadCopy, &err);
+        // V1: decode + verify + write. V2: splitWireBodyV2 already
+        // decoded and verified — write directly.
+        QString const savedPath =
+            (verCopy == 2)
+                ? FileTransfer::writeReceivedFile(saveDir, headerCopy,
+                                                  bytesCopy, &err)
+                : FileTransfer::assembleReceivedFile(
+                      saveDir, headerCopy, payloadCopy, &err);
         if (savedPath.isEmpty()) {
             qCWarning(chunkedarq_js8)
                 << "[FT-RX] assembleReceivedFile failed:" << err

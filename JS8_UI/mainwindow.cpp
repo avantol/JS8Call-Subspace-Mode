@@ -6447,6 +6447,73 @@ void UI_Constructor::on_sendWebLinkAction_triggered() {
 // "Send file…" did after its file picker.
 void UI_Constructor::startFileTransferViaArq(QString const &filePath,
                                              QString const &peer) {
+    // [BUILD 339 TODO #103] Format auto-negotiation. Cache hit (any
+    // level) → send immediately. Unknown peer → stash the transfer,
+    // auto-send QUERY ARQ?, resume from the capability-capture hook
+    // (processCommandActivity) or fall back to V1 on timeout.
+    QString const key = peer.toUpper();
+    if (m_peerArqLevel.contains(key)) {
+        startFileTransferWithFormat(filePath, peer,
+                                    m_peerArqLevel.value(key));
+        return;
+    }
+    m_pendingFilePath = filePath;
+    m_pendingFilePeer = peer;
+    m_capQueryRetries = 0;
+    int const gen = ++m_capQueryGen;
+    qCWarning(chunkedarq_js8)
+        << "[FT-TX] peer capability unknown — auto-querying" << peer
+        << "gen=" << gen;
+    statusBar()->showMessage(
+        tr("Checking %1's ARQ capabilities…").arg(peer), 20000);
+    // Standard auto-reply enqueue path — NOT the ARQ direct-TX hook,
+    // which rode leftover TX-button state and got killed by its
+    // completion logic 120 ms after parking (observed 2026-07-17).
+    enqueueMessage(PriorityHigh,
+                   QStringLiteral("%1 QUERY ARQ?").arg(peer), -1,
+                   nullptr);
+    QPointer<UI_Constructor> const self(this);
+    QTimer::singleShot(20000, this, [self, gen]() {
+        if (self) self->onCapQueryTimeout(gen);
+    });
+}
+
+// [BUILD 339 TODO #103] Query-state timeout: one retry, then V1
+// fallback. Guarded by generation — acts only on the attempt that
+// armed it; no-op if that attempt already resumed or aborted.
+void UI_Constructor::onCapQueryTimeout(int const gen) {
+    if (gen != m_capQueryGen || m_pendingFilePath.isEmpty()) return;
+    if (m_capQueryRetries < 1) {
+        ++m_capQueryRetries;
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] capability query retry for"
+            << m_pendingFilePeer << "gen=" << gen;
+        enqueueMessage(PriorityHigh,
+                       QStringLiteral("%1 QUERY ARQ?")
+                           .arg(m_pendingFilePeer), -1,
+                       nullptr);
+        QPointer<UI_Constructor> const self(this);
+        QTimer::singleShot(20000, this, [self, gen]() {
+            if (self) self->onCapQueryTimeout(gen);
+        });
+        return;
+    }
+    QString const path = m_pendingFilePath;
+    QString const pr = m_pendingFilePeer;
+    m_pendingFilePath.clear();
+    m_pendingFilePeer.clear();
+    ++m_capQueryGen;
+    qCWarning(chunkedarq_js8)
+        << "[FT-TX] no capability reply from" << pr
+        << "— proceeding with V1 (not cached; silence may be QRM)";
+    statusBar()->showMessage(
+        tr("No capability reply from %1 — using standard format")
+            .arg(pr), 5000);
+    startFileTransferWithFormat(path, pr, 1);
+}
+
+void UI_Constructor::startFileTransferWithFormat(
+    QString const &filePath, QString const &peer, int const peerLevel) {
     QFileInfo const fi(filePath);
     if (!fi.exists() || !fi.isReadable()) {
         JS8MessageBox::warning_message(
@@ -6467,7 +6534,53 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
     }
 
     FileTransfer::FileHeader header;
-    QString const body = FileTransfer::buildSendBody(filePath, header);
+    // [BUILD 339 TODO #103] Wire-format negotiation: V2 (single-
+    // envelope binary header, ~2 sub-messages smaller) only for
+    // peers that advertised ARQ protocol level >= 2 via QUERY ARQ?
+    // this session; V1 for everyone else (including never-queried
+    // peers — V1 is always safe).
+    QString const body =
+        (peerLevel >= 2) ? FileTransfer::buildSendBodyV2(filePath, header)
+                         : FileTransfer::buildSendBody(filePath, header);
+    qCWarning(chunkedarq_js8)
+        << "[FT-TX] wire format" << (peerLevel >= 2 ? "V2" : "V1")
+        << "for peer=" << peer << "(cached level=" << peerLevel << ")";
+    // [BUILD 339 TODO #104] Stage-2 qualification: chunk count is a
+    // property of the BUILT body (format-dependent — a file can
+    // overflow as V1 but fit as V2), and the ceiling is a property
+    // of the PEER (31 below level 3, 99 with rollover). Bail here,
+    // before any air time, with a message naming the real constraint.
+    if (!body.isEmpty()) {
+        int const needed = ChunkedArq::splitIntoChunks(body).size();
+        int const maxChunks = (peerLevel >= 2)
+                                  ? ChunkedArq::MAX_CHUNKS_ROLLOVER
+                                  : ChunkedArq::MAX_CHUNKS_PER_MESSAGE;
+        if (needed > maxChunks) {
+            qCWarning(chunkedarq_js8)
+                << "[FT-TX] disqualified: needs" << needed
+                << "sub-messages; peer max" << maxChunks
+                << "(level" << peerLevel << ")";
+            if (peerLevel < 2 &&
+                needed <= ChunkedArq::MAX_CHUNKS_ROLLOVER) {
+                JS8MessageBox::warning_message(
+                    this, QStringLiteral("File too large for peer"),
+                    QStringLiteral(
+                        "This file needs %1 sub-messages; %2's build "
+                        "supports %3 (about 1 KB). They need a newer "
+                        "build — or send a smaller file.")
+                        .arg(needed).arg(peer).arg(maxChunks));
+            } else {
+                JS8MessageBox::warning_message(
+                    this, QStringLiteral("File too large"),
+                    QStringLiteral(
+                        "This file needs %1 sub-messages; the maximum "
+                        "is %2. Send a smaller file.")
+                        .arg(needed)
+                        .arg(ChunkedArq::MAX_CHUNKS_ROLLOVER));
+            }
+            return;
+        }
+    }
     if (body.isEmpty()) {
         JS8MessageBox::warning_message(
             this, QStringLiteral("File transfer failed"),
@@ -6497,7 +6610,11 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
         << "bytes=" << header.bytes
         << "wireBodyChars=" << body.size();
 
-    auto const res = m_chunkedArq->sendChunked(peer, body, m_nSubMode);
+    int const sendMaxChunks = (peerLevel >= 2)
+                                  ? ChunkedArq::MAX_CHUNKS_ROLLOVER
+                                  : ChunkedArq::MAX_CHUNKS_PER_MESSAGE;
+    auto const res =
+        m_chunkedArq->sendChunked(peer, body, m_nSubMode, sendMaxChunks);
     if (res.ok) {
         if (arqAutoEnabled) {
             m_fileSendMsgId           = res.msgId;
@@ -7314,6 +7431,17 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
             // [BUILD 336 TODO #87] Aborted remote-triggered hail
             // still restores the operator's original mode speed.
             restoreVisibleHailSubmodeIfPending();
+        }
+        // [BUILD 339 TODO #103] Halt also aborts a file transfer
+        // waiting on the capability query.
+        if (!m_pendingFilePath.isEmpty()) {
+            qCWarning(chunkedarq_js8)
+                << "[FT-TX] pending file transfer aborted by Halt "
+                   "(was awaiting capability reply from"
+                << m_pendingFilePeer << ")";
+            m_pendingFilePath.clear();
+            m_pendingFilePeer.clear();
+            ++m_capQueryGen;
         }
     }
 }
