@@ -73,7 +73,15 @@ constexpr int V2_HASH_BYTES = 16;
 /// level-1 peers get the legacy link.txt file transfer.
 constexpr char const *PREFIX_L1 = "L/V1 BASE32 ";
 
-/// Build the wire body for a web link. Empty on invalid input.
+/// [BUILD 341 linkCase] THE link-URL gate both ends use: starts with
+/// http:// or https:// (case-insensitive) and contains no whitespace
+/// or control characters. Deliberately NOT QUrl-based — QUrl
+/// normalizes, and link payloads must stay byte-exact (URL paths,
+/// shortener IDs, and signed query tokens are case-sensitive).
+bool isValidLinkUrl(QString const &url);
+
+/// Build the wire body for a web link. Empty on invalid input. The
+/// URL is transmitted byte-exact (trimmed only, never normalized).
 QString buildLinkBody(QString const &url);
 
 /// Decode an L/V1 body. Returns false unless the payload decodes to

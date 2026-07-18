@@ -485,6 +485,11 @@ void CPlotter::mouseDoubleClickEvent(QMouseEvent *event) {
         if (freqFromX(event->pos().x()) > 1000.0f) {
             if (QString const call = callAt(event->pos());
                 !call.isEmpty()) {
+                // Suppress the gesture's trailing release — see
+                // m_suppressReleaseFreq in the header. Set BEFORE the
+                // emit: the handler QSYs to the looked-up frequency
+                // and nothing may re-tune behind it.
+                m_suppressReleaseFreq = true;
                 Q_EMIT callDoubleClicked(call);
             }
         }
@@ -1000,6 +1005,12 @@ void CPlotter::mouseMoveEvent(QMouseEvent *event) {
 
 void CPlotter::mouseReleaseEvent(QMouseEvent *event) {
     if (Qt::LeftButton == event->button()) {
+        if (m_suppressReleaseFreq) {
+            // Trailing release of a label double-click — the
+            // click-to-call handler owns the frequency.
+            m_suppressReleaseFreq = false;
+            return;
+        }
         Q_EMIT changeFreq(static_cast<int>(freqFromX(m_lastMouseX)));
     } else {
         event->ignore();

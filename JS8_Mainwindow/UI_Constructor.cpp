@@ -441,6 +441,13 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // click's seed — repeated clicks switch stations); real draft
     // text is never clobbered. Every suppression logs — no silent
     // misses. Confirmed with a toast on the map window.
+    // [BUILD 340.1] Load the logbook (and with it cty.dat) at
+    // STARTUP — previously init() only ran from QSO-logging paths,
+    // so the country table stayed EMPTY until the first logged
+    // contact and every lookup returned the "where?" placeholder
+    // (operator-observed on hover). One-time cost: cty.dat resource
+    // + ADIF log read.
+    m_logBook.init();
     // [BUILD 340] Country names for spot hover (LogBook/cty.dat by
     // callsign; the map compares topic DXCC codes to skip our own
     // country before calling this).
@@ -448,6 +455,21 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         QString country;
         bool workedCall = false, workedCountry = false;
         m_logBook.match(call, country, workedCall, workedCountry);
+        // match() substitutes "where?" when the prefix isn't found —
+        // a placeholder, not a country. No line beats a riddle.
+        if (country == QStringLiteral("where?")) {
+            country.clear();
+        }
+        // CountryDat names are compound: "Spain; EA; EU" (name;
+        // principal prefix; continent). Drop the prefix component
+        // for the hover (Andy 2026-07-17) — other consumers
+        // (CountriesWorked keys) need the compound intact, so strip
+        // here, not in CountryDat.
+        if (QStringList parts = country.split(QStringLiteral("; "));
+            parts.size() >= 3) {
+            parts.removeAt(1);
+            country = parts.join(QStringLiteral("; "));
+        }
         return country;
     });
     // [BUILD 340] Double-click a spot → QSY to the DX station's
@@ -472,19 +494,41 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 }
             });
     // [BUILD 336] Waterfall: double-click on (or very near) a painted
-    // callsign label — same seed logic; feedback via the status bar
-    // (the waterfall has no toast overlay).
+    // callsign label — seed logic; feedback via the status bar (the
+    // waterfall has no toast overlay).
+    // [BUILD 341 wfDblClick] Andy 2026-07-17: the waterfall form is
+    // deliberate enough to OVERWRITE any draft (force seed; the ARQ
+    // box lock still wins), and it QSYs to the station's last-heard
+    // audio offset from Call Activity when that offset is > 1000 Hz
+    // (same floor as the spots-map QSY; changeFreq has the TX-queue
+    // guard).
     connect(m_wideGraph.data(), &WideGraph::callDoubleClicked, this,
             [this](QString const &call) {
-                switch (trySeedOutgoingGreeting(call)) {
-                case GreetingSeedResult::Seeded:
-                    statusBar()->showMessage(
-                        tr("Copied %1 to outgoing message")
-                            .arg(call.trimmed()), 5000);
+                switch (trySeedOutgoingGreeting(call, /*force=*/true)) {
+                case GreetingSeedResult::Seeded: {
+                    QString const key = call.trimmed().toUpper();
+                    int offset = -1;
+                    if (auto const it = m_callActivity.constFind(key);
+                        it != m_callActivity.constEnd()) {
+                        offset = it->offset;
+                    }
+                    if (offset > 1000) {
+                        changeFreq(offset);
+                        statusBar()->showMessage(
+                            tr("Copied %1 to outgoing message — QSY %2 Hz")
+                                .arg(key).arg(offset), 5000);
+                    } else {
+                        statusBar()->showMessage(
+                            tr("Copied %1 to outgoing message")
+                                .arg(key), 5000);
+                    }
                     break;
+                }
                 case GreetingSeedResult::DraftBlocked:
+                    // Only the ARQ lock blocks now (force overwrites
+                    // drafts).
                     statusBar()->showMessage(tr(
-                        "Clear or send current outgoing message first"),
+                        "Multi-part message in progress — try later"),
                         5000);
                     break;
                 case GreetingSeedResult::InvalidCall:
@@ -1813,7 +1857,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // (rightLayout->setSpacing(2) is overridden locally by
             // adding the chevron in the same logical group).
             m_sendMenuButton = new QToolButton(parentWidget);
-            m_sendMenuButton->setArrowType(Qt::DownArrow);
+            // [BUILD 341] Text glyph instead of arrowType: the style-
+            // engine primitive arrow ignores stylesheet `color`, and
+            // the ARQ-validity indicator (red/black) drives the color
+            // via stylesheet swaps.
+            m_sendMenuButton->setText(QStringLiteral("▼"));
             m_sendMenuButton->setPopupMode(QToolButton::InstantPopup);
             m_sendMenuButton->setFixedWidth(18);
             m_sendMenuButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);

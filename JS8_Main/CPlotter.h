@@ -228,6 +228,13 @@ class CPlotter final : public QWidget {
     int m_h2 = 0;
     bool m_filterEnabled = false;
     bool m_callsignOverlayEnabled = true;
+    // [BUILD 341 wfDblClick] True after a double-click landed on a
+    // callsign label (click-to-call fired). The double-click's own
+    // trailing mouseReleaseEvent must NOT emit changeFreq — it would
+    // re-tune to the clicked pixel AFTER the click-to-call handler's
+    // looked-up-frequency QSY, and the looked-up freq lost the race
+    // (operator-observed 2026-07-17).
+    bool m_suppressReleaseFreq = false;
     float m_freqPerPixel;
 
     // History of recently-painted call-sign overlays, used to

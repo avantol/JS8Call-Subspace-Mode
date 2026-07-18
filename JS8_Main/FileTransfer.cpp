@@ -416,18 +416,37 @@ QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader) {
     return body;
 }
 
+// [BUILD 341 linkCase] EXACT-COPY rule for web links (Andy
+// 2026-07-17): URL path/query/fragment are case-sensitive (shortener
+// IDs, video IDs, signed tokens), so the URL must ride the wire as
+// the operator's exact bytes. NEVER round-trip through QUrl here —
+// QUrl normalizes (scheme/host case, percent-encoding fixups) and
+// that is a payload mutation. Validation is a plain scheme-prefix
+// check; isValidLinkUrl is the ONE gate both ends use.
+bool isValidLinkUrl(QString const &url) {
+    if (!url.startsWith(QStringLiteral("http://"),
+                        Qt::CaseInsensitive) &&
+        !url.startsWith(QStringLiteral("https://"),
+                        Qt::CaseInsensitive)) {
+        return false;
+    }
+    // A single URL has no whitespace and no control characters — a
+    // pasted sentence or a hostile decoded payload fails here.
+    for (QChar const c : url) {
+        if (c.isSpace() || c.unicode() < 0x20) return false;
+    }
+    return true;
+}
+
 QString buildLinkBody(QString const &url) {
-    QUrl const parsed = QUrl(url.trimmed());
-    if (!parsed.isValid() ||
-        (parsed.scheme() != QStringLiteral("http") &&
-         parsed.scheme() != QStringLiteral("https"))) {
+    QString const u = url.trimmed();
+    if (!isValidLinkUrl(u)) {
         qCWarning(filetransfer_js8)
             << "[LT-TX] buildLinkBody: not an http(s) URL";
         return QString();
     }
     QString const body =
-        QString::fromLatin1(PREFIX_L1) +
-        base32Encode(parsed.toString(QUrl::FullyEncoded).toUtf8());
+        QString::fromLatin1(PREFIX_L1) + base32Encode(u.toUtf8());
     qCWarning(filetransfer_js8)
         << "[LT-TX] link body built: wireBodyChars=" << body.size();
     return body;
@@ -440,15 +459,16 @@ bool splitLinkBody(QString const &body, QString &outUrl) {
     rest.remove(QRegularExpression(QStringLiteral("\\s+")));
     QByteArray const bytes = base32Decode(rest);
     if (bytes.isEmpty()) return false;
-    QUrl const parsed = QUrl(QString::fromUtf8(bytes));
-    if (!parsed.isValid() ||
-        (parsed.scheme() != QStringLiteral("http") &&
-         parsed.scheme() != QStringLiteral("https"))) {
+    QString const url = QString::fromUtf8(bytes);
+    // Same scheme gate as TX — a corrupt or hostile payload can't
+    // produce a link to who-knows-what — but the URL itself passes
+    // through byte-exact (no QUrl normalization).
+    if (!isValidLinkUrl(url)) {
         qCWarning(filetransfer_js8)
             << "[LT-RX] decoded payload is not an http(s) URL";
         return false;
     }
-    outUrl = parsed.toString(QUrl::FullyEncoded);
+    outUrl = url;
     return true;
 }
 

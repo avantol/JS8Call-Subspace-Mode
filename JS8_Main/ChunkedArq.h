@@ -78,6 +78,41 @@ constexpr int    ACK_SEQ_MODULUS         = 31;
 constexpr int    ackWireSeq(int const absSeq) {
     return ((absSeq - 1) % ACK_SEQ_MODULUS) + 1;
 }
+
+// [BUILD 341 policyGate] Classification of outgoing-box text for ARQ
+// eligibility. PURE FUNCTION — text in, class out; no UI, no config,
+// no Varicode packing (packing does TX framing only; it has no role
+// in classification). Policy encodes Andy's approved chart (TODO
+// #105): see the implementation's tables. Covered by the offline
+// test matrix in scratchpad/arqgate_test.cpp — extend the matrix
+// BEFORE changing the tables.
+enum class TextClass {
+    FreeText,         // ARQ-eligible
+    DirectedCommand,  // ARQ refused (has its own send semantics)
+    ArqExempt,        // MSG / MSG TO: / relay — ARQ explicitly wraps
+};
+TextClass classifyOutgoingText(QString const &boxText);
+
+// [BUILD 341 peerResolve] The INDIVIDUAL-callsign addressee named by
+// the text itself (leading token after normalization + FROM-prefix
+// strip), or empty. The effective ARQ peer is: selected callsign IF
+// it is a valid individual peer, OTHERWISE this — i.e., evaluate the
+// final message as interpreted at TX time, where the text's
+// addressee wins (a selected @group is irrelevant to a text that
+// names its own peer; operator-observed 2026-07-17).
+QString leadingPeerOf(QString const &boxText);
+
+// [BUILD 341 sendPeer] THE effective-peer rule, in one place: the
+// selected callsign IF it is a valid individual peer, otherwise the
+// text's own leading-callsign addressee, otherwise empty. Every
+// consumer of "which single station would ACK this?" — the enable
+// gate, the file/link resolver, AND the startTx ARQ intercept — must
+// call THIS and nothing else. The 2026-07-17 regression chain was
+// three hand-rolled copies of this rule drifting apart (the send
+// path only fell back on an EMPTY selection, so a selected @group
+// silently killed the ARQ wrap at TX time while the menu showed
+// enabled).
+QString effectivePeer(QString const &selected, QString const &boxText);
 constexpr int    MAX_CHUNK_BODY_CHARS    = 60;    // body per chunk; tune for failure rate
 constexpr int    CHUNKED_MARKER_LEN      = 14;    // len("#NN.CC/TT.HHHH")
 
@@ -98,6 +133,29 @@ inline int ackTimeoutMsForSubmode(int submode) {
         case 16: return 12000; // JS8CallFT2 / Subspace — 3.75 s cycle
         default: return 25000; // Unknown — pick a middling value
     }
+}
+
+// [BUILD 341 capTimeout] QUERY ARQ? negotiation window per submode.
+// Was a flat 20 s — sized for Subspace only (operator 2026-07-17:
+// "too short for most speeds. we can even operate at Slow"). The
+// negotiation is two ACK-shaped exchanges: our 2-frame query out,
+// the peer's 2-frame "YES <level>" back (at OUR submode since
+// arqSpeed). Window = 2 × the field-proven ACK budget MINUS one
+// period (operator 2026-07-17: that makes it the same as the
+// file-transfer sub-msg timeout):
+//   Subspace 20.25 s, Turbo 26 s, Fast 40 s, Normal 57 s, Slow 102 s.
+inline int capQueryTimeoutMsForSubmode(int submode) {
+    int const periodMs = [submode]() {
+        switch (submode) {
+            case 0:  return 15000; // JS8CallNormal
+            case 1:  return 10000; // JS8CallFast
+            case 2:  return 6000;  // JS8CallTurbo
+            case 4:  return 30000; // JS8CallSlow
+            case 16: return 3750;  // JS8CallFT2 / Subspace
+            default: return 15000; // Unknown — Normal
+        }
+    }();
+    return 2 * ackTimeoutMsForSubmode(submode) - periodMs;
 }
 
 // TX-idle poll: how often the manager re-checks "has JS8Call finished

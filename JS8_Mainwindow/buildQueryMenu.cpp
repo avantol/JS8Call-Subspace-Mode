@@ -47,6 +47,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
         auto message = m_config.reply_message();
         message = replaceMacros(message, buildMacroValues(), true);
         addMessageText(QString("%1 %2").arg(selectedCall).arg(message), true);
+        autoSendIfDirectedCmd();
     });
 
     auto sendSNRAction = menu->addAction(
@@ -70,8 +71,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
                            .arg(Varicode::formatSNR(d.snr)),
                        true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto infoAction = menu->addAction(
@@ -87,8 +87,10 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
             QString("%1 INFO %2").arg(selectedCall).arg(m_config.my_info()),
             true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        // [BUILD 341 chart] Complete one-shot command — the free-text
+        // info argument would trip the gate's remainder test, so the
+        // menu sends unconditionally.
+        toggleTx(true);
     });
 
     auto gridAction = menu->addAction(
@@ -107,8 +109,9 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
             QString("%1 GRID %2").arg(selectedCall).arg(m_config.my_grid()),
             true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        // [BUILD 341 chart] Complete one-shot — grid argument trips
+        // the gate's remainder test; send unconditionally.
+        toggleTx(true);
     });
 
     // [BUILD 331+ TODO #82] BELL — soft summons. Pings the recipient
@@ -129,8 +132,10 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
             return;
         }
         addMessageText(QString("%1 BELL").arg(selectedCall), true);
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        // [BUILD 341 chart] BELL is a Subspace freetext convention,
+        // not a Varicode command — the gate can never classify it.
+        // Complete one-shot; send unconditionally.
+        toggleTx(true);
     });
 
     menu->addSeparator();
@@ -146,8 +151,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 SNR?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto infoQueryAction =
@@ -163,8 +167,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 INFO?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto gridQueryAction =
@@ -180,8 +183,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 GRID?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto stationIdleQueryAction = menu->addAction(
@@ -197,8 +199,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 STATUS?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto heardQueryAction = menu->addAction(
@@ -215,8 +216,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 HEARING?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
 #if 0
@@ -305,6 +305,9 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
         }
 
         addMessageText(QString("%1 QUERY MSGS").arg(selectedCall), true, true);
+        // [BUILD 341 chart] Bare command, complete as-is — auto-send
+        // was simply never wired here.
+        autoSendIfDirectedCmd();
     });
 
     auto qsoQueryMsgAction =
@@ -341,9 +344,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
         // separately. Gated on transmit_directed() so users who've
         // opted out of auto-TX-on-directed-action still see the
         // pre-typed text and can fire it manually.
-        if (m_config.transmit_directed()) {
-            toggleTx(true);
-        }
+        autoSendIfDirectedCmd();
     });
 
     menu->addSeparator();
@@ -360,8 +361,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 AGN?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto qslQueryAction = menu->addAction(
@@ -376,8 +376,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 QSL?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto qslAction = menu->addAction(
@@ -392,8 +391,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 QSL").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto yesAction = menu->addAction(
@@ -406,8 +404,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 YES").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto noAction =
@@ -422,8 +419,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 NO").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto hwAction = menu->addAction(
@@ -436,8 +432,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 HW CPY?").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto rrAction = menu->addAction(
@@ -450,8 +445,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 RR").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto fbAction =
@@ -464,8 +458,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 FB").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto sevenThreeAction = menu->addAction(
@@ -478,8 +471,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 73").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto skAction =
@@ -492,8 +484,7 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 SK").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 
     auto ditDitAction = menu->addAction(
@@ -506,7 +497,6 @@ void UI_Constructor::buildQueryMenu(QMenu *menu, QString call) {
 
         addMessageText(QString("%1 DIT DIT").arg(selectedCall), true);
 
-        if (m_config.transmit_directed())
-            toggleTx(true);
+        autoSendIfDirectedCmd();
     });
 }

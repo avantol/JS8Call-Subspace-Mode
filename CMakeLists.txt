@@ -383,9 +383,17 @@ endif()
 # PSK reporter, respectively.
 #------------------------------------------------------------------------------#
 
+# [BUILD 341 ctyRes] BASE strips the directory from the resource
+# alias. Without it (Qt 6.4-compat change, PREFIX "/" added) these
+# landed at :/JS8_Include/cty.dat while LogBook opens :/cty.dat and
+# PSKReporter opens :/eclipse.txt — both opens failed SILENTLY, the
+# country table stayed empty, and every spots-map hover lookup
+# returned the filtered-out "where?" placeholder (operator-observed:
+# grid shown, country never).
 qt_add_resources(
   ${TARGET} "data"
   PREFIX "/"
+  BASE JS8_Include
   FILES
   JS8_Include/cty.dat
   JS8_Include/eclipse.txt

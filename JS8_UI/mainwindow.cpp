@@ -3533,7 +3533,17 @@ void UI_Constructor::guiUpdate() {
         // [RX-SIDE NO-LOCK 2026-06-10] hasActiveTxSession() —
         // fires only when WE are sending. Receiver-side buttons
         // stay usable mid-RX.
-        bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveTxSession());
+        // [BUILD 341 capLock] The capability-negotiation window (a
+        // transfer parked on QUERY ARQ?, m_pendingFilePath /
+        // m_pendingLinkUrl set) is part of the SAME session for UI
+        // purposes: the box and mode must stay locked from the
+        // operator's send click straight through negotiation into
+        // the chunked TX — not unlock for the 20-130 s gap in the
+        // middle. Cleared by capability capture (resumes into the
+        // session lock), timeout fallback (ditto), or abort.
+        bool const arqBusy =
+            (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
+            !m_pendingFilePath.isEmpty() || !m_pendingLinkUrl.isEmpty();
         // Two-tier gate (2026-06-08, follow-up):
         //   canChangeSpeed — speed mode buttons (S/N/F/T/⚡). Re-
         //     enabled BETWEEN chunks during an ARQ session so the
@@ -3590,21 +3600,32 @@ void UI_Constructor::guiUpdate() {
         // already handles single-frame TX; this extends to span
         // chunk-to-chunk gaps inside an ARQ super-message.
         if (ui->extFreeTextMsgEdit) {
-            bool const wantReadOnly = arqBusy;
             if (arqBusy && !ui->extFreeTextMsgEdit->isReadOnly()) {
                 ui->extFreeTextMsgEdit->setReadOnly(true);
                 update_dynamic_property(ui->extFreeTextMsgEdit,
                                         "transmitting", true);
+                // [BUILD 341 arqPrompt] Banner while the box is
+                // locked for the ARQ operation (session or parked
+                // negotiation).
+                m_arqBoxLocked = true;
+                refreshOutgoingPlaceholder();
             } else if (!arqBusy && !m_transmitting &&
-                       ui->extFreeTextMsgEdit->isReadOnly() &&
+                       (ui->extFreeTextMsgEdit->isReadOnly() ||
+                        m_arqBoxLocked) &&
                        m_txFrameQueue.isEmpty()) {
                 // Only clear when BOTH ARQ session is over AND no
                 // normal TX is in flight. Don't fight the per-frame
                 // readOnly toggling that startTxNonArq / prepareNextMessageFrame
                 // own for plain TXes.
+                // [BUILD 341 arqPrompt] m_arqBoxLocked in the
+                // condition: stopTx's drain path clears readOnly
+                // itself, which would skip this branch and leave the
+                // MULTI-PART banner stuck.
                 ui->extFreeTextMsgEdit->setReadOnly(false);
                 update_dynamic_property(ui->extFreeTextMsgEdit,
                                         "transmitting", false);
+                m_arqBoxLocked = false;
+                refreshOutgoingPlaceholder();
             }
         }
     }
@@ -3661,45 +3682,24 @@ void UI_Constructor::startTx() {
     // synchronous modes (Normal/Fast/Turbo/Slow) ARQ falls back to
     // period-aligned cadence — slower per-chunk wall clock, but the
     // protocol is identical and ACK/NACK semantics work the same.
-    // Resolve the ARQ peer. Priority order:
-    //   1. callsignSelected() — operator's explicit Call Activity pick
-    //   2. Leading callsign of the typed widget text — handles the
-    //      common case where the operator types "<peer> body..." or
-    //      the JS8 self-prefixed form "WM8Q: <peer> body..." without
-    //      first double-clicking Call Activity. Skips the leading
-    //      "<mycall>:" if present (JS8's typeahead prepends it).
-    //
-    // Reject @-prefixed targets (ALLCALL, groups, APRSIS) for ARQ —
-    // ARQ needs a single peer that can ACK. Group sends fall through
-    // to normal directed TX.
-    QString arqPeer = callsignSelected().trimmed();
-    if (arqPeer.isEmpty()) {
-        QString const myCall = m_config.my_callsign().trimmed().toUpper();
-        QString probe = text.toUpper().trimmed();
-        if (!myCall.isEmpty() && probe.startsWith(myCall + ":")) {
-            probe = probe.mid(myCall.length() + 1).trimmed();
-        }
-        static QRegularExpression const leadingCallRe(
-            QStringLiteral(R"(^\s*(@?[A-Z0-9/]+))"));
-        auto const m = leadingCallRe.match(probe);
-        if (m.hasMatch()) {
-            arqPeer = m.captured(1);
-        }
-    }
+    // Resolve the ARQ peer via THE shared rule
+    // (ChunkedArq::effectivePeer, same function the enable gate and
+    // the file/link resolver use): selected INDIVIDUAL callsign wins;
+    // an empty, @group, or non-callsign selection defers to the
+    // text's own leading-callsign addressee; empty when neither
+    // yields a single ACKable station (group sends fall through to
+    // normal directed TX). [BUILD 341 sendPeer] This used to be a
+    // hand-rolled copy that only fell back on an EMPTY selection —
+    // so "WM8Q/P MSG …" with @ALLCALL selected passed the enable
+    // gate but resolved @ALLCALL here and silently shipped non-ARQ.
+    QString const arqPeer =
+        ChunkedArq::effectivePeer(callsignSelected(), text);
     bool const arqHasMgr    = (m_chunkedArq != nullptr);
     bool const arqEnabled   = arqHasMgr && m_chunkedArq->arqInProgress();
-    // Validate the resolved peer is an actual amateur callsign.
-    // Without this gate, free-text sends that don't parse as directed
-    // (e.g. "TESTING MY RIG" with ARQ enabled) extract "TESTING" as
-    // the peer and wrap the whole line in chunked-ARQ wire format
-    // (#NN.CC/TT.HHHH), going on-air as free text with visible
-    // "magic" markers but no ACKable destination. Radio::is_callsign
-    // checks the full callsign-shape regex; @-prefixed targets
-    // (ALLCALL, groups) are also rejected because they're group calls
-    // with no single peer to ACK.
-    bool const arqHasPeer   = !arqPeer.isEmpty() &&
-                              !arqPeer.startsWith('@') &&
-                              Radio::is_callsign(arqPeer);
+    // effectivePeer returns a validated individual callsign or empty
+    // — free-text like "TESTING MY RIG" yields empty (no ACKable
+    // destination), @groups are never returned.
+    bool const arqHasPeer   = !arqPeer.isEmpty();
     bool const arqHasText   = !text.trimmed().isEmpty();
 
     // Directed-command detection. Structured single-frame JS8 queries
@@ -4088,10 +4088,16 @@ void UI_Constructor::stopTx() {
         tx_status_label.setText("");
     }
 
+#if IDLE_BLOCKS_TX
+    bool shouldContinue = !m_tx_watchdog && prepareNextMessageFrame();
+#else
+    bool shouldContinue = prepareNextMessageFrame();
+#endif
+
     // [TODO.md #57 build 269] Restore the operator's pre-response
     // outgoing-text draft. The save in onChunkedWantsResponseTx ran
-    // just before the ACK / NACK wire text replaced the widget; this
-    // is the symmetric un-replace once that response TX has drained.
+    // just before the response wire text replaced the widget; this is
+    // the symmetric un-replace once that response TX has drained.
     //
     // Build 268 set the text synchronously here and produced a blank
     // line above the post-TX strike-through display. JS8's own post-
@@ -4101,8 +4107,17 @@ void UI_Constructor::stopTx() {
     // thread so the strike-through completes first, then we replace.
     // A 750 ms delay is generous enough to cover the post-stopTx
     // styling cascade without leaving the operator staring at the
-    // wire-form ACK / NACK text for long.
-    if (m_arqResponseRestorePending && ui->extFreeTextMsgEdit) {
+    // wire-form response text for long.
+    // [BUILD 341 arqSpeed2] Gated on !shouldContinue, same reason as
+    // the submode restore below: stopTx runs at EVERY frame boundary,
+    // and an ungated end-of-TX action here would fire after frame 1
+    // of a multi-frame response — restoring the operator's draft into
+    // the box while later frames are still transmitting. ACK / NACK
+    // (the only responses that arm this today) are single-frame, so
+    // it never bit — but the landmine is now defused uniformly: ALL
+    // end-of-TX-only actions in stopTx sit behind this gate.
+    if (!shouldContinue && m_arqResponseRestorePending &&
+        ui->extFreeTextMsgEdit) {
         QString const saved = m_arqResponseSavedText;
         m_arqResponseSavedText.clear();
         m_arqResponseRestorePending = false;
@@ -4116,13 +4131,21 @@ void UI_Constructor::stopTx() {
         });
     }
 
-    // [TODO #73 build 312] Always revert to the stashed pre-auto-
-    // switch submode 750ms after the ACK / NACK transmits. The
-    // speed buttons are disabled during TX so the operator can't
-    // race a manual selection into the gap; whatever's in m_nSubMode
-    // at this moment is the auto-switch's choice. No conditional
-    // gating needed.
-    if (m_arqPreSwitchSubmode != -1) {
+    // [TODO #73 build 312] Revert to the stashed pre-auto-switch
+    // submode 750ms after the response transmits. The speed buttons
+    // are disabled during TX so the operator can't race a manual
+    // selection into the gap; whatever's in m_nSubMode at this moment
+    // is the auto-switch's choice.
+    // [BUILD 341 arqSpeed2] Gated on !shouldContinue — stopTx runs at
+    // EVERY frame boundary, and the caller-speed QUERY ARQ? reply
+    // ("<peer> YES <level>") is TWO frames. Ungated, frame 1's stopTx
+    // consumed the stash and scheduled the setSubmode while frame 2
+    // was still queued, so the deferred call hit setSubmode's
+    // active-TX block and the restore was silently lost (operator-
+    // observed 2026-07-17: stuck at caller's speed). Single-frame
+    // ACK / NACK behave exactly as before: their first stopTx is
+    // already the last.
+    if (!shouldContinue && m_arqPreSwitchSubmode != -1) {
         int const stashedMode = m_arqPreSwitchSubmode;
         m_arqPreSwitchSubmode = -1;
         if (m_nSubMode != stashedMode) {
@@ -4136,12 +4159,6 @@ void UI_Constructor::stopTx() {
             });
         }
     }
-
-#if IDLE_BLOCKS_TX
-    bool shouldContinue = !m_tx_watchdog && prepareNextMessageFrame();
-#else
-    bool shouldContinue = prepareNextMessageFrame();
-#endif
     if (m_nSubMode == Varicode::JS8CallFT2)
         qCDebug(mainwindow_js8) << "[FT2-TX] stopTx: shouldContinue=" << shouldContinue
                    << "m_auto=" << m_auto << "m_txFrameCount=" << m_txFrameCount;
@@ -6166,12 +6183,19 @@ void UI_Constructor::restoreVisibleHailSubmodeIfPending() {
 // is never clobbered. Any selected callsign is CLEARED before seeding
 // (selection is not a guard — guarding on it silently ate clicks).
 UI_Constructor::GreetingSeedResult
-UI_Constructor::trySeedOutgoingGreeting(QString const &call) {
+UI_Constructor::trySeedOutgoingGreeting(QString const &call,
+                                        bool const force) {
     bool compound = false;
     if (!Varicode::isValidCallsign(call.trimmed(), &compound)) {
         qWarning() << "[SEED-GREETING] ignored, not a valid callsign:"
                    << call;
         return GreetingSeedResult::InvalidCall;
+    }
+    // The ARQ session/negotiation lock outranks even a forced seed —
+    // the box belongs to the protocol layer while locked.
+    if (m_arqBoxLocked) {
+        qWarning() << "[SEED-GREETING] suppressed, ARQ box lock active";
+        return GreetingSeedResult::DraftBlocked;
     }
     QString const greeting =
         replaceMacros(m_config.standard_greeting(), buildMacroValues(),
@@ -6181,7 +6205,7 @@ UI_Constructor::trySeedOutgoingGreeting(QString const &call) {
         probe = probe.chopped(greeting.size()).trimmed();
     }
     bool probeCompound = false;
-    if (!probe.isEmpty() &&
+    if (!force && !probe.isEmpty() &&
         !Varicode::isValidCallsign(probe, &probeCompound)) {
         qWarning() << "[SEED-GREETING] suppressed, outgoing box has"
                       " draft text";
@@ -6347,21 +6371,13 @@ QString UI_Constructor::resolveArqFilePeer() {
                            "cannot send file."));
         return {};
     }
-    QString peer = callsignSelected().trimmed();
+    // [BUILD 341 sendPeer] THE shared effective-peer rule (same
+    // function as the enable gate and the startTx ARQ intercept):
+    // selected INDIVIDUAL callsign wins; a selected @group falls
+    // back to the text's own leading-callsign addressee.
+    QString const peer = ChunkedArq::effectivePeer(
+        callsignSelected(), ui->extFreeTextMsgEdit->toPlainText());
     if (peer.isEmpty()) {
-        QString const myCall = m_config.my_callsign().trimmed().toUpper();
-        QString probe = ui->extFreeTextMsgEdit->toPlainText()
-                            .toUpper().trimmed();
-        if (!myCall.isEmpty() && probe.startsWith(myCall + ":")) {
-            probe = probe.mid(myCall.length() + 1).trimmed();
-        }
-        static QRegularExpression const leadingCallRe(
-            QStringLiteral(R"(^\s*(@?[A-Z0-9/]+))"));
-        auto const m = leadingCallRe.match(probe);
-        if (m.hasMatch()) peer = m.captured(1);
-    }
-    if (peer.isEmpty() || peer.startsWith('@') ||
-        !Radio::is_callsign(peer)) {
         JS8MessageBox::information_message(
             this,
             QStringLiteral("Select a call sign"),
@@ -6398,42 +6414,36 @@ void UI_Constructor::on_sendWebLinkAction_triggered() {
     QString const peer = resolveArqFilePeer();
     if (peer.isEmpty()) return;
 
-    bool ok = false;
-    QString const entered = QInputDialog::getText(
-        this, tr("Send web link (URL)"),
-        tr("Paste the web link to send to %1:\n"
-           "(must contain 'http://' or 'https://')").arg(peer),
-        QLineEdit::Normal, QString(), &ok).trimmed();
-    if (!ok || entered.isEmpty()) return;  // user cancelled
-
-    QUrl const url = QUrl::fromUserInput(entered);
-    // Enforce exactly what the dialog states: the pasted text must
-    // carry an explicit http(s) scheme (no bare-domain guessing).
-    if (!entered.contains(QStringLiteral("http://"),
-                          Qt::CaseInsensitive) &&
-        !entered.contains(QStringLiteral("https://"),
-                          Qt::CaseInsensitive)) {
+    // [BUILD 341 linkCase] Validate INSIDE the entry loop: a rejected
+    // URL re-opens the dialog pre-filled with what the operator typed
+    // so it can be edited, not retyped. And the URL is used EXACTLY
+    // as entered — no QUrl::fromUserInput round-trip. QUrl normalizes
+    // (scheme/host lowercasing, percent-encoding fixups), and URL
+    // paths / shortener IDs / signed query tokens are case-sensitive:
+    // the peer must receive a byte-exact copy.
+    QString entered;
+    for (;;) {
+        bool ok = false;
+        entered = QInputDialog::getText(
+            this, tr("Send web link (URL)"),
+            tr("Paste the web link to send to %1:\n"
+               "(must start with 'http://' or 'https://')").arg(peer),
+            QLineEdit::Normal, entered, &ok).trimmed();
+        if (!ok) return;  // user cancelled
+        if (FileTransfer::isValidLinkUrl(entered)) break;
         JS8MessageBox::warning_message(
             this, QStringLiteral("Not a web link"),
-            QStringLiteral("\"%1\" doesn't contain 'http://' or "
-                           "'https://'.").arg(entered));
-        return;
-    }
-    if (!url.isValid() ||
-        (url.scheme() != QStringLiteral("http") &&
-         url.scheme() != QStringLiteral("https"))) {
-        JS8MessageBox::warning_message(
-            this, QStringLiteral("Not a web link"),
-            QStringLiteral("\"%1\" doesn't look like a valid http(s) "
-                           "link.").arg(entered));
-        return;
+            QStringLiteral("\"%1\" doesn't start with 'http://' or "
+                           "'https://' (or contains spaces). "
+                           "Edit the link and try again.")
+                .arg(entered));
     }
 
     // [BUILD 340] Native link form (L/V1) for level >= 2 peers — no
     // file wrapper, no save dialog at the far end, typically ONE data
     // chunk. Level-1 peers get the legacy link.txt file transfer.
     // Unknown capability parks on the same auto-query state machine.
-    sendWebLink(url.toString(QUrl::FullyEncoded), peer);
+    sendWebLink(entered, peer);
 }
 
 // [BUILD 338] Transfer pipeline from a file path onward — everything
@@ -6457,8 +6467,11 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
     qCWarning(chunkedarq_js8)
         << "[FT-TX] peer capability unknown — auto-querying" << peer
         << "gen=" << gen;
-    statusBar()->showMessage(
-        tr("Checking %1's ARQ capabilities…").arg(peer), 20000);
+    // [BUILD 341 capTimeout] Window scales with the active submode
+    // (flat 20 s starved every speed but Subspace). No status-line
+    // message — not an established UI pattern here (Andy 2026-07-17);
+    // the negotiation is visible in the box lock + the query TX.
+    int const capMs = ChunkedArq::capQueryTimeoutMsForSubmode(m_nSubMode);
     // Standard auto-reply enqueue path — NOT the ARQ direct-TX hook,
     // which rode leftover TX-button state and got killed by its
     // completion logic 120 ms after parking (observed 2026-07-17).
@@ -6466,7 +6479,7 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
                    QStringLiteral("%1 QUERY ARQ?").arg(peer), -1,
                    nullptr);
     QPointer<UI_Constructor> const self(this);
-    QTimer::singleShot(20000, this, [self, gen]() {
+    QTimer::singleShot(capMs, this, [self, gen]() {
         if (self) self->onCapQueryTimeout(gen);
     });
 }
@@ -6525,13 +6538,14 @@ void UI_Constructor::sendWebLink(QString const &url,
     qCWarning(chunkedarq_js8)
         << "[LT-TX] peer capability unknown — auto-querying" << peer
         << "gen=" << gen;
-    statusBar()->showMessage(
-        tr("Checking %1's ARQ capabilities…").arg(peer), 20000);
+    // [BUILD 341 capTimeout] Same submode-scaled window as the file
+    // path above; no status-line message (see there).
+    int const capMs = ChunkedArq::capQueryTimeoutMsForSubmode(m_nSubMode);
     enqueueMessage(PriorityHigh,
                    QStringLiteral("%1 QUERY ARQ?").arg(peer), -1,
                    nullptr);
     QPointer<UI_Constructor> const self(this);
-    QTimer::singleShot(20000, this, [self, gen]() {
+    QTimer::singleShot(capMs, this, [self, gen]() {
         if (self) self->onCapQueryTimeout(gen);
     });
 }
@@ -6545,16 +6559,25 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
         return;
     if (m_capQueryRetries < 1) {
         ++m_capQueryRetries;
+        // [BUILD 341 capTimeout] Bump the generation on retry so the
+        // ORIGINAL window's timer (which may still be live — the
+        // missing-digits YES capture can fire this path early) goes
+        // stale instead of double-firing into a premature V1
+        // fallback. The re-armed timer carries the new generation.
+        int const newGen = ++m_capQueryGen;
         qCWarning(chunkedarq_js8)
             << "[FT-TX] capability query retry for"
-            << m_pendingFilePeer << "gen=" << gen;
+            << m_pendingFilePeer << "gen=" << gen
+            << "→" << newGen;
         enqueueMessage(PriorityHigh,
                        QStringLiteral("%1 QUERY ARQ?")
                            .arg(m_pendingFilePeer), -1,
                        nullptr);
+        int const capMs =
+            ChunkedArq::capQueryTimeoutMsForSubmode(m_nSubMode);
         QPointer<UI_Constructor> const self(this);
-        QTimer::singleShot(20000, this, [self, gen]() {
-            if (self) self->onCapQueryTimeout(gen);
+        QTimer::singleShot(capMs, this, [self, newGen]() {
+            if (self) self->onCapQueryTimeout(newGen);
         });
         return;
     }
@@ -6568,9 +6591,6 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
     qCWarning(chunkedarq_js8)
         << "[FT-TX] no capability reply from" << pr
         << "— proceeding with V1 (not cached; silence may be QRM)";
-    statusBar()->showMessage(
-        tr("No capability reply from %1 — using standard format")
-            .arg(pr), 5000);
     if (!link.isEmpty()) {
         // Legacy link.txt fallback for the parked link.
         QString const linkPath = QDir::cleanPath(
@@ -8007,123 +8027,49 @@ static void setDisabledIfChanged(QWidget *w, bool disabled) {
 // stops predicting actual behavior.
 UI_Constructor::ArqGateState
 UI_Constructor::evaluateArqGateForText(QString const &text) const {
-    QString arqPeer = const_cast<UI_Constructor *>(this)
-                          ->callsignSelected().trimmed();
-    if (arqPeer.isEmpty()) {
-        QString const myCall = m_config.my_callsign().trimmed().toUpper();
-        QString probe = text.toUpper().trimmed();
-        if (!myCall.isEmpty() && probe.startsWith(myCall + ":")) {
-            probe = probe.mid(myCall.length() + 1).trimmed();
-        }
-        static QRegularExpression const leadingCallRe(
-            QStringLiteral(R"(^\s*(@?[A-Z0-9/]+))"));
-        auto const m = leadingCallRe.match(probe);
-        if (m.hasMatch()) {
-            arqPeer = m.captured(1);
-        }
-    }
-    bool const arqHasPeer = !arqPeer.isEmpty() &&
-                            !arqPeer.startsWith('@') &&
-                            Radio::is_callsign(arqPeer);
-    bool const arqHasText = !text.trimmed().isEmpty();
-    if (!arqHasPeer) {
-        return ArqGateState::NotArmed_NoPeer;
-    }
-    // [BUILD 287] Empty outgoing box + valid peer = Armed. Earlier
-    // builds (272+) required non-empty text here too, which broke
-    // "select a call sign and the ARQ button immediately reflects
-    // readiness." Empty text is the legitimate starting state for a
-    // file send (operator picks a peer, then clicks the chevron's
-    // Send file… action — the file body never goes through the
-    // outgoing widget) and for any operator who selects a peer
-    // BEFORE composing. The downstream directed-cmd check only
-    // applies when there's actual text to inspect.
-    if (!arqHasText) {
-        return ArqGateState::Armed;
+    // [BUILD 341 policyGate] Thin wrapper: classification is the
+    // PURE function ChunkedArq::classifyOutgoingText (one
+    // normalization pipeline + policy tables encoding the TODO #105
+    // chart; offline test matrix in scratchpad/arqgate_test.cpp).
+    // This wrapper only adds peer resolution for the Armed / NoPeer
+    // distinction. Classification outranks peer state: a command is
+    // a command whether or not a callsign is selected.
+    switch (ChunkedArq::classifyOutgoingText(text)) {
+    case ChunkedArq::TextClass::DirectedCommand:
+        return ArqGateState::NotArmed_DirectedCmd;
+    case ChunkedArq::TextClass::ArqExempt:
+    case ChunkedArq::TextClass::FreeText:
+        break;
     }
 
-    QString const myCallUp = m_config.my_callsign().trimmed().toUpper();
-    QString probe = text.trimmed();
-    if (!myCallUp.isEmpty() &&
-        probe.toUpper().startsWith(myCallUp + ":")) {
-        probe = probe.mid(myCallUp.length() + 1).trimmed();
-    }
-    QString dirTo, dirCmd, dirNum;
-    bool dirToCompound = false;
-    int dirN = 0;
-    QString dirFrame = Varicode::packDirectedMessage(
-        probe, myCallUp, &dirTo, &dirToCompound, &dirCmd, &dirNum, &dirN);
-    if (dirFrame.isEmpty()) {
-        QString const triedProbeWithPeer =
-            arqPeer + QStringLiteral(" ") + probe;
-        dirFrame = Varicode::packDirectedMessage(
-            triedProbeWithPeer, myCallUp, &dirTo, &dirToCompound,
-            &dirCmd, &dirNum, &dirN);
-    }
-    QString const cmdTrimmed = dirCmd.trimmed();
-    bool const isFreetextCmd = cmdTrimmed.isEmpty();
-    bool const isMsgCmd =
-        (cmdTrimmed.compare(QStringLiteral("MSG"),
-                            Qt::CaseInsensitive) == 0) ||
-        (cmdTrimmed.compare(QStringLiteral("MSG TO:"),
-                            Qt::CaseInsensitive) == 0);
-    bool const isRelayCmd = (cmdTrimmed == QStringLiteral(">"));
-    bool arqBodyIsDirectedCmd =
-        !dirFrame.isEmpty() && !isFreetextCmd &&
-        !isMsgCmd && !isRelayCmd;
+    // [BUILD 341 sendPeer] Effective peer = the peer the FINAL
+    // message will address at TX time, resolved by THE shared rule
+    // ChunkedArq::effectivePeer (selected individual wins; @group /
+    // invalid selection defers to the text's own addressee). The
+    // startTx ARQ intercept and resolveArqFilePeer call the SAME
+    // function — this gate must predict exactly what Send will do.
+    QString const selected = const_cast<UI_Constructor *>(this)
+                                 ->callsignSelected();
+    return ChunkedArq::effectivePeer(selected, text).isEmpty()
+               ? ArqGateState::NotArmed_NoPeer
+               : ArqGateState::Armed;
+}
 
-    // [BUILD 337 TODO #93 / #75(b)] packDirectedMessage classifies by
-    // the LEADING token, so a free-text body that merely starts with
-    // a word spelling a command ("NO PROBLEM SEE YOU LATER", "73 AND
-    // GOOD LUCK", "SNR WAS GREAT") got mislabeled as a directed
-    // command and refused ARQ. A body is a REAL directed command only
-    // if it reduces to the bare token (± its numeric arg) — anything
-    // with trailing free text arms ARQ normally.
-    if (arqBodyIsDirectedCmd) {
-        QString remainder = probe.toUpper().trimmed();
-        auto stripLeading = [&remainder](QString const &tok) {
-            if (tok.isEmpty()) return;
-            if (remainder == tok) {
-                remainder.clear();
-            } else if (remainder.startsWith(tok + QStringLiteral(" "))) {
-                remainder = remainder.mid(tok.length() + 1).trimmed();
-            }
-        };
-        stripLeading(dirTo.trimmed().toUpper());   // addressee, if present
-        stripLeading(cmdTrimmed.toUpper());        // the command token
-        stripLeading(dirNum.trimmed().toUpper());  // optional numeric arg
-        // The typed arg may differ from the normalized dirNum
-        // ("+10" vs "10") — a lone signed number left over still
-        // belongs to the command, not to free text.
-        if (!remainder.isEmpty() && !dirNum.trimmed().isEmpty()) {
-            static QRegularExpression const kLeadingSignedNumRe{
-                QStringLiteral(R"(^[+-]?\d+\s*)")};
-            if (auto const nm = kLeadingSignedNumRe.match(remainder);
-                nm.hasMatch()) {
-                remainder = remainder.mid(nm.capturedLength()).trimmed();
-            }
-        }
-        if (!remainder.isEmpty()) {
-            arqBodyIsDirectedCmd = false; // trailing free text → ARQ ok
-        }
+// [BUILD 341] See header. Single source of truth: the ARQ gate's
+// own classification decides menu auto-send.
+void UI_Constructor::autoSendIfDirectedCmd() {
+    QString const text =
+        ui->extFreeTextMsgEdit->toPlainText().trimmed();
+    if (text.isEmpty()) {
+        return;
     }
-
-    // TYPING macro — not in directed_cmds so packDirectedMessage can't
-    // catch it, but must not arm ARQ.
-    if (!arqBodyIsDirectedCmd) {
-        QString const upperProbe = probe.toUpper();
-        QString bodyAfterPeer = upperProbe;
-        QString const peerPrefix = arqPeer.toUpper() + QStringLiteral(" ");
-        if (upperProbe.startsWith(peerPrefix)) {
-            bodyAfterPeer = upperProbe.mid(peerPrefix.length()).trimmed();
-        }
-        if (bodyAfterPeer.startsWith(QStringLiteral("TYPING"))) {
-            arqBodyIsDirectedCmd = true;
-        }
+    if (evaluateArqGateForText(text) ==
+        ArqGateState::NotArmed_DirectedCmd) {
+        qCDebug(mainwindow_js8)
+            << "[DIRECTED-MENU] auto-sending directed command:"
+            << text.left(40);
+        toggleTx(true);
     }
-
-    return arqBodyIsDirectedCmd ? ArqGateState::NotArmed_DirectedCmd
-                                : ArqGateState::Armed;
 }
 
 void UI_Constructor::updateButtonDisplay() {
@@ -8184,6 +8130,30 @@ void UI_Constructor::updateButtonDisplay() {
             (gate == ArqGateState::Armed ||
              gate == ArqGateState::NotArmed_NoPeer);
         m_sendArqAction->setEnabled(canSendArq);
+        // [BUILD 341] Live ARQ-validity indicator (Andy 2026-07-17,
+        // testing aid): chevron RED when the box text classifies as
+        // a directed command (ARQ would refuse it), black otherwise.
+        // Stylesheet swapped only on state transitions.
+        if (m_sendMenuButton) {
+            bool const red =
+                hasText && gate == ArqGateState::NotArmed_DirectedCmd;
+            if (red != m_sendChevronRed) {
+                m_sendChevronRed = red;
+                m_sendMenuButton->setStyleSheet(
+                    red ? QStringLiteral(
+                              "QToolButton { border: none; "
+                              "  background: transparent; "
+                              "  color: #cc0000; } "
+                              "QToolButton::menu-indicator "
+                              "{ image: none; }")
+                        : QStringLiteral(
+                              "QToolButton { border: none; "
+                              "  background: transparent; "
+                              "  color: #222; } "
+                              "QToolButton::menu-indicator "
+                              "{ image: none; }"));
+            }
+        }
     }
     {
         // TYPING enabled if: Subspace mode, not transmitting, and either
@@ -8584,14 +8554,32 @@ void UI_Constructor::selectCallsign(QString call, int submode) {
         }
     }
 
-    auto placeholderText =
-        QString("Type your outgoing directed message to %1 here.")
-            .arg(call).toUpper();
-    ui->extFreeTextMsgEdit->setPlaceholderText(placeholderText);
+    refreshOutgoingPlaceholder();
 
     updateButtonDisplay();
     updateTextDisplay();
     statusChanged();
+}
+
+// [BUILD 341 arqPrompt] See header. Single writer so the ARQ-lock
+// banner, the directed prompt, and the generic prompt can't fight:
+// lock state wins; otherwise the prompt tracks the selection.
+void UI_Constructor::refreshOutgoingPlaceholder() {
+    if (!ui->extFreeTextMsgEdit) return;
+    QString text;
+    if (m_arqBoxLocked) {
+        text = QStringLiteral("MULTI-PART MSG IN PROGRESS...");
+    } else if (QString const call = callsignSelected().trimmed();
+               !call.isEmpty()) {
+        text = QString("Type your outgoing directed message to %1 here.")
+                   .arg(call).toUpper();
+    } else {
+        text = QString("Type your outgoing messages here.\n"
+                       "Type partial call sign to search list.").toUpper();
+    }
+    if (ui->extFreeTextMsgEdit->placeholderText() != text) {
+        ui->extFreeTextMsgEdit->setPlaceholderText(text);
+    }
 }
 
 void UI_Constructor::clearSelection() {
@@ -8629,8 +8617,7 @@ void UI_Constructor::clearSelection() {
         }
     }
 
-    ui->extFreeTextMsgEdit->setPlaceholderText(
-        QString("Type your outgoing messages here.\nType partial call sign to search list.").toUpper());
+    refreshOutgoingPlaceholder();
 
     updateButtonDisplay();
     updateTextDisplay();

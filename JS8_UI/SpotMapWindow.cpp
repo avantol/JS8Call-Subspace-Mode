@@ -604,7 +604,11 @@ void SpotMapWindow::redraw() {
 
     if (spots.isEmpty()) {
         p.setPen(QColor(150, 150, 170));
-        p.drawText(QRectF{0, center.y() - 30, static_cast<qreal>(w), 60},
+        // One line height below center — dead-center overlapped the
+        // own-station marker graphic.
+        qreal const drop = p.fontMetrics().height();
+        p.drawText(QRectF{0, center.y() - 30 + drop,
+                          static_cast<qreal>(w), 60},
                    Qt::AlignCenter, tr("No new spots yet"));
     }
 
@@ -696,7 +700,10 @@ void SpotMapWindow::mouseDoubleClickEvent(QMouseEvent *event) {
         if (ScreenSpot const *best = hitTest(event->position())) {
             if (best->spot.freqHz > 0 && m_dialHz > 0) {
                 qint64 const audio = best->spot.freqHz - m_dialHz;
-                if (audio > 1000 && audio < 6000) {
+                // QSY window: above 1000 Hz (HB sub-band convention)
+                // and at most 2500 Hz (Andy 2026-07-17 — stay inside
+                // the usable passband).
+                if (audio > 1000 && audio <= 2500) {
                     showToast(tr("Moved to %1's frequency (%2 Hz)")
                                   .arg(best->spot.receiverCall)
                                   .arg(audio));

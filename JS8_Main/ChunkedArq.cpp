@@ -7,6 +7,8 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QRegularExpression>
+
+#include "Radio.h"
 #include <QRegularExpressionMatch>
 #include <QSettings>
 
@@ -1043,6 +1045,141 @@ SendState &Manager::getOrCreateSend(QString const &peer) {
 
 RxState &Manager::getOrCreateRx(QString const &peer) {
     return m_recv[peer];
+}
+
+
+// [BUILD 341 policyGate] See header. ONE normalization pipeline, then
+// policy tables. History: eligibility used to ride packDirectedMessage
+// plus per-specimen regex patches — two classifiers that could never
+// agree (case, unpackable arg shapes, pack-failure fallthrough,
+// FROM-prefix paste-backs). Nine dev builds of whack-a-mole
+// (2026-07-17) until this rewrite; do not reintroduce packing here.
+QString leadingPeerOf(QString const &boxText) {
+    QString u = boxText.trimmed().toUpper().simplified();
+    static QRegularExpression const kFromPrefixRe(
+        QStringLiteral(R"(^[A-Z0-9/]+: )"));
+    if (auto const m = kFromPrefixRe.match(u); m.hasMatch()) {
+        u = u.mid(m.capturedLength()).trimmed();
+    }
+    int const sp = u.indexOf(QLatin1Char(' '));
+    QString const tok0 = sp > 0 ? u.left(sp) : u;
+    if (!tok0.startsWith(QLatin1Char('@')) && Radio::is_callsign(tok0)) {
+        return tok0;
+    }
+    return QString();
+}
+
+QString effectivePeer(QString const &selected, QString const &boxText) {
+    QString const sel = selected.trimmed().toUpper();
+    if (!sel.isEmpty() && !sel.startsWith(QLatin1Char('@')) &&
+        Radio::is_callsign(sel)) {
+        return sel;
+    }
+    return leadingPeerOf(boxText);
+}
+
+TextClass classifyOutgoingText(QString const &boxText) {
+    // 0. The exact TX wire transform: uppercase, whitespace collapse.
+    QString u = boxText.trimmed().toUpper().simplified();
+    if (u.isEmpty()) {
+        return TextClass::FreeText;
+    }
+    // 1. Pasted display FROM-prefix ("WM8Q: …").
+    static QRegularExpression const kFromPrefixRe(
+        QStringLiteral(R"(^[A-Z0-9/]+: )"));
+    if (auto const m = kFromPrefixRe.match(u); m.hasMatch()) {
+        u = u.mid(m.capturedLength()).trimmed();
+    }
+    // 2. ONE addressee token (@group or callsign). A GROUP addressee
+    //    refuses ARQ outright, any body (Andy 2026-07-17: "no ARQ
+    //    message can go to a group") — the protocol needs exactly ONE
+    //    station to ACK. This subsumes the earlier @group-QUERY rule.
+    {
+        int const sp = u.indexOf(QLatin1Char(' '));
+        QString const tok0 = sp > 0 ? u.left(sp) : u;
+        if (tok0.startsWith(QLatin1Char('@'))) {
+            return TextClass::DirectedCommand;
+        }
+        if (Radio::is_callsign(tok0)) {
+            u = sp > 0 ? u.mid(sp + 1).trimmed() : QString();
+        }
+    }
+    if (u.isEmpty()) {
+        return TextClass::FreeText; // bare addressee = composing state
+    }
+
+    // 3. Policy tables (longest token first within each set).
+    static QStringList const kArqExempt = {
+        QStringLiteral("MSG TO:"), QStringLiteral("MSG"),
+        QStringLiteral(">")};
+    static QStringList const kCmdAlways = {
+        QStringLiteral("QUERY MSGS?"), QStringLiteral("QUERY MSGS"),
+        QStringLiteral("QUERY CALL"),  QStringLiteral("QUERY"),
+        QStringLiteral("HEARTBEAT SNR"), QStringLiteral("HEARTBEAT"),
+        QStringLiteral("HB"), QStringLiteral("HAIL"),
+        QStringLiteral("CQ"), QStringLiteral("ACK"),
+        QStringLiteral("NACK"), QStringLiteral("CMD"),
+        QStringLiteral("INFO"), QStringLiteral("GRID"),
+        QStringLiteral("STATUS"), QStringLiteral("HEARING"),
+        QStringLiteral("AVHAIL?"), QStringLiteral("TYPING")};
+    static QStringList const kCmdIfBare = {
+        QStringLiteral("HW CPY?"), QStringLiteral("DIT DIT"),
+        QStringLiteral("SNR?"), QStringLiteral("INFO?"),
+        QStringLiteral("GRID?"), QStringLiteral("STATUS?"),
+        QStringLiteral("HEARING?"), QStringLiteral("AGN?"),
+        QStringLiteral("QSL?"), QStringLiteral("QSL"),
+        QStringLiteral("YES"), QStringLiteral("NO"),
+        QStringLiteral("RR"), QStringLiteral("FB"),
+        QStringLiteral("73"), QStringLiteral("SK"),
+        QStringLiteral("SNR"), QStringLiteral("?")};
+
+    auto matchTok = [&u](QString const &tok, QString *rest) {
+        if (u == tok) {
+            rest->clear();
+            return true;
+        }
+        if (u.startsWith(tok + QStringLiteral(" "))) {
+            *rest = u.mid(tok.length() + 1).trimmed();
+            return true;
+        }
+        // Colon-terminated tokens ("MSG TO:K1ABC…") and the relay
+        // marker (">K1ABC…") glue their argument on with no space.
+        if ((tok.endsWith(QLatin1Char(':')) ||
+             tok == QStringLiteral(">")) &&
+            u.startsWith(tok)) {
+            *rest = u.mid(tok.length()).trimmed();
+            return true;
+        }
+        return false;
+    };
+
+    QString rest;
+    for (QString const &t : kArqExempt) {
+        if (matchTok(t, &rest)) {
+            return TextClass::ArqExempt;
+        }
+    }
+    for (QString const &t : kCmdAlways) {
+        if (matchTok(t, &rest)) {
+            return TextClass::DirectedCommand;
+        }
+    }
+    for (QString const &t : kCmdIfBare) {
+        if (matchTok(t, &rest)) {
+            if (rest.isEmpty()) {
+                return TextClass::DirectedCommand;
+            }
+            if (t == QStringLiteral("SNR")) {
+                static QRegularExpression const kSignedNumRe(
+                    QStringLiteral(R"(^[+-]?\d+$)"));
+                if (kSignedNumRe.match(rest).hasMatch()) {
+                    return TextClass::DirectedCommand;
+                }
+            }
+            break; // conversational token + trailing text (#93)
+        }
+    }
+    return TextClass::FreeText;
 }
 
 }  // namespace ChunkedArq

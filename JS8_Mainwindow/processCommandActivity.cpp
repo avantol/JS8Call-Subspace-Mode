@@ -492,6 +492,29 @@ void UI_Constructor::processCommandActivity() {
         QString reply;
         int priority = PriorityNormal;
         int freq = -1;
+        // [BUILD 341 arqReplyAck] Set by ARQ-protocol replies
+        // (currently: QUERY ARQ? capability reply). These are protocol
+        // obligations dispatched EXACTLY like ACK / NACK, not courtesy
+        // autoreplies:
+        //   (a) transmit at the CALLER's speed (same stash/restore
+        //       machinery as chunked-DATA ACKs, TODO #73 — applied at
+        //       the dispatch site below, after every reply-drop gate,
+        //       so a dropped reply can never strand us in the caller's
+        //       mode), and
+        //   (b) dispatch via onChunkedWantsResponseTx — the SAME slot
+        //       Manager::sendAck feeds — which saves the operator's
+        //       outgoing-box draft, TXes directly (no autoreply queue,
+        //       no PriorityHigh gate, no confirmation dialog), and
+        //       restores the draft at TX drain (stopTx, TODO #57).
+        //       Operator-observed 2026-07-17, twice: autoreply off
+        //       parked the YES in the box; then the queued path
+        //       clobbered a live draft the ACK path would have saved.
+        //   (c) The relay-'>' exception on the draft / open-buffer
+        //       defer gates (the save/restore handles drafts now).
+        //   Directed queries only — @ALLCALL probes stay behind the
+        //   autoreply gate (band-wide auto-keying stays opt-in, same
+        //   consent posture as AVHAIL?).
+        bool arqProtocolReply = false;
 
         // [BUILD 331-avHail2] Hidden AVHAIL? remote-trigger command.
         // When a peer addresses us with an EXACT "AVHAIL?" body,
@@ -632,6 +655,29 @@ void UI_Constructor::processCommandActivity() {
                             }
                         });
                 }
+            } else if ((!m_pendingFilePath.isEmpty() ||
+                        !m_pendingLinkUrl.isEmpty()) &&
+                       d.from.compare(m_pendingFilePeer,
+                                      Qt::CaseInsensitive) == 0 &&
+                       !d.text.toUpper().simplified()
+                            .startsWith(QStringLiteral("MSG"))) {
+                // [BUILD 341 capRetry] A YES from the very peer we're
+                // querying, but the level digits didn't survive (the
+                // reply's second frame lost — operator-observed
+                // "YES <missing frame>" 2026-07-17). The peer IS
+                // answering; only the level is missing. Fire the
+                // timeout logic NOW instead of waiting out the full
+                // window — it re-queries once (with a fresh
+                // generation + full window) or, if the retry is
+                // already spent, falls back to V1 (safe for any
+                // ARQ-capable peer). The "MSG" exclusion keeps a
+                // concurrent "YES MSG ID n" (QUERY MSGS reply) from
+                // burning the retry.
+                qWarning() << "[FT-TX] YES from" << d.from
+                           << "without level digits (text="
+                           << d.text.left(20)
+                           << ") — immediate re-query";
+                onCapQueryTimeout(m_capQueryGen);
             }
         }
 
@@ -1348,6 +1394,10 @@ void UI_Constructor::processCommandActivity() {
                 reply = QString("%1 YES %2")
                             .arg(replyPath)
                             .arg(ChunkedArq::ARQ_PROTOCOL_LEVEL);
+                // [BUILD 341 arqReplyAck] Dispatched like an ACK —
+                // caller's speed, draft save/restore, direct TX; see
+                // the arqProtocolReply declaration.
+                arqProtocolReply = true;
             }
         }
 
@@ -1521,13 +1571,15 @@ void UI_Constructor::processCommandActivity() {
 #endif
 
         // do not queue for reply if there's text in the window
-        // (exception: relay ">" — the forward is an obligation
-        //  initiated by a remote station, not an autoreply that should
-        //  defer to the local operator's typing. Queue it; the TX
-        //  queue will serialise it after whatever else is pending.)
+        // (exception: relay ">" and ARQ-protocol replies — both are
+        //  obligations initiated by a remote station, not autoreplies
+        //  that should defer to the local operator's typing. Queue it;
+        //  the TX queue will serialise it after whatever else is
+        //  pending.)
         bool const isRelayForward = (d.cmd == QStringLiteral(">"));
+        bool const isRemoteObligation = isRelayForward || arqProtocolReply;
         if (!ui->extFreeTextMsgEdit->toPlainText().isEmpty() &&
-            !isRelayForward) {
+            !isRemoteObligation) {
             continue;
         }
 
@@ -1535,7 +1587,7 @@ void UI_Constructor::processCommandActivity() {
         // (same exception as above)
         int bufferOffset = 0;
         if (hasExistingMessageBufferToMe(&bufferOffset) &&
-            !isRelayForward) {
+            !isRemoteObligation) {
             qCDebug(mainwindow_js8) << "skipping reply due to open buffer"
                                     << bufferOffset << m_messageBuffer.count();
             continue;
@@ -1552,11 +1604,57 @@ void UI_Constructor::processCommandActivity() {
             m_txAllcallCommandCache.insert(d.from, new QDateTime(now), 25);
         }
 
+        // [BUILD 341 arqSpeed] Reply-at-caller's-speed, applied only
+        // once every reply-drop gate above has passed. SAME machinery
+        // as the chunked-DATA ACK auto-match (TODO #73 / Build 316,
+        // ~line 260): stash the operator's mode once, switch to the
+        // caller's; stopTx restores the stash 750 ms after the reply
+        // transmits. The frame encodes at TX time from m_nSubMode, so
+        // switching here (enqueue) is early enough; processTxQueue
+        // dequeues on a later tick.
+        if (arqProtocolReply && d.submode != m_nSubMode) {
+            if (m_arqPreSwitchSubmode == -1) {
+                m_arqPreSwitchSubmode = m_nSubMode;
+                qWarning() << "[ARQ-RX] stashed pre-switch submode="
+                           << m_arqPreSwitchSubmode
+                           << "for post-reply restore (QUERY ARQ?)";
+            }
+            qWarning() << "[ARQ-RX] caller-speed reply: was="
+                       << m_nSubMode << "→ now=" << d.submode
+                       << "(peer=" << d.from << ")";
+            setSubmode(d.submode);
+        }
+
         // queue the reply here to be sent when a free interval is available on
         // the frequency that was sent unless, this is an allcall, to which we
         // should be responding on a clear frequency offset we always want to
         // make sure that the directed cache has been updated at this point so
         // we have the most information available to make a frequency selection.
+        // [BUILD 341 arqReplyAck] ARQ-protocol replies bypass the
+        // autoreply queue ENTIRELY and dispatch through the exact
+        // ACK / NACK path: onChunkedWantsResponseTx saves the
+        // operator's outgoing-box draft, TXes the wire text directly,
+        // and stopTx restores the draft (TODO #57) and the submode
+        // stash (TODO #73) once the response drains. Same 250 ms
+        // audio-ramp delay as Manager::sendAck / sendNack. No
+        // PriorityHigh gate, no confirmation dialog, no draft
+        // deferral — a capability negotiation on the other end times
+        // out in 20 s.
+        if (arqProtocolReply) {
+            QString const responseText = reply;
+            QPointer<UI_Constructor> const self(this);
+            QTimer::singleShot(
+                ChunkedArq::ACK_TX_DELAY_MS, this,
+                [self, responseText]() {
+                    if (!self) return;
+                    qCWarning(chunkedarq_js8)
+                        << "[ARQ-RX] protocol reply via ACK path:"
+                        << responseText;
+                    self->onChunkedWantsResponseTx(responseText);
+                });
+            continue;
+        }
+
         if (m_config.autoreply_confirmation()) {
             confirmThenEnqueueMessage(90, priority, reply, freq, callback);
         } else {

@@ -713,7 +713,10 @@ class UI_Constructor : public QMainWindow {
     // NOTE: plain private members, NOT in a slots section — moc
     // cannot parse an enum declaration there.
     enum class GreetingSeedResult { Seeded, DraftBlocked, InvalidCall };
-    GreetingSeedResult trySeedOutgoingGreeting(QString const &call);
+    // force=true overwrites ANY draft in the outgoing box (waterfall
+    // label dbl-click, Andy 2026-07-17); the ARQ box lock still wins.
+    GreetingSeedResult trySeedOutgoingGreeting(QString const &call,
+                                               bool force = false);
     // [BUILD 338] Shared by "Send file…" and "Send web link (URL)…":
     // pre-flight peer resolution (dialogs shown inside; empty return
     // = abort) and the transfer pipeline from a file path onward.
@@ -752,6 +755,20 @@ class UI_Constructor : public QMainWindow {
                                      QString const &peer,
                                      int peerLevel);
     void sendWebLink(QString const &url, QString const &peer);
+    // [BUILD 341] Directed-menu auto-send qualifier: after a menu
+    // item populates the outgoing box, transmit IMMEDIATELY iff the
+    // text classifies as a directed command — the same class the ARQ
+    // gate excludes (bare token ± arg). Rationale (Andy 2026-07-17):
+    // the explicit-Send requirement exists so the operator can choose
+    // plain vs ARQ; for directed commands ARQ is not an option, so
+    // waiting is pure friction. Free text, templates with unedited
+    // placeholders, and custom reply text still populate-only.
+    void autoSendIfDirectedCmd();
+    // [BUILD 341] Send-chevron ARQ-validity indicator state (red =
+    // current box text refuses ARQ). Cached so the stylesheet is
+    // swapped only on TRANSITIONS — Build 309 proved per-frame
+    // styling on this button lags.
+    bool m_sendChevronRed{false};
     void dispatchArqBody(QString const &body, QString const &peer,
                          int peerLevel);
     // [BUILD 336 TODO #97] Wall-clock ms of the last accepted AVHAIL?
@@ -1018,6 +1035,12 @@ class UI_Constructor : public QMainWindow {
     // buttons are disabled during TX so the operator can't race a
     // manual mode change in. -1 = no stash pending.
     int     m_arqPreSwitchSubmode{-1};
+    // [BUILD 341 arqPrompt] True while the guiUpdate session lock
+    // holds the outgoing box read-only for an ARQ operation (active
+    // TX session or parked capability negotiation). Drives
+    // refreshOutgoingPlaceholder(): "MULTI-PART MSG IN PROGRESS..."
+    // while locked, the standard selection-aware prompt otherwise.
+    bool    m_arqBoxLocked{false};
     // [TODO.md #58 build 268] Multi-mode RX runtime override.
     // Set true (set-once / sticky for the program run) when the ARQ
     // button is toggled on OR when the first inbound ARQ chunk is
@@ -1324,6 +1347,11 @@ class UI_Constructor : public QMainWindow {
     void displayTransmit();
     void updateModeButtonText();
     void updateButtonDisplay();
+    // [BUILD 341 arqPrompt] ONE writer for the outgoing box's
+    // placeholder: ARQ-locked banner > directed-to-<call> prompt >
+    // generic prompt. Callers: the guiUpdate ARQ lock transitions,
+    // selectCallsign(), clearSelection().
+    void refreshOutgoingPlaceholder();
     // [TODO.md #67 build 272] Tri-state for the ARQ button's live
     // armed/not-armed visual, mirroring the full TX-time gate logic
     // at on_startTxButton_clicked (mainwindow.cpp ~3485-3629).
