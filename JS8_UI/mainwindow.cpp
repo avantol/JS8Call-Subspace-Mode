@@ -4152,6 +4152,24 @@ void UI_Constructor::stopTx() {
             QPointer<UI_Constructor> const self(this);
             QTimer::singleShot(750, this, [self, stashedMode]() {
                 if (!self) return;
+                // [BUILD 341.2 restoreRetry] A NEW TX can start inside
+                // this 750 ms window (remote log 2026-07-16 21:37:52:
+                // relay forward began right after the ACK drained) —
+                // setSubmode would be BLOCKED and the one-shot stash
+                // lost, leaving the station PERMANENTLY at the
+                // caller's speed. If TX is active, RE-STASH instead:
+                // the blocking TX's own stopTx drain re-schedules
+                // this restore — guaranteed retry, existing machinery.
+                if (self->m_transmitting || self->m_txFrameCount > 0 ||
+                    !self->m_txFrameQueue.isEmpty()) {
+                    if (self->m_arqPreSwitchSubmode == -1) {
+                        self->m_arqPreSwitchSubmode = stashedMode;
+                    }
+                    qCWarning(chunkedarq_js8)
+                        << "[ARQ-RX] submode restore deferred again "
+                           "(TX active); re-stashed" << stashedMode;
+                    return;
+                }
                 qCWarning(chunkedarq_js8)
                     << "[ARQ-RX] submode restore (deferred 750ms): from="
                     << self->m_nSubMode << "to=" << stashedMode;
@@ -6170,11 +6188,25 @@ void UI_Constructor::restoreVisibleHailSubmodeIfPending() {
     m_visibleHailRestoreSubmode = -1;
     qWarning() << "[FT2-TX] Visible Hail: restoring original submode"
                << restoreTo;
+    // [BUILD 341.2 restoreRetry] Same one-shot-loss trap as the ARQ
+    // submode restore: if a TX is active when the deferred setSubmode
+    // fires, it's BLOCKED and the mode is stuck. Self-re-arming timer
+    // retries until the TX machinery is quiet (every TX ends, so this
+    // converges).
     QPointer<UI_Constructor> const self(this);
-    QTimer::singleShot(500, this, [self, restoreTo]() {
+    auto const retry = std::make_shared<std::function<void()>>();
+    *retry = [self, restoreTo, retry]() {
         if (!self) return;
+        if (self->m_transmitting || self->m_txFrameCount > 0 ||
+            !self->m_txFrameQueue.isEmpty()) {
+            qWarning() << "[FT2-TX] Visible Hail: submode restore "
+                          "deferred again (TX active)";
+            QTimer::singleShot(500, self, *retry);
+            return;
+        }
         self->setSubmode(restoreTo);
-    });
+    };
+    QTimer::singleShot(500, this, *retry);
 }
 
 // [BUILD 336] Click-to-call seed. Overwritable box states: empty, a
@@ -6390,6 +6422,15 @@ QString UI_Constructor::resolveArqFilePeer() {
                            "single station to ACK."));
         return {};
     }
+    // [BUILD 341.1 clearBox] Peer is resolved — the box text (often
+    // just the callsign) has served its purpose. CLEAR IT NOW, before
+    // any file/URL dialog (Andy 2026-07-18). Leftover text deadlocked
+    // the transfer: the parked negotiation's capLock made the box
+    // read-only WITH the text still in it, processTxQueue refuses to
+    // dequeue the QUERY while the box is non-empty, the ARQ manager's
+    // txIdleCheck never reports idle — and the operator couldn't
+    // delete the text (read-only), leaving Halt as the only exit.
+    ui->extFreeTextMsgEdit->clear();
     return peer;
 }
 
