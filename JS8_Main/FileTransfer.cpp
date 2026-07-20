@@ -16,6 +16,7 @@
 #include <QUrl>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStandardPaths>
 #include <QLoggingCategory>
 
 Q_LOGGING_CATEGORY(filetransfer_js8, "filetransfer.js8", QtWarningMsg)
@@ -88,6 +89,12 @@ QByteArray base32Decode(QString const &text) {
         }
     }
     return out;
+}
+
+QString receiveDirectory() {
+    return QDir::cleanPath(
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
+        + QStringLiteral("/Subspace-FileTransfer"));
 }
 
 QString headerToJson(FileHeader const &h) {
@@ -355,20 +362,26 @@ bool splitWireBody(QString const &body,
 // with a binary header. See PREFIX_V2 commentary in the header.
 // ------------------------------------------------------------------
 
-QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader) {
+// [TODO #107 V3] Shared envelope builder — the single compression
+// envelope (binary header ‖ payload) used by BOTH V2 (base32-wrapped
+// for the text wire) and V3 (raw bytes on native frames). One
+// implementation so the formats cannot drift.
+static QByteArray buildEnvelopeFromFile(QString const &filePath,
+                                        FileHeader &outHeader,
+                                        char const *tag) {
     QFile f(filePath);
     if (!f.open(QIODevice::ReadOnly)) {
         qCWarning(filetransfer_js8)
-            << "[FT] buildSendBodyV2: cannot open" << filePath;
-        return QString();
+            << "[FT]" << tag << ": cannot open" << filePath;
+        return QByteArray();
     }
     QByteArray const fileBytes = f.readAll();
     f.close();
     if (fileBytes.size() > MAX_FILE_BYTES) {
         qCWarning(filetransfer_js8)
-            << "[FT] buildSendBodyV2: raw file too large"
+            << "[FT]" << tag << ": raw file too large"
             << fileBytes.size() << ">" << MAX_FILE_BYTES;
-        return QString();
+        return QByteArray();
     }
 
     QFileInfo const fi(filePath);
@@ -389,24 +402,31 @@ QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader) {
     header.append(static_cast<char>(sz & 0xFF));
     header.append(sha16);
 
-    // ONE compression envelope over header ‖ payload — V1's separate
-    // header compression was a measured net LOSS (incompressible hash
-    // + 12-byte qCompress framing + extra base32 padding boundary).
-    QByteArray const envelope = qCompress(header + fileBytes, 9);
-
-    constexpr int kMaxWireChars = 99 * 60;  // rollover ceiling; peer-aware check in sender
-    QString const b32 = base32Encode(envelope);
-    QString const body = QString::fromLatin1(PREFIX_V2) + b32;
-    if (body.size() > kMaxWireChars) {
-        qCWarning(filetransfer_js8)
-            << "[FT] buildSendBodyV2: wire body too large"
-            << body.size() << ">" << kMaxWireChars;
-        return QString();
-    }
-
     outHeader.name = fi.fileName();
     outHeader.bytes = fileBytes.size();
     outHeader.sha256 = base32Encode(sha16);
+
+    // ONE compression envelope over header ‖ payload — V1's separate
+    // header compression was a measured net LOSS (incompressible hash
+    // + 12-byte qCompress framing + extra base32 padding boundary).
+    return qCompress(header + fileBytes, 9);
+}
+
+QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader) {
+    QByteArray const envelope =
+        buildEnvelopeFromFile(filePath, outHeader, "buildSendBodyV2");
+    if (envelope.isEmpty())
+        return QString();
+
+    // [BUILD 342.15 sizeGate] NO internal size bail — the sender's
+    // stage-2 qualification is the ONE size classifier (peer-aware,
+    // proper "File too large" dialog). The old 99*60 bail here was
+    // the IDENTICAL condition returning empty instead, which the
+    // caller could only report as "could not build send body (see
+    // log)" — bench 2026-07-19. Builders fail only for real build
+    // failures (unreadable file, raw-size cap).
+    QString const b32 = base32Encode(envelope);
+    QString const body = QString::fromLatin1(PREFIX_V2) + b32;
 
     qCWarning(filetransfer_js8)
         << "[FT-TX] V2 body built: name=" << outHeader.name
@@ -414,6 +434,27 @@ QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader) {
         << "envelopeBytes=" << envelope.size()
         << "wireBodyChars=" << body.size();
     return body;
+}
+
+QByteArray buildSendBodyV3(QString const &filePath, FileHeader &outHeader) {
+    QByteArray const envelope =
+        buildEnvelopeFromFile(filePath, outHeader, "buildSendBodyV3");
+    if (envelope.isEmpty())
+        return QByteArray();
+
+    // [BUILD 342.15 sizeGate] NO internal size bail — the sender's
+    // stage-2 qualification (ceil(envelope/64) > 99 → "File too
+    // large" with real numbers) is the ONE size classifier. The old
+    // 99*128 bail returned empty, the caller "fell back" to V2
+    // (whose ceiling is SMALLER — pointless), V2 bailed empty too,
+    // and the operator got the generic "could not build send body
+    // (see log)" instead of the size dialog (bench 2026-07-19).
+
+    qCWarning(filetransfer_js8)
+        << "[FT-TX] V3 envelope built: name=" << outHeader.name
+        << "rawBytes=" << outHeader.bytes
+        << "envelopeBytes=" << envelope.size();
+    return envelope;
 }
 
 // [BUILD 341 linkCase] EXACT-COPY rule for web links (Andy
@@ -472,15 +513,13 @@ bool splitLinkBody(QString const &body, QString &outUrl) {
     return true;
 }
 
-bool splitWireBodyV2(QString const &body,
-                     FileHeader &outHeader,
-                     QByteArray &outPayloadBytes) {
-    QString const prefix = QString::fromLatin1(PREFIX_V2);
-    if (!body.startsWith(prefix)) return false;
-    QString rest = body.mid(prefix.size());
-    rest.remove(QRegularExpression(QStringLiteral("\\s+")));
-    QByteArray const envelope = base32Decode(rest);
-    if (envelope.isEmpty()) return false;
+// [TODO #107 V3] Shared envelope parser — the exact inverse of
+// buildEnvelopeFromFile, used by V2 (after base32 decode) and V3
+// (raw envelope from native frames). Verifies size + truncated SHA.
+static bool parseEnvelope(QByteArray const &envelope,
+                          FileHeader &outHeader,
+                          QByteArray &outPayloadBytes,
+                          char const *tag) {
     QByteArray const plain = qUncompress(envelope);
     // Minimum: 1 (nameLen) + 0 (name) + 4 (size) + 16 (sha16).
     if (plain.size() < 1 + 4 + V2_HASH_BYTES) return false;
@@ -500,7 +539,7 @@ bool splitWireBodyV2(QString const &body,
 
     if (payload.size() != static_cast<int>(sz)) {
         qCWarning(filetransfer_js8)
-            << "[FT-RX] V2 size mismatch: header=" << sz
+            << "[FT-RX]" << tag << "size mismatch: header=" << sz
             << "payload=" << payload.size();
         return false;
     }
@@ -508,7 +547,7 @@ bool splitWireBodyV2(QString const &body,
         QCryptographicHash::hash(payload, QCryptographicHash::Sha256)
             .left(V2_HASH_BYTES);
     if (computed != sha16) {
-        qCWarning(filetransfer_js8) << "[FT-RX] V2 sha mismatch";
+        qCWarning(filetransfer_js8) << "[FT-RX]" << tag << "sha mismatch";
         return false;
     }
 
@@ -517,6 +556,25 @@ bool splitWireBodyV2(QString const &body,
     outHeader.sha256 = base32Encode(sha16);
     outPayloadBytes = payload;
     return true;
+}
+
+bool splitWireBodyV2(QString const &body,
+                     FileHeader &outHeader,
+                     QByteArray &outPayloadBytes) {
+    QString const prefix = QString::fromLatin1(PREFIX_V2);
+    if (!body.startsWith(prefix)) return false;
+    QString rest = body.mid(prefix.size());
+    rest.remove(QRegularExpression(QStringLiteral("\\s+")));
+    QByteArray const envelope = base32Decode(rest);
+    if (envelope.isEmpty()) return false;
+    return parseEnvelope(envelope, outHeader, outPayloadBytes, "V2");
+}
+
+bool splitWireBodyV3(QByteArray const &envelope,
+                     FileHeader &outHeader,
+                     QByteArray &outPayloadBytes) {
+    if (envelope.isEmpty()) return false;
+    return parseEnvelope(envelope, outHeader, outPayloadBytes, "V3");
 }
 
 }  // namespace FileTransfer

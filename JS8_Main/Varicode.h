@@ -36,6 +36,14 @@ class Varicode {
         JS8CallFirst = 1, // [001] <- the first frame of a message
         JS8CallLast = 2,  // [010] <- the last frame of a message
         JS8CallData = 4,  // [100] <- flagged frame (no frame type header)
+        // [TODO #107] Native-binary payload frame (Subspace only) —
+        // maps to WIRE BIT 75. The 72 payload bits are raw bytes (see
+        // JS8_Main/NativeBinary.h), never varicode. Fielded receivers
+        // drop bit-75 frames silently via their reserved-bits garbage
+        // filter; upgraded receivers route them to the binary
+        // reassembler BEFORE any DecodedText interpretation. Always
+        // paired with JS8CallData on the wire.
+        JS8CallNativeBinary = 8,
     };
 
     /*

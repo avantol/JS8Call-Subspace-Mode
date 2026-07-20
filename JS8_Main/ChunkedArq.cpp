@@ -251,6 +251,12 @@ bool Manager::hasActiveSession() const {
         if (!it.value().assemblies.isEmpty()) {
             return true;
         }
+        // [TODO #107] Binary (V3) reassembly counts as an active
+        // session — the UI lock must span native transfers too.
+        if (it.value().nativeWin.active ||
+            !it.value().binaryAssemblies.isEmpty()) {
+            return true;
+        }
     }
     return false;
 }
@@ -291,8 +297,12 @@ void Manager::haltAll() {
         for (QTimer *t : it.value().evictTimers) {
             if (t) t->stop();
         }
+        // [TODO #107] Native (V3) collect windows / partial binary
+        // assemblies die with the halt too.
+        clearNativeState(it.value());
     }
     m_recv.clear();
+    m_nativeOrphans.clear();
 
     if (m_txIdlePollTimer && m_txIdlePollTimer->isActive()) {
         m_txIdlePollTimer->stop();
@@ -427,6 +437,79 @@ SendResult Manager::sendChunked(QString const &peer, QString const &inputBody,
     return result;
 }
 
+// [TODO #107] V3 native-binary send. Mirrors sendChunked's guards and
+// bookkeeping exactly; the payload is raw envelope bytes and the FSM's
+// `chunks` list becomes a size mirror (empty strings) so every shared
+// site (busy guard, completion check, progress, haltAll) works
+// untouched.
+SendResult Manager::sendChunkedBinary(QString const &peer,
+                                      QByteArray const &envelope,
+                                      int const submode,
+                                      int const chunkBytes) {
+    SendResult result;
+    if (m_sends.contains(peer) && !m_sends[peer].chunks.isEmpty() &&
+        m_sends[peer].nextIdx < m_sends[peer].chunks.size()) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-TX] sendChunkedBinary rejected: send in flight for"
+            << peer;
+        emit sendFailed(peer, 0, 0, 0, 0, QStringLiteral("busy"));
+        result.error = QStringLiteral("busy");
+        return result;
+    }
+    auto const binChunks =
+        NativeBinary::splitIntoBinaryChunks(envelope, chunkBytes);
+    if (binChunks.isEmpty() ||
+        binChunks.size() > MAX_CHUNKS_ROLLOVER) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-TX] sendChunkedBinary rejected: envelope needs"
+            << binChunks.size() << "chunks; max" << MAX_CHUNKS_ROLLOVER;
+        emit sendFailed(peer, 0, 0, binChunks.size(), 0,
+                        QStringLiteral("too_long"));
+        result.error = QStringLiteral("too_long");
+        result.totalChunks = binChunks.size();
+        return result;
+    }
+
+    auto &state = getOrCreateSend(peer);
+    state.msgId = m_nextMsgId;
+    state.isBinary = true;
+    state.binaryChunks = binChunks;
+    state.binaryTotalBytes = envelope.size();
+    state.binaryChunkBytesEach = chunkBytes;
+    // Size mirror for the shared FSM sites (see struct comment).
+    state.chunks = QList<QString>();
+    for (int i = 0; i < binChunks.size(); ++i)
+        state.chunks.append(QString());
+    state.nextIdx = 0;
+    state.retries = 0;
+    state.originalBody.clear();  // nothing to restore into the box
+    state.wasMsgCmd = false;
+    state.msgAddressee.clear();
+    state.txSubmode = submode;
+
+    if (++m_nextMsgId > MSG_ID_MAX) {
+        m_nextMsgId = MSG_ID_MIN;
+    }
+    {
+        QSettings settings;
+        settings.setValue(QString::fromLatin1(kNextMsgIdSettingsKey),
+                          m_nextMsgId);
+    }
+
+    qCWarning(chunkedarq_js8)
+        << "[V3-TX] sendChunkedBinary starting: peer=" << peer
+        << "msgId=" << state.msgId << "chunks=" << binChunks.size()
+        << "envelopeBytes=" << envelope.size()
+        << "chunkBytes=" << chunkBytes;
+
+    sendNextChunk(peer);
+
+    result.ok = true;
+    result.msgId = state.msgId;
+    result.totalChunks = binChunks.size();
+    return result;
+}
+
 void Manager::sendNextChunk(QString const &peer) {
     auto sendIt = m_sends.find(peer);
     if (sendIt == m_sends.end()) {
@@ -453,6 +536,57 @@ void Manager::sendNextChunk(QString const &peer) {
     }
     int const cc = state.nextIdx + 1;          // 1-based wire chunk_id
     int const tt = state.chunks.size();
+
+    // [TODO #107] V3 binary branch: marker on chunk 1 and every
+    // MARKER_INTERVALth chunk (cc % 4 == 1) — chunk 1's marker is
+    // load-bearing (TOTAL + KB) and rides EVERY chunk-1 retransmit
+    // automatically since the decision is by cc. Periodic markers are
+    // advisory (callsign ID + PCRC refresh). The rest of this
+    // function's timer/progress machinery is shared verbatim.
+    if (state.isBinary) {
+        QByteArray const &binBody = state.binaryChunks[state.nextIdx];
+        // [BUILD 342.9 lastAck] retries > 0: EVERY retransmit carries
+        // the marker, not just the cadence chunks. A markerless retry
+        // is anonymous (SEQ + CHK4 only) — if the receiver's window is
+        // gone it can never re-ACK. Bench 2026-07-19: blocked final
+        // ACK → receiver delivered + closed → 3 retries of chunk 3/3
+        // all orphaned → sender failed a COMPLETED transfer (the
+        // classic stop-and-wait last-ACK hole; V2 is immune because
+        // every V2 chunk is text with full identity). With the marker,
+        // handleNativeMarker's deliveredMsgs check re-ACKs.
+        bool const wantMarker =
+            (cc % NativeBinary::MARKER_INTERVAL) == 1 || cc == 1 ||
+            state.retries > 0;
+        QString markerText;
+        if (wantMarker) {
+            quint16 const pcrc = NativeBinary::payloadCrc16(binBody);
+            markerText = encodeChunkedData(
+                m_myCall, peer,
+                NativeBinary::composeMarkerBody(
+                    cc == 1, state.binaryTotalBytes, pcrc,
+                    state.binaryChunkBytesEach),
+                state.msgId, cc, tt);
+        }
+        if (state.ackTimer) {
+            state.ackTimer->stop();
+        }
+        state.awaitingTxDone = true;
+        state.awaitingSinceMs = QDateTime::currentMSecsSinceEpoch();
+        qCWarning(chunkedarq_js8)
+            << "[V3-TX] sending chunk peer=" << peer
+            << "msgId=" << state.msgId << "chunk=" << cc << "/" << tt
+            << "bytes=" << binBody.size()
+            << "marker=" << (markerText.isEmpty()
+                                 ? QStringLiteral("(none)")
+                                 : markerText)
+            << "retries=" << state.retries;
+        emit progressUpdate(cc, tt, state.totalRetries);
+        emit wantToTransmitNativeChunk(peer, markerText, cc, tt,
+                                       binBody);
+        ensureTxIdlePolling();
+        return;
+    }
+
     QString const &chunkBody = state.chunks[state.nextIdx];
     QString const text =
         encodeChunkedData(m_myCall, peer, chunkBody, state.msgId, cc, tt);
@@ -604,6 +738,24 @@ void Manager::onNackReceived(QString const &fromCall, int seq) {
     }
     SendState &state = sendIt.value();
     int const expectedCc = state.nextIdx + 1;
+    // [BUILD 342.10 implicitAck] Cumulative semantics: the receiver
+    // only opens window k after collecting chunk k-1 (stop-and-wait
+    // invariant), so NACK(expected+1) PROVES our in-flight chunk
+    // arrived and its ACK was lost in transit. Treat it as an
+    // implicit ACK(expected) — the resulting fresh send of k is
+    // exactly what the receiver is starving for. Single step only.
+    // Bench 2026-07-19 (muted ACK 2): receiver NACK 3'd while we
+    // burned 3 retries of a chunk it already had — a 2-minute detour
+    // this branch closes at the first NACK.
+    if (expectedCc + 1 <= state.chunks.size() &&
+        seq == ackWireSeq(expectedCc + 1)) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] NACK for next chunk => implicit ACK: peer="
+            << fromCall << "nacked=" << (expectedCc + 1)
+            << "implies delivered=" << expectedCc;
+        onAckReceived(fromCall, ackWireSeq(expectedCc));
+        return;
+    }
     // [BUILD 339 TODO #104] Modulo-31 wire compare (see onAckReceived).
     if (seq != ackWireSeq(expectedCc)) {
         qCDebug(chunkedarq_js8)
@@ -703,8 +855,12 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
     //
     // Already-delivered messages take the dedup path below (re-ACK,
     // no re-buffer); this guard fires only for genuinely new sessions.
+    // [TODO #107] Binary (V3) sessions live in binaryAssemblies /
+    // binaryTotalBytes, not the text `assemblies` map — a periodic V3
+    // marker (CC=5,9,…) mid-transfer must not trip this guard.
     bool const haveSession = rx.assemblies.contains(chunk.msgId) ||
-                             rx.deliveredMsgs.contains(chunk.msgId);
+                             rx.deliveredMsgs.contains(chunk.msgId) ||
+                             rx.binaryTotalBytes.contains(chunk.msgId);
     if (!haveSession && chunk.chunkId != 1) {
         qCWarning(chunkedarq_js8)
             << "[ARQ-RX] mid-session join ignored: peer=" << fromCall
@@ -725,6 +881,17 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
             << "advertised=" << chunk.crcHex << "computed=" << computed
             << "body=" << chunk.body;
         tryNack(fromCall, chunk.chunkId);
+        return;
+    }
+
+    // [TODO #107] V3 native marker? It opens/refreshes a binary
+    // collect window instead of storing text — and the ACK is
+    // DEFERRED to collector completion (a V3 chunk isn't received
+    // until its binary frames are). Already-collected chunks re-ACK
+    // inside the handler (marker retransmit after our lost ACK).
+    if (NativeBinary::MarkerInfo mi;
+        NativeBinary::parseMarkerBody(chunk.body, &mi)) {
+        handleNativeMarker(fromCall, rx, chunk, mi);
         return;
     }
 
@@ -1035,8 +1202,453 @@ void Manager::onAssemblyEvictTimerExpired() {
         rx.assemblies.remove(msgId);
         rx.totals.remove(msgId);
     }
+    // [TODO #107] Stale BINARY assembly for this msgId dies too —
+    // including its collect window if it's the one in flight.
+    if (rx.binaryTotalBytes.contains(msgId) ||
+        rx.binaryAssemblies.contains(msgId)) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] stale binary assembly evicted peer=" << peer
+            << "msgId=" << msgId
+            << "haveChunks=" << rx.binaryAssemblies.value(msgId).size();
+        rx.binaryAssemblies.remove(msgId);
+        rx.binaryTotalBytes.remove(msgId);
+        rx.binaryChunkBytes.remove(msgId);
+        if (rx.nativeWin.active && rx.nativeWin.msgId == msgId) {
+            if (rx.nativeWin.collectTimer)
+                rx.nativeWin.collectTimer->stop();
+            rx.nativeWin.active = false;
+        }
+    }
     rx.evictTimers.remove(msgId);
     timer->deleteLater();
+}
+
+// --- [TODO #107] Native-binary (V3) receive path -----------------------
+
+namespace {
+constexpr int    NATIVE_ORPHAN_CAP    = 16;
+constexpr qint64 NATIVE_ORPHAN_TTL_MS = 30000;
+// [BUILD 342.10 rttSlots] Window-open watchdog headroom for the ACK
+// round trip (our ACK TX + sender decode + sender slot-align) — this
+// wait dominates and does NOT scale with chunk size, so the plain
+// (frames+2) budget starved 1-frame chunks: bench 2026-07-19, window
+// 3/3 (frames=1) NACKed at +11 s and exhausted its give-up budget
+// before delivery was even possible. Applied at window-open only;
+// re-arms after the first accepted frame use (frames+2).
+constexpr int    ACK_RTT_SLOTS        = 4;
+}  // namespace
+
+void Manager::handleNativeMarker(QString const &peer, RxState &rx,
+                                 ParsedChunk const &chunk,
+                                 NativeBinary::MarkerInfo const &mi) {
+    // [BUILD 342.10 reAckDelay] Both re-ACK paths DELAY the response
+    // to land AFTER the sender's retry burst ends: the marker decodes
+    // at the HEAD of the burst, with up to 8 binary frames (~30 s)
+    // still airing behind it — an immediate re-ACK collides with the
+    // sender's own TX (half-duplex) and is lost every time (bench
+    // 2026-07-19: three straight re-ACK 2 collisions, 2-minute
+    // detour). Delay = (frames-in-chunk + 1) slots; sizes are
+    // retained past delivery so the delivered path can size too
+    // (conservative 8-frame fallback when unknown, e.g. pre-retention
+    // history or post-evict).
+    auto const scheduleReAck = [this, peer](RxState &rxs, int msgId,
+                                            int cc, int tt) {
+        int const totalBytes = rxs.binaryTotalBytes.value(msgId, 0);
+        int const kb = rxs.binaryChunkBytes.value(
+            msgId, NativeBinary::DEFAULT_CHUNK_BYTES);
+        int const nBytes =
+            NativeBinary::chunkBytesFor(cc, tt, totalBytes, kb);
+        int const frames =
+            nBytes > 0
+                ? (nBytes + NativeBinary::FRAME_PAYLOAD_BYTES - 1) /
+                      NativeBinary::FRAME_PAYLOAD_BYTES
+                : 8;
+        // (frames - 1) slots, floor 1: the schedule anchor is the
+        // MARKER DECODE, which already lags the marker's last frame
+        // by ~1-2 slots — (frames + 1) overshot the sender's 16 s
+        // post-burst listen window by seconds (bench 2026-07-19,
+        // 22:50:05 keyup vs ~22:50:03-06 re-ACK decode). This path is
+        // now the FALLBACK for a lost last frame; the frame-triggered
+        // re-ACK above handles the common case precisely.
+        int const delayMs =
+            (frames > 1 ? frames - 1 : 1) * m_nativeFrameMs;
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] re-ACK scheduled post-burst: peer=" << peer
+            << "msgId=" << msgId << "chunk=" << cc
+            << "delayMs=" << delayMs;
+        QTimer::singleShot(delayMs, this, [this, peer, cc]() {
+            sendAck(peer, cc);
+        });
+    };
+    // Whole message already delivered → the sender lost our final
+    // ACK; re-ACK and stop.
+    if (rx.deliveredMsgs.contains(chunk.msgId)) {
+        scheduleReAck(rx, chunk.msgId, chunk.chunkId, chunk.total);
+        return;
+    }
+    // Live-transfer marker (fresh, retry, or mid-join) — RX-side UI
+    // feedback hook.
+    emit nativeMarkerSeen(peer, chunk.chunkId, chunk.total);
+    // This chunk already collected → marker retransmit after a lost
+    // ACK. [BUILD 342.11 frameReAck] NO timer re-ACK here: the retry
+    // burst's own last frame triggers the re-ACK precisely
+    // (onNativeFrameReceived), and the open window's watchdog NACK
+    // advances the sender via implicit-ACK even if every frame is
+    // lost — a timer re-ACK on top double-keys and can stomp the
+    // sender's NEXT chunk. The marker IS session evidence though:
+    // revive the watchdog (it may have given up during the sender's
+    // retry cycle) and reset its give-up budget.
+    if (rx.binaryAssemblies.value(chunk.msgId).contains(chunk.chunkId)) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] marker for already-collected chunk —"
+            << "frame-trigger/watchdog will answer: peer=" << peer
+            << "msgId=" << chunk.msgId << "chunk=" << chunk.chunkId;
+        if (rx.nativeWin.active && rx.nativeWin.msgId == chunk.msgId) {
+            rx.nativeWin.noProgressNacks = 0;
+            if (rx.nativeWin.collectTimer) {
+                rx.nativeWin.collectTimer->start(
+                    (rx.nativeWin.collector.frameCount() + 2 +
+                     ACK_RTT_SLOTS) * m_nativeFrameMs);
+            }
+        }
+        return;
+    }
+    if (mi.isFirstChunkForm) {
+        // Chunk-1 marker carries the authoritative TOTAL envelope
+        // byte count AND the chunk size (every chunk's byte count
+        // derives from the pair).
+        rx.binaryTotalBytes[chunk.msgId] = mi.totalBytes;
+        rx.binaryChunkBytes[chunk.msgId] = mi.chunkBytes;
+    } else if (!rx.binaryTotalBytes.contains(chunk.msgId)) {
+        // Periodic marker for a transfer whose chunk-1 marker we
+        // never saw — without TOTAL we can't size any chunk. Drop
+        // silently; the mid-session-join philosophy applies (the
+        // sender will exhaust retries; we could never assemble this
+        // transfer anyway).
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] periodic marker without chunk-1 TOTAL — drop"
+            << "peer=" << peer << "msgId=" << chunk.msgId
+            << "chunk=" << chunk.chunkId;
+        return;
+    }
+    // [BUILD 342.12 evictRearm] (Re-)arm — not arm-once — the
+    // assembly evict timer for ANY valid marker of a live transfer
+    // (first-form or periodic): the exact mirror of the V2 text
+    // path's per-chunk re-arm. Armed once at chunk 1, it evicted a
+    // healthy 8-chunk transfer's assembly at the 5-minute line
+    // (bench 2026-07-19, haveChunks=6 — unrecoverable afterwards).
+    QTimer *&evict = rx.evictTimers[chunk.msgId];
+    if (!evict) {
+        evict = new QTimer(this);
+        evict->setSingleShot(true);
+        evict->setProperty("peer", peer);
+        evict->setProperty("msgId", chunk.msgId);
+        connect(evict, &QTimer::timeout, this,
+                &Manager::onAssemblyEvictTimerExpired);
+    }
+    evict->start(ASSEMBLY_EVICT_TIMEOUT_MS);
+    openNativeChunkWindow(peer, rx, chunk.msgId, chunk.chunkId,
+                          chunk.total, mi.pcrc, /*pcrcValid=*/true);
+}
+
+void Manager::openNativeChunkWindow(QString const &peer, RxState &rx,
+                                    int const msgId, int const chunkId,
+                                    int const total, quint16 const pcrc,
+                                    bool const pcrcValid) {
+    int const totalBytes = rx.binaryTotalBytes.value(msgId, 0);
+    int const kb = rx.binaryChunkBytes.value(
+        msgId, NativeBinary::DEFAULT_CHUNK_BYTES);
+    int const nBytes = NativeBinary::chunkBytesFor(chunkId, total,
+                                                   totalBytes, kb);
+    if (nBytes <= 0) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] window open failed: inconsistent sizes"
+            << "msgId=" << msgId << "chunk=" << chunkId << "/" << total
+            << "totalBytes=" << totalBytes;
+        return;
+    }
+    rx.nativeWin.active = true;
+    rx.nativeWin.msgId = msgId;
+    rx.nativeWin.chunkId = chunkId;
+    rx.nativeWin.total = total;
+    rx.nativeWin.noProgressNacks = 0;
+    rx.nativeWin.collector.open(chunkId, nBytes, pcrc, pcrcValid);
+
+    qCWarning(chunkedarq_js8)
+        << "[V3-RX] window open: peer=" << peer << "msgId=" << msgId
+        << "chunk=" << chunkId << "/" << total << "nBytes=" << nBytes
+        << "frames=" << rx.nativeWin.collector.frameCount()
+        << "pcrcValid=" << pcrcValid
+        << "orphans=" << m_nativeOrphans.size();
+
+    // Drain orphans that beat the marker through the text pipeline
+    // (manager-global — orphan frames are anonymous until a window's
+    // CHK4 binds them; harness-caught 2026-07-19: a per-peer store
+    // drained the wrong pool when the marker created the peer state).
+    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+    for (auto it = m_nativeOrphans.begin();
+         it != m_nativeOrphans.end();) {
+        if (nowMs - it->monoMs > NATIVE_ORPHAN_TTL_MS) {
+            it = m_nativeOrphans.erase(it);
+            continue;
+        }
+        if (rx.nativeWin.collector.accept(it->seq, it->chk4, it->p8)) {
+            it = m_nativeOrphans.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Collect watchdog: expected frames' airtime + 2 slots of slack.
+    if (!rx.nativeWin.collectTimer) {
+        rx.nativeWin.collectTimer = new QTimer(this);
+        rx.nativeWin.collectTimer->setSingleShot(true);
+        rx.nativeWin.collectTimer->setProperty("peer", peer);
+        connect(rx.nativeWin.collectTimer, &QTimer::timeout, this,
+                &Manager::onNativeCollectTimerExpired);
+    }
+    rx.nativeWin.collectTimer->start(
+        (rx.nativeWin.collector.frameCount() + 2 + ACK_RTT_SLOTS) *
+        m_nativeFrameMs);
+
+    // Orphans may already complete the chunk (deep pipeline lag).
+    if (rx.nativeWin.collector.complete()) {
+        finishNativeChunk(peer, rx);
+    }
+}
+
+bool Manager::onNativeFrameReceived(int const seq, int const chk4,
+                                    QByteArray const &payload8,
+                                    int const freq, qint64 const absPos) {
+    Q_UNUSED(absPos);
+    // Bind to the (single realistic) active window whose CHK4 tag
+    // matches. Stop-and-wait means at most one active window per
+    // peer, and in practice one per receiver.
+    for (auto it = m_recv.begin(); it != m_recv.end(); ++it) {
+        RxState &rx = it.value();
+        if (!rx.nativeWin.active) continue;
+        // [BUILD 342.11 frameReAck] Frames for the chunk JUST BEHIND
+        // the open window, already collected = the definitive
+        // stop-and-wait retry signature (our ACK was lost; the sender
+        // is re-airing a chunk we have). Swallow them (they polluted
+        // the orphan store — 16 orphans in the 2026-07-19 bench) and
+        // re-ACK on the burst's LAST frame: the frames themselves
+        // mark the burst end exactly, so the re-ACK lands inside the
+        // sender's post-burst listen window — the marker-timer
+        // fallback path measured from marker-decode kept losing that
+        // race by <1 s.
+        int const prevCc = rx.nativeWin.chunkId - 1;
+        if (prevCc >= 1 && chk4 == (prevCc & 0xF) &&
+            rx.binaryAssemblies.value(rx.nativeWin.msgId)
+                .contains(prevCc)) {
+            int const totalBytes =
+                rx.binaryTotalBytes.value(rx.nativeWin.msgId, 0);
+            int const kb = rx.binaryChunkBytes.value(
+                rx.nativeWin.msgId, NativeBinary::DEFAULT_CHUNK_BYTES);
+            int const prevBytes = NativeBinary::chunkBytesFor(
+                prevCc, rx.nativeWin.total, totalBytes, kb);
+            int const prevFrames =
+                prevBytes > 0
+                    ? (prevBytes + NativeBinary::FRAME_PAYLOAD_BYTES -
+                       1) / NativeBinary::FRAME_PAYLOAD_BYTES
+                    : 8;
+            if (seq == prevFrames - 1) {
+                qCWarning(chunkedarq_js8)
+                    << "[V3-RX] retry burst of collected chunk ended"
+                    << "— re-ACK: peer=" << it.key()
+                    << "msgId=" << rx.nativeWin.msgId
+                    << "chunk=" << prevCc;
+                sendAck(it.key(), prevCc);
+            }
+            return true;  // ours; keep out of the orphan store
+        }
+        if (chk4 != (rx.nativeWin.chunkId & 0xF)) continue;
+        if (!rx.nativeWin.collector.accept(seq, chk4, payload8)) {
+            qCWarning(chunkedarq_js8)
+                << "[V3-RX] frame rejected by collector: seq=" << seq
+                << "chk4=" << chk4 << "peer=" << it.key();
+            return false;
+        }
+        markSessionActive(it.key());
+        // Progress — reset the give-up count and restart the collect
+        // budget (symmetric to the sender deferring its ACK timer
+        // until TX-done). A one-shot armed only at window-open expires
+        // mid-chunk on auto-advance windows: the window opens before
+        // our ACK even airs, so ACK RTT + 8 frames ≈ 45-53 s against
+        // a 37.5 s budget (bench 2026-07-19 "NACK too soon").
+        rx.nativeWin.noProgressNacks = 0;
+        if (rx.nativeWin.collector.complete()) {
+            finishNativeChunk(it.key(), rx);
+        } else if (rx.nativeWin.collectTimer) {
+            rx.nativeWin.collectTimer->start(
+                (rx.nativeWin.collector.frameCount() + 2) *
+                m_nativeFrameMs);
+        }
+        return true;
+    }
+    // No window (frames beat the marker, or stale RF) → the
+    // manager-global orphan store; drained by CHK4 match whenever a
+    // window opens.
+    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+    while (m_nativeOrphans.size() >= NATIVE_ORPHAN_CAP) {
+        m_nativeOrphans.removeFirst();
+    }
+    m_nativeOrphans.append({seq, chk4, payload8, nowMs});
+    qCWarning(chunkedarq_js8)
+        << "[V3-RX] no active window — frame orphaned: seq=" << seq
+        << "chk4=" << chk4 << "freq=" << freq
+        << "orphans=" << m_nativeOrphans.size();
+    return false;
+}
+
+void Manager::finishNativeChunk(QString const &peer, RxState &rx) {
+    auto &win = rx.nativeWin;
+    if (win.collectTimer) {
+        win.collectTimer->stop();
+    }
+    if (!win.collector.crcOk()) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] chunk complete but PCRC MISMATCH — NACK"
+            << "peer=" << peer << "msgId=" << win.msgId
+            << "chunk=" << win.chunkId;
+        tryNack(peer, win.chunkId);
+        win.collector.reset();
+        if (win.collectTimer) {
+            win.collectTimer->start(
+                (win.collector.frameCount() + 2) * m_nativeFrameMs);
+        }
+        return;
+    }
+
+    rx.binaryAssemblies[win.msgId][win.chunkId] = win.collector.bytes();
+    // [BUILD 342.12 evictRearm] (Re-)arm the stale-evict timer on
+    // every collected chunk — the exact mirror of the V2 text path
+    // (onChunkReceived re-arms per chunk). It was armed ONCE at the
+    // chunk-1 marker, so any transfer longer than 5 minutes had its
+    // assembly evicted MID-TRANSFER (bench 2026-07-19: 8-chunk file
+    // + one muted ACK crossed the line at 23:14:42, haveChunks=6 —
+    // after which retry frames orphan and retry markers hit the
+    // no-TOTAL drop: unrecoverable by design, silently).
+    if (auto *evict = rx.evictTimers.value(win.msgId, nullptr)) {
+        evict->start(ASSEMBLY_EVICT_TIMEOUT_MS);
+    }
+    qCWarning(chunkedarq_js8)
+        << "[V3-RX] chunk complete crc=OK peer=" << peer
+        << "msgId=" << win.msgId << "chunk=" << win.chunkId
+        << "/" << win.total
+        << "bytes=" << win.collector.bytes().size();
+    sendAck(peer, win.chunkId);
+    emit nativeChunkCollected(peer, win.chunkId, win.total);
+
+    if (win.chunkId == win.total) {
+        // Transfer complete — concatenate in chunk order.
+        QByteArray envelope;
+        auto const &bins = rx.binaryAssemblies[win.msgId];
+        for (int cc = 1; cc <= win.total; ++cc) {
+            envelope += bins.value(cc);
+        }
+        int const msgId = win.msgId;
+
+        rx.deliveredMsgs.insert(msgId);
+        if (rx.deliveredMsgs.size() > (MSG_ID_MAX - MSG_ID_MIN + 1)) {
+            for (int i = 0; i < (MSG_ID_MAX - MSG_ID_MIN + 1) / 2; ++i) {
+                auto first = rx.deliveredMsgs.begin();
+                if (first == rx.deliveredMsgs.end()) break;
+                // [BUILD 342.10 reAckDelay] Size hashes are retained
+                // per delivered msgId (below) — drop them with it.
+                rx.binaryTotalBytes.remove(*first);
+                rx.binaryChunkBytes.remove(*first);
+                rx.deliveredMsgs.erase(first);
+            }
+        }
+        if (auto *evict = rx.evictTimers.value(msgId, nullptr)) {
+            evict->stop();
+            evict->deleteLater();
+        }
+        rx.evictTimers.remove(msgId);
+        rx.binaryAssemblies.remove(msgId);
+        // [BUILD 342.10 reAckDelay] binaryTotalBytes / binaryChunkBytes
+        // are KEPT for delivered msgIds (two ints each): the delivered
+        // re-ACK path sizes the sender's retry burst from them so the
+        // re-ACK lands after the burst. Pruned with deliveredMsgs
+        // (above) and in clearNativeState.
+        win.active = false;
+
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] transfer complete peer=" << peer
+            << "msgId=" << msgId << "chunks=" << win.total
+            << "envelopeBytes=" << envelope.size();
+        emit binaryMessageReceived(peer, envelope, msgId);
+        return;
+    }
+
+    // AUTO-ADVANCE: expect the next chunk immediately — markerless
+    // chunks bind here; a periodic marker for it merely refreshes
+    // the window with a PCRC.
+    openNativeChunkWindow(peer, rx, win.msgId, win.chunkId + 1,
+                          win.total, /*pcrc=*/0, /*pcrcValid=*/false);
+}
+
+void Manager::onNativeCollectTimerExpired() {
+    auto *timer = qobject_cast<QTimer *>(sender());
+    if (!timer) return;
+    nativeCollectTimeout(timer->property("peer").toString());
+}
+
+bool Manager::nativeCollectTimeout(QString const &peer) {
+    auto rxIt = m_recv.find(peer);
+    if (rxIt == m_recv.end()) return false;
+    RxState &rx = rxIt.value();
+    if (!rx.nativeWin.active || rx.nativeWin.collector.complete()) {
+        return false;
+    }
+    if (rx.nativeWin.noProgressNacks >= NATIVE_NACK_GIVEUP) {
+        // Sender answered N straight NACKs with silence — mirror its
+        // DEFAULT_MAX_RETRIES give-up. Window stays passively open
+        // (late frames still bind); the assembly-evict timer cleans
+        // up. Without this bound the re-NACK loop kept keying for
+        // 4.5 min after a sender halt, garbling the peer's NEXT
+        // transfer's marker (bench 2026-07-19).
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] collect watchdog giving up after"
+            << rx.nativeWin.noProgressNacks
+            << "no-progress NACKs: peer=" << peer
+            << "msgId=" << rx.nativeWin.msgId
+            << "chunk=" << rx.nativeWin.chunkId;
+        if (rx.nativeWin.collectTimer) {
+            rx.nativeWin.collectTimer->stop();
+        }
+        return false;
+    }
+    ++rx.nativeWin.noProgressNacks;
+    qCWarning(chunkedarq_js8)
+        << "[V3-RX] collect timeout: peer=" << peer
+        << "msgId=" << rx.nativeWin.msgId
+        << "chunk=" << rx.nativeWin.chunkId
+        << "missing=" << rx.nativeWin.collector.missingSeqs()
+        << "noProgress=" << rx.nativeWin.noProgressNacks;
+    tryNack(peer, rx.nativeWin.chunkId);
+    // Window stays open; the sender's ACK timeout drives the
+    // retransmit. Re-arm so persistent gaps keep re-NACKing (the
+    // per-peer NACK rate limit bounds the airtime cost; any accepted
+    // frame resets noProgressNacks).
+    if (rx.nativeWin.collectTimer) {
+        rx.nativeWin.collectTimer->start(
+            (rx.nativeWin.collector.frameCount() + 2) * m_nativeFrameMs);
+    }
+    return true;
+}
+
+void Manager::clearNativeState(RxState &rx) {
+    if (rx.nativeWin.collectTimer) {
+        rx.nativeWin.collectTimer->stop();
+        rx.nativeWin.collectTimer->deleteLater();
+        rx.nativeWin.collectTimer = nullptr;
+    }
+    rx.nativeWin.active = false;
+    rx.binaryAssemblies.clear();
+    rx.binaryTotalBytes.clear();
+    rx.binaryChunkBytes.clear();
 }
 
 SendState &Manager::getOrCreateSend(QString const &peer) {

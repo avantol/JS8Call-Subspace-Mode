@@ -7,6 +7,8 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include "JS8_Main/NativeBinary.h"
+
 void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
 
     std::visit(
@@ -108,9 +110,17 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 if (auto const it = m_messageDupeCache.find(dedupeKey);
                     it != m_messageDupeCache.end()) {
                     auto const now = QDateTime::currentDateTimeUtc();
+                    // [BUILD 342.17 selfDecode] FT2 window 8 → 12 s.
+                    // In Subspace the async decoder stamps absPos on
+                    // every event, so this TIME window only arbitrates
+                    // against occurrences WITHOUT absPos — i.e., the
+                    // TX-staging seeds (prepareNextMessageFrame) that
+                    // suppress self-decodes. Measured self-decode lag
+                    // is ~7.6-7.8 s after staging — the old 8 s window
+                    // was a coin flip.
                     auto const window =
                         (decodedtext.submode() == Varicode::JS8CallFT2)
-                            ? 8.0
+                            ? 12.0
                             : 0.5 * JS8::Submode::period(decodedtext.submode());
                     for (int i = 0; i < it->second.n; ++i) {
                         auto const &o = it->second.occ[i];
@@ -150,6 +160,65 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 // if the frame is valid, record this occurrence!
                 m_messageDupeCache[dedupeKey].add(
                     {QDateTime::currentDateTimeUtc(), ev.absPos});
+
+                // [TODO #107] Native-binary (V3) frame: hand the raw
+                // 72 bits to the binary reassembler and STOP. The
+                // payload is raw bytes — DecodedText::message() for
+                // this frame is JSC garbage and must never reach
+                // ALL.TXT, band activity, m_messageBuffer,
+                // m_rxActivityQueue, callsign lists, or the API push.
+                // Positioned AFTER the dupe-cache add so both dedup
+                // layers (frame-string keyed — binary-safe) still
+                // protect the reassembler from ring re-decodes.
+                if (ev.mode == 16 &&
+                    (ev.type & Varicode::JS8CallNativeBinary)) {
+                    quint8 rem = 0;
+                    quint64 const value = Varicode::unpack72bits(
+                        QString::fromStdString(ev.data), &rem);
+                    int seq = 0, chk4 = 0;
+                    QByteArray p8;
+                    if (NativeBinary::decodeFrame(value, rem, &seq,
+                                                  &chk4, &p8) &&
+                        m_chunkedArq) {
+                        qWarning() << "[V3-RX] frame: seq=" << seq
+                                   << "chk4=" << chk4
+                                   << "freq=" << ev.frequency
+                                   << "absPos=" << ev.absPos;
+                        bool const accepted =
+                            m_chunkedArq->onNativeFrameReceived(
+                                seq, chk4, p8,
+                                static_cast<int>(ev.frequency),
+                                ev.absPos);
+                        // [BUILD 342.6] Re-latch the auto-mode switch
+                        // on every frame OUR window accepts — V3's
+                        // counterpart of the per-chunk re-latch V2
+                        // gets in processCommandActivity (every V2
+                        // chunk is an inbound chunked-DATA text; V3's
+                        // markerless chunks are not, so after the
+                        // post-ACK restore the next ACK went out in
+                        // the operator's submode — bench round 2:
+                        // ACK 2 aired as a 15 s NORMAL frame, ~24 s
+                        // late, and the sender's retry stomped it).
+                        // `accepted` gates third-party listeners:
+                        // no active window of ours, no mode switch.
+                        if (accepted &&
+                            m_nSubMode != Varicode::JS8CallFT2) {
+                            if (m_arqPreSwitchSubmode == -1) {
+                                m_arqPreSwitchSubmode = m_nSubMode;
+                                qWarning() << "[ARQ-RX] stashed "
+                                              "pre-switch submode="
+                                           << m_arqPreSwitchSubmode
+                                           << "for post-ACK restore";
+                            }
+                            qWarning() << "[ARQ-RX] auto-mode (native "
+                                          "frame): was=" << m_nSubMode
+                                       << "→ now="
+                                       << Varicode::JS8CallFT2;
+                            setSubmode(Varicode::JS8CallFT2);
+                        }
+                    }
+                    return;
+                }
 
                 // log valid frames to ALL.txt (and correct their timestamp
                 // format)

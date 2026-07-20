@@ -15,6 +15,7 @@
 #include "JS8_JSC/JSC_checker.h"
 #include "JS8_Logbook/LogBook.h"
 #include "JS8_Main/APRSISClient.h"
+#include "JS8_Main/FileTransfer.h"
 #include "JS8_Main/AprsInboundRelay.h"
 #include "JS8_Main/Bands.h"
 #include "JS8_Main/DriftingDateTime.h"
@@ -288,6 +289,9 @@ class UI_Constructor : public QMainWindow {
     QString createMessageTransmitQueue(QString const &text, bool reset,
                                        bool isData, bool *pDisableTypeahead);
     void resetMessageTransmitQueue();
+    // [TODO #107] Append one V3 chunk's raw binary frames to
+    // m_txFrameQueue (native-layer file transfer; see NativeBinary.h).
+    void injectNativeBinaryFrames(int chunkId, QByteArray const &chunkBytes);
     QPair<QString, int> popMessageFrame();
     void tryNotify(const QString &key, int submode = -1);
     void processDecodeEvent(JS8::Event::Variant const &);
@@ -764,6 +768,35 @@ class UI_Constructor : public QMainWindow {
     // waiting is pure friction. Free text, templates with unedited
     // placeholders, and custom reply text still populate-only.
     void autoSendIfDirectedCmd();
+    // [TODO #107] V3 native-binary hooks: per-chunk TX (marker text +
+    // injected raw frames), completed-transfer RX (envelope parse →
+    // shared accept/save flow), and the extracted shared tail.
+    void onNativeChunkWantToTransmit(QString const &peer,
+                                     QString const &markerText,
+                                     int chunkId, int totalChunks,
+                                     QByteArray const &chunkBytes);
+    void onNativeChunkCollected(QString const &peer, int chunkId,
+                                int totalChunks);
+    void onNativeMarkerSeen(QString const &peer, int chunkId,
+                            int totalChunks);
+    void refreshArqPlaceholder();
+    void restoreArqPlaceholder();
+    void onNativeBinaryMessageReceived(QString const &fromCall,
+                                       QByteArray const &envelope,
+                                       int msgId);
+    void promptAndSaveReceivedFile(QString const &fromCall,
+                                   FileTransfer::FileHeader const &header,
+                                   QString const &payloadBase32,
+                                   QByteArray const &payloadBytes,
+                                   int wireVersion, int msgId);
+    // [TODO #107 Phase 1 DEBUG — remove before push] Env-gated
+    // (JS8_V3_DEBUG=1) test TX: marker + one 64-byte native chunk.
+    void debugSendNativeTestChunk();
+    // [TODO #107 Phase 2 DEBUG — remove before push] Burst experiment:
+    // 8 back-to-back encoded frames as ONE composite waveform under a
+    // single PTT (Visible Hail override mechanism). Level-4 gate: if
+    // the receiver decodes all 8, single-PTT chunk bursts are viable.
+    void debugSendNativeBurstChunk();
     // [BUILD 341] Send-chevron ARQ-validity indicator state (red =
     // current box text refuses ARQ). Cached so the stylesheet is
     // swapped only on TRANSITIONS — Build 309 proved per-frame
@@ -771,6 +804,9 @@ class UI_Constructor : public QMainWindow {
     bool m_sendChevronRed{false};
     void dispatchArqBody(QString const &body, QString const &peer,
                          int peerLevel);
+    // [TODO #107] Binary sibling: raw V3 envelope via sendChunkedBinary.
+    void dispatchArqBodyBinary(QByteArray const &envelope,
+                               QString const &peer);
     // [BUILD 336 TODO #97] Wall-clock ms of the last accepted AVHAIL?
     // remote trigger — global once-per-hour rate limit / replay guard
     // (the protocol has no anti-replay; a replayed trigger must not
@@ -1041,6 +1077,22 @@ class UI_Constructor : public QMainWindow {
     // refreshOutgoingPlaceholder(): "MULTI-PART MSG IN PROGRESS..."
     // while locked, the standard selection-aware prompt otherwise.
     bool    m_arqBoxLocked{false};
+    // [TODO #107] True for the duration of a native-binary (V3) send.
+    // Gates prepareNextMessageFrame's typeahead refill, which clears
+    // and rebuilds m_txFrameQueue from the text box — that would
+    // vaporize queued binary frames. Set by the V3 TX hook / debug
+    // sender; cleared on sendComplete/sendFailed/haltAll.
+    bool    m_nativeBinaryTxActive{false};
+    // [TODO #107] RX-side V3 feedback: outgoing-box placeholder swap
+    // while a multi-part native transfer is inbound (restored by
+    // timer when the next marker fails to appear, or on delivery).
+    QTimer *m_arqPlaceholderTimer{nullptr};
+    QString m_arqPlaceholderOrig;
+    // [TODO #107 Phase 2 DEBUG — remove before push] Burst-experiment
+    // composite, staged into the Modulator's full-frame override by
+    // guiUpdate's FT2 block (same flag pattern as Visible Hail).
+    QVector<float> m_v3BurstWave;
+    bool           m_v3BurstPending{false};
     // [TODO.md #58 build 268] Multi-mode RX runtime override.
     // Set true (set-once / sticky for the program run) when the ARQ
     // button is toggled on OR when the first inbound ARQ chunk is

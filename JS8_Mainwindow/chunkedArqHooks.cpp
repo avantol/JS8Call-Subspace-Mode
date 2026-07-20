@@ -113,6 +113,17 @@ void UI_Constructor::onChunkedWantsResponseTx(QString const &text) {
             << m_arqResponseSavedText.size()
             << "for response=" << text.left(40);
     }
+    // [BUILD 342.18 bannerNack] While the V3 in-progress banner is
+    // up, ANY response keyup (ACK, or the watchdog's post-halt NACK
+    // probes) proves this station is still busy with the session —
+    // refresh the banner so the operator isn't invited to type/send
+    // while we're still keying NACKs (bench 2026-07-20: banner
+    // dropped at +60 s, NACK probes ran to +2 min). Banner is
+    // V3-only (m_arqPlaceholderOrig is set only by native-path
+    // signals), so V2 responses are a no-op here.
+    if (!m_arqPlaceholderOrig.isNull()) {
+        refreshArqPlaceholder();
+    }
     // Delegate to the existing chunk-emit path. addMessageText(/*clear=*/true)
     // inside that slot replaces the widget contents with the response
     // wire text; the restore later in stopTx swaps the operator's
@@ -209,6 +220,19 @@ void UI_Constructor::onChunkedSendComplete(QString const &peer, int msgId,
                 << (m_arqStateBeforeFileSend ? "ON" : "OFF");
         }
     }
+    // [TODO #107] V3 send over — release the binary queue-guard and
+    // flush any still-queued native frames (a NACK-crossed retransmit
+    // can be sitting in the queue when the final ACK lands; without
+    // the flush TX keeps airing the already-delivered transfer).
+    if (m_nativeBinaryTxActive) {
+        m_nativeBinaryTxActive = false;
+        if (!m_txFrameQueue.isEmpty()) {
+            qCWarning(chunkedarq_js8)
+                << "[V3-TX] flushing" << m_txFrameQueue.size()
+                << "queued frames on sendComplete";
+            resetMessageTransmitQueue();
+        }
+    }
     // [BUILD 303] ARQ is opt-in per super-message. Disable on EVERY
     // sendComplete regardless of how the message was initiated (menu
     // action, plain Send, TCP API, etc.). The prior build-298 gate on
@@ -277,6 +301,20 @@ void UI_Constructor::onChunkedSendFailed(QString const &peer, int msgId,
             qCWarning(chunkedarq_js8)
                 << "[FT-TX] file send failed; ARQ restored to"
                 << (m_arqStateBeforeFileSend ? "ON" : "OFF");
+        }
+    }
+    // [TODO #107] V3 send over (failed) — release the binary
+    // queue-guard AND flush the queued native frames of the dead
+    // transfer. Bench 2026-07-19: timeout_exhausted fired with 8
+    // frames still queued — the fail dialog was dismissed and TX
+    // kept airing them for another 30 s.
+    if (m_nativeBinaryTxActive) {
+        m_nativeBinaryTxActive = false;
+        if (!m_txFrameQueue.isEmpty()) {
+            qCWarning(chunkedarq_js8)
+                << "[V3-TX] flushing" << m_txFrameQueue.size()
+                << "queued frames on sendFailed";
+            resetMessageTransmitQueue();
         }
     }
     // [BUILD 303] Mirror of sendComplete. Disable ARQ on EVERY failure
@@ -725,6 +763,19 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
         << "name=" << header.name
         << "bytes=" << header.bytes;
 
+    promptAndSaveReceivedFile(fromCall, header, payloadBase32,
+                              payloadBytes, wireVersion, msgId);
+}
+
+// [TODO #107] Accept-dialog + save + link-scan tail, extracted from
+// onChunkedFileMessageReceived so the V3 native path shares it from
+// the header-parsed point on — V1 (base32 text), V2 (verified bytes
+// from text wire), V3 (verified bytes from native frames) all
+// converge here.
+void UI_Constructor::promptAndSaveReceivedFile(
+    QString const &fromCall, FileTransfer::FileHeader const &header,
+    QString const &payloadBase32, QByteArray const &payloadBytes,
+    int const wireVersion, int const msgId) {
     // [build 277 2026-06-16] Modeless accept dialog. The Build 276
     // version used QMessageBox::question() which is blocking-modal —
     // operator missed it when not actively watching the screen, and
@@ -774,14 +825,14 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
             return;
         }
 
-        QString const saveDir = QDir::cleanPath(
-            QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
-            + QStringLiteral("/Subspace-FileTransfer"));
+        // [TODO #106] Path shared with the File-menu "open file
+        // transfer directory" action — single definition.
+        QString const saveDir = FileTransfer::receiveDirectory();
         QString err;
-        // V1: decode + verify + write. V2: splitWireBodyV2 already
-        // decoded and verified — write directly.
+        // V1: decode + verify + write. V2/V3: the split already
+        // decoded and verified — write the bytes directly.
         QString const savedPath =
-            (verCopy == 2)
+            (verCopy >= 2)
                 ? FileTransfer::writeReceivedFile(saveDir, headerCopy,
                                                   bytesCopy, &err)
                 : FileTransfer::assembleReceivedFile(
@@ -881,4 +932,190 @@ void UI_Constructor::onChunkedFileMessageReceived(QString const &fromCall,
     box->show();
     box->raise();
     box->activateWindow();
+}
+
+// [TODO #107] V3 TX hook: transmit one native chunk — the marker text
+// (when present) through the proven box path, then the raw binary
+// frames injected behind it. ORDER IS LOAD-BEARING: marker frames are
+// built BY prepareNextMessageFrame's typeahead branch, so the
+// m_nativeBinaryTxActive queue-guard arms only AFTER that build; on
+// markerless chunks the guard arms BEFORE prepare (nothing to build —
+// the guard protects the injected frames from any stale-box refill).
+void UI_Constructor::onNativeChunkWantToTransmit(
+    QString const &peer, QString const &markerText, int const chunkId,
+    int const totalChunks, QByteArray const &chunkBytes) {
+    if (!ui->extFreeTextMsgEdit) {
+        return;
+    }
+    // A (re)send REPLACES the chunk's frames — flush leftovers from
+    // the previous transmission first (V2's counterpart: the typeahead
+    // rebuild clears the queue before re-framing the box). Without
+    // this every NACK/timeout retransmit APPENDED 8 more frames
+    // (bench 2026-07-19: depth 19, TX keyed near-continuously and
+    // went deaf to the peer's ACK/NACK).
+    if (!m_txFrameQueue.isEmpty()) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-TX] flushing" << m_txFrameQueue.size()
+            << "stale queued frames before chunk (re)send";
+        resetMessageTransmitQueue();
+    }
+    if (!markerText.isEmpty()) {
+        m_nativeBinaryTxActive = false;  // allow the marker build
+        addMessageText(markerText, /*clear=*/true);
+        {
+            QSignalBlocker const block(ui->startTxButton);
+            ui->startTxButton->setChecked(true);
+        }
+        if (!prepareNextMessageFrame()) {
+            qCWarning(chunkedarq_js8)
+                << "[V3-TX] marker frame build failed; chunk stranded:"
+                << markerText.left(40);
+            return;
+        }
+        injectNativeBinaryFrames(chunkId, chunkBytes);
+        m_nativeBinaryTxActive = true;
+    } else {
+        injectNativeBinaryFrames(chunkId, chunkBytes);
+        m_nativeBinaryTxActive = true;
+        {
+            QSignalBlocker const block(ui->startTxButton);
+            ui->startTxButton->setChecked(true);
+        }
+        if (!prepareNextMessageFrame()) {
+            qCWarning(chunkedarq_js8)
+                << "[V3-TX] binary frame pop failed; chunk stranded";
+            return;
+        }
+    }
+    // Per-burst conversation-window feedback (operator request
+    // 2026-07-19): one standard-furniture line per transmitted burst
+    // — directed format + EOT marker so it renders/parses like any
+    // other message (retransmitted bursts print again, which is the
+    // point: each keyup is visible). MARKERLESS bursts only: marker
+    // chunks (1, 5, 9…) already display their marker text through
+    // the normal TX path, and the bracket line duplicated it
+    // (operator 2026-07-19).
+    if (markerText.isEmpty()) {
+        displayTextForFreq(
+            QStringLiteral("%1: %2 [Submsg %3 of %4] %5")
+                .arg(m_config.my_callsign().trimmed(), peer)
+                .arg(chunkId)
+                .arg(totalChunks)
+                .arg(m_config.eot()),
+            freq(), DriftingDateTime::currentDateTimeUtc(),
+            /*isTx=*/true, /*isNewLine=*/true, /*isLast=*/true,
+            m_nSubMode);
+    }
+    if (!m_auto) {
+        auto_tx_mode(true);
+    }
+}
+
+// [TODO #107] RX side collected one V3 burst (all frames, PCRC OK,
+// ACK staged) — mirror of the TX-side per-burst line above.
+void UI_Constructor::onNativeChunkCollected(QString const &peer,
+                                            int const chunkId,
+                                            int const totalChunks) {
+    // Chunk progress refreshes the in-progress banner too (chunks
+    // land every ~33 s, so the 60 s restore timer stays ahead of a
+    // healthy transfer and drops within a minute of a real stall).
+    refreshArqPlaceholder();
+    displayTextForFreq(
+        QStringLiteral("%1: %2 [Submsg %3 of %4] %5")
+            .arg(peer, m_config.my_callsign().trimmed())
+            .arg(chunkId)
+            .arg(totalChunks)
+            .arg(m_config.eot()),
+        freq(), DriftingDateTime::currentDateTimeUtc(),
+        /*isTx=*/false, /*isNewLine=*/true, /*isLast=*/true,
+        m_nSubMode);
+}
+
+// [TODO #107] Level-3-only RX feedback (operator request 2026-07-19):
+// while a multi-part native transfer is inbound, the outgoing box's
+// placeholder (visible only while the box is empty) shows the
+// in-progress banner. Refreshed by BOTH progress signals — every
+// live-transfer marker AND every collected chunk (chunks land every
+// ~33 s: 8 frames ≈ 30 s + ACK turnaround) — so the restore timer
+// only has to span ONE chunk cycle plus grace: 60 s. Timer expiry
+// means the stream stalled/ended → restore; delivery restores
+// immediately. V2 transfers never touch this — both signals fire
+// only from the native path.
+namespace {
+constexpr int ARQ_PLACEHOLDER_RESTORE_MS = 60000;
+}
+
+void UI_Constructor::onNativeMarkerSeen(QString const &peer,
+                                        int const chunkId,
+                                        int const totalChunks) {
+    Q_UNUSED(peer);
+    Q_UNUSED(chunkId);
+    Q_UNUSED(totalChunks);
+    refreshArqPlaceholder();
+}
+
+void UI_Constructor::refreshArqPlaceholder() {
+    if (!ui->extFreeTextMsgEdit) return;
+    QString const banner =
+        tr("MULTI-PART MSG IN PROGRESS...\n"
+           "TYPE AN OUTGOING MESSAGE HERE,\n"
+           "WAIT TO SEND.");
+    if (ui->extFreeTextMsgEdit->placeholderText() != banner) {
+        m_arqPlaceholderOrig = ui->extFreeTextMsgEdit->placeholderText();
+        ui->extFreeTextMsgEdit->setPlaceholderText(banner);
+    }
+    if (!m_arqPlaceholderTimer) {
+        m_arqPlaceholderTimer = new QTimer(this);
+        m_arqPlaceholderTimer->setSingleShot(true);
+        connect(m_arqPlaceholderTimer, &QTimer::timeout,
+                this, &UI_Constructor::restoreArqPlaceholder);
+    }
+    m_arqPlaceholderTimer->start(ARQ_PLACEHOLDER_RESTORE_MS);
+}
+
+void UI_Constructor::restoreArqPlaceholder() {
+    if (m_arqPlaceholderTimer) {
+        m_arqPlaceholderTimer->stop();
+    }
+    if (!ui->extFreeTextMsgEdit || m_arqPlaceholderOrig.isNull()) {
+        return;
+    }
+    ui->extFreeTextMsgEdit->setPlaceholderText(m_arqPlaceholderOrig);
+    m_arqPlaceholderOrig.clear();
+}
+
+// [TODO #107] V3 RX hook: transfer fully collected — parse the raw
+// envelope (decompress + header + size + sha16 verify) and hand off
+// to the shared accept/save flow.
+void UI_Constructor::onNativeBinaryMessageReceived(
+    QString const &fromCall, QByteArray const &envelope,
+    int const msgId) {
+    // Transfer over — the "MULTI-PART MSG IN PROGRESS..." banner
+    // comes down immediately, not at timer expiry.
+    restoreArqPlaceholder();
+    FileTransfer::FileHeader header;
+    QByteArray payloadBytes;
+    if (!FileTransfer::splitWireBodyV3(envelope, header,
+                                       payloadBytes)) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] envelope parse failed — peer=" << fromCall
+            << "msgId=" << msgId << "bytes=" << envelope.size();
+        auto *box = new QMessageBox(this);
+        box->setWindowTitle(tr("File transfer failed"));
+        box->setText(tr("%1 sent a Subspace native file transfer "
+                        "that did not verify (size or hash "
+                        "mismatch).").arg(fromCall));
+        box->setIcon(QMessageBox::Warning);
+        box->setStandardButtons(QMessageBox::Ok);
+        box->setWindowModality(Qt::NonModal);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        box->show();
+        return;
+    }
+    qCWarning(chunkedarq_js8)
+        << "[V3-RX] envelope verified — peer=" << fromCall
+        << "msgId=" << msgId << "name=" << header.name
+        << "bytes=" << header.bytes;
+    promptAndSaveReceivedFile(fromCall, header, QString(),
+                              payloadBytes, /*wireVersion=*/3, msgId);
 }

@@ -26,10 +26,15 @@
 
 namespace FileTransfer {
 
-/// Cap on file size for Phase 1. 30 KB → ~30 min TX time in Subspace
-/// mode at ~160 bytes/min effective wire throughput. Larger transfers
-/// wait for Phase 2 (compression + resume).
-constexpr int MAX_FILE_BYTES = 30 * 1024;
+/// [BUILD 342.21 sizeMsg] Raw-size sanity screen ONLY — cheaply
+/// rejects hopeless files before any compression work. The
+/// authoritative limit is the sender's stage-2 qualification on the
+/// BUILT envelope (exact wire bytes vs the peer's actual ceiling).
+/// 256 KB compresses in milliseconds, and nothing that large ever
+/// fits a few-KB ceiling. (Was 30 KB "Phase 1 cap" — stale: it
+/// pre-rejected highly compressible files, e.g. a 35 KB ADIF at 7:1,
+/// that the real check would have passed.)
+constexpr int MAX_FILE_BYTES = 256 * 1024;
 
 /// Magic prefix that marks an ARQ super-message as a file transfer.
 /// Receiver detects this on chunk 1; routes to FileTransfer pathway.
@@ -73,6 +78,13 @@ constexpr int V2_HASH_BYTES = 16;
 /// level-1 peers get the legacy link.txt file transfer.
 constexpr char const *PREFIX_L1 = "L/V1 BASE32 ";
 
+/// [TODO #107] Native-binary wire family, level 3 — the chunk-1 MARKER
+/// token (regulatory codec disclosure: payload is standard zlib deflate
+/// carried as raw Subspace frame payloads; reversible encoding, not
+/// encryption). The payload itself never rides text — see
+/// JS8_Main/NativeBinary.h for the frame/chunk formats.
+constexpr char const *PREFIX_V3 = "F/V3 NATIVE/GZIP ";
+
 /// [BUILD 341 linkCase] THE link-URL gate both ends use: starts with
 /// http:// or https:// (case-insensitive) and contains no whitespace
 /// or control characters. Deliberately NOT QUrl-based — QUrl
@@ -114,6 +126,15 @@ QString base32Encode(QByteArray const &bytes);
  */
 QByteArray base32Decode(QString const &text);
 
+/**
+ * @brief [TODO #106] The received-files folder:
+ *        <Downloads>/Subspace-FileTransfer. ONE definition shared by
+ *        the RX save hook and the File-menu "open folder" action so
+ *        the two can never drift apart (single-writer rule). Not
+ *        created here — callers mkpath when they need it to exist.
+ */
+QString receiveDirectory();
+
 /// Serialize FileHeader → JSON.
 QString headerToJson(FileHeader const &h);
 
@@ -139,6 +160,16 @@ QString buildSendBody(QString const &filePath, FileHeader &outHeader);
  *        outHeader.sha256 carries base32(sha256[:16]) for display.
  */
 QString buildSendBodyV2(QString const &filePath, FileHeader &outHeader);
+
+/**
+ * @brief [TODO #107] V3: build the SAME compression envelope as V2
+ *        (binary header ‖ fileBytes, one qCompress pass — shared
+ *        helper, formats cannot drift) but return the RAW BYTES for
+ *        transport as native Subspace frames. No base32, no text.
+ *        Empty on failure (unopenable, too large: 30 KB raw /
+ *        99×128 B envelope ceilings).
+ */
+QByteArray buildSendBodyV3(QString const &filePath, FileHeader &outHeader);
 
 /**
  * @brief Given a fully-assembled super-message body that started with
@@ -181,6 +212,17 @@ bool splitWireBody(QString const &body,
  *        further decode step needed before writeReceivedFile).
  */
 bool splitWireBodyV2(QString const &body,
+                     FileHeader &outHeader,
+                     QByteArray &outPayloadBytes);
+
+/**
+ * @brief [TODO #107] V3 counterpart: parse a raw envelope reassembled
+ *        from native Subspace frames (same shared parse as V2 minus
+ *        the base32 step) — decompress, parse binary header, verify
+ *        size + truncated SHA-256. outPayloadBytes = VERIFIED file
+ *        bytes.
+ */
+bool splitWireBodyV3(QByteArray const &envelope,
                      FileHeader &outHeader,
                      QByteArray &outPayloadBytes);
 

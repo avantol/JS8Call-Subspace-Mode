@@ -236,6 +236,7 @@ target_sources(
   JS8_Main/CPlotter.cpp
   JS8_Main/DriftingDateTime.cpp
   JS8_Main/FileTransfer.cpp
+  JS8_Main/NativeBinary.cpp
   JS8_Main/Flatten.cpp
   JS8_Main/ForeignKeyDelegate.cpp
   JS8_Main/FrequencyLineEdit.cpp

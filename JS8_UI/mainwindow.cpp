@@ -8,6 +8,7 @@
 #include "mainwindow.h"
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 #include "JS8_Main/FileTransfer.h"
+#include "JS8_Main/NativeBinary.h"
 
 #include <QFile>
 #include <QFileDialog>
@@ -20,7 +21,9 @@
 #include "JS8_Mode/DecodeFT2.h"
 #include "JS8_Mode/SubspacePreamble.h"
 #include "JS8_Mode/ft2_bridge.h"
+#include <array>
 #include <cstring>
+#include <vector>
 #endif
 
 #include "moc_mainwindow.cpp"
@@ -747,8 +750,15 @@ void UI_Constructor::on_menuModeJS8_aboutToShow() {
     // we are receiving one. Receiver-side menus stay usable mid-RX
     // (operator can keep working while chunks arrive).
     bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveTxSession());
+    // [BUILD 342.22 v3SpeedLock] m_nativeBinaryTxActive locks speed
+    // for the FULL V3 native session — including the idle gaps
+    // between chunks where the plain TX checks release. V2 keeps its
+    // mid-session speed freedom (text chunks re-encode per mode and
+    // the receiver auto-follows); V3 binary frames exist ONLY in the
+    // Subspace transport, so a mid-session switch kills the transfer.
     bool const canChangeSpeed =
-        !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+        !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty()
+        && !m_nativeBinaryTxActive;
     bool const canChangeMode = canChangeSpeed && !arqBusy;
     ui->actionModeJS8Normal->setEnabled(canChangeSpeed);
     ui->actionModeJS8Fast->setEnabled(canChangeSpeed);
@@ -3067,6 +3077,12 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
             if (m_i3bit & Varicode::JS8CallFirst) msgbits77[72] = 1;
             if (m_i3bit & Varicode::JS8CallLast)  msgbits77[73] = 1;
             if (m_i3bit & Varicode::JS8CallData)   msgbits77[74] = 1;
+            // [TODO #107] Native-binary discriminator — wire bit 75.
+            // Old receivers' reserved-bits garbage filter drops these
+            // frames silently; upgraded receivers route them to the
+            // binary reassembler. Bits 75-76 stay 0 for every other
+            // frame type.
+            if (m_i3bit & Varicode::JS8CallNativeBinary) msgbits77[75] = 1;
 
             ft2_encode_from_bits_c(msgbits77,
                          const_cast<int *>(reinterpret_cast<volatile int *>(itone)));
@@ -3108,6 +3124,21 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
                     std::move(composite));
             }
 
+            // [TODO #107 Phase 2 DEBUG — remove before push] Burst
+            // experiment: replace this PTT cycle's waveform with the
+            // prebuilt 8-frame composite (same one-shot override the
+            // Visible Hail uses; staged here so it binds to OUR
+            // frame's cycle, not some autoreply's).
+            if (m_v3BurstPending && m_modulator) {
+                qWarning() << "[V3-TX] burst composite staged:"
+                           << m_v3BurstWave.size() << "samples ("
+                           << (m_v3BurstWave.size() / 48) << "ms)";
+                m_modulator->setFullFrameBoltWaveform(
+                    std::move(m_v3BurstWave));
+                m_v3BurstWave.clear();
+                m_v3BurstPending = false;
+            }
+
             // Fill msgsent so the status label shows the TX message
             std::fill_n(std::begin(msgsent), 22, ' ');
             std::copy_n(std::begin(message), 12, std::begin(msgsent));
@@ -3125,6 +3156,16 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
         }
 #endif
         else {
+            // [TODO #107] Native-binary frames are Subspace-only by
+            // construction — a mid-queue mode switch reaching here
+            // with the flag set would feed raw bytes to the legacy
+            // encoder as if they were a varicode frame. Strip + log.
+            if (m_i3bit & Varicode::JS8CallNativeBinary) {
+                qWarning() << "[V3-TX] native-binary frame reached the"
+                              " legacy encoder (mode switch mid-queue?)"
+                              " — flag stripped";
+                m_i3bit &= ~Varicode::JS8CallNativeBinary;
+            }
             JS8::encode(m_i3bit,
                         JS8::Costas::array(JS8::Submode::costas(m_nSubMode)),
                         message,
@@ -3554,9 +3595,12 @@ void UI_Constructor::guiUpdate() {
         //     for the full session: flipping ARQ mid-protocol would
         //     yank the state machine out from under itself, which
         //     IS unsafe.
+        // [BUILD 342.22 v3SpeedLock] See the menu-action site: V3
+        // native sessions lock speed for the whole session.
         bool const canChangeSpeed =
             !m_transmitting && !m_tune &&
-            m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
+            m_txFrameCount == 0 && m_txFrameQueue.isEmpty() &&
+            !m_nativeBinaryTxActive;
         bool const canChangeMode = canChangeSpeed && !arqBusy;
         if (m_modeBtnNormal && m_modeBtnNormal->isEnabled() != canChangeSpeed) m_modeBtnNormal->setEnabled(canChangeSpeed);
         if (m_modeBtnFast && m_modeBtnFast->isEnabled() != canChangeSpeed) m_modeBtnFast->setEnabled(canChangeSpeed);
@@ -4815,6 +4859,169 @@ QString UI_Constructor::appendMessage(QString const &text, bool isData,
         pDisableTypeahead);
 }
 
+// [TODO #107] Append one chunk's raw binary frames to m_txFrameQueue.
+// Each 8-byte slice becomes a 12-char alphabet72 container (lossless
+// pack72bits domain, harness-verified) flagged Data|NativeBinary — the
+// FT2 TX branch turns the flag into wire bit 75. Before appending,
+// OR JS8CallLast into the current queue TAIL (the marker's final text
+// frame): prepareNextMessageFrame only ORs Last when the queue
+// empties, which would now be the last BINARY frame — and the
+// receiver's text-buffer machinery needs the marker's directed
+// message CLOSED promptly (Last), not after the 60 s force-Last.
+// (TX-side JS8CallLast audit 2026-07-18: the only readers are the
+// bit-writer, the queue-final OR, and typeahead cosmetics — a
+// mid-queue Last is not terminal; continuation is purely
+// shouldContinue.)
+void UI_Constructor::injectNativeBinaryFrames(int const chunkId,
+                                              QByteArray const &chunkBytes) {
+    if (!m_txFrameQueue.isEmpty()) {
+        m_txFrameQueue.last().second |= Varicode::JS8CallLast;
+    }
+    int const frames =
+        (chunkBytes.size() + NativeBinary::FRAME_PAYLOAD_BYTES - 1) /
+        NativeBinary::FRAME_PAYLOAD_BYTES;
+    for (int seq = 0; seq < frames; ++seq) {
+        auto const f = NativeBinary::encodeFrame(
+            seq, chunkId,
+            chunkBytes.mid(seq * NativeBinary::FRAME_PAYLOAD_BYTES,
+                           NativeBinary::FRAME_PAYLOAD_BYTES));
+        m_txFrameQueue.append(
+            {Varicode::pack72bits(f.value, f.rem),
+             Varicode::JS8CallData | Varicode::JS8CallNativeBinary});
+        ++m_txFrameCount;
+    }
+    qWarning() << "[V3-TX] injected" << frames << "binary frames:"
+               << "chunkId=" << chunkId
+               << "bytes=" << chunkBytes.size()
+               << "queueDepth=" << m_txFrameQueue.size();
+}
+
+// [TODO #107 Phase 1 DEBUG — REMOVE BEFORE PUSH] Bench rig: transmit
+// one full V3 chunk (marker + 8 binary frames, fixed byte pattern) so
+// the old-fleet politeness proof and the new-RX bring-up have a
+// deterministic source. Sequence matters: the MARKER frames are built
+// by prepareNextMessageFrame's typeahead branch (from the box text),
+// so the m_nativeBinaryTxActive queue-guard arms only AFTER that
+// first call — then the binary frames are injected behind the
+// remaining marker frames.
+void UI_Constructor::debugSendNativeTestChunk() {
+    if (m_nSubMode != Varicode::JS8CallFT2) {
+        qWarning() << "[V3-TX] debug chunk: Subspace mode required";
+        return;
+    }
+    if (m_transmitting || m_txFrameCount > 0) {
+        qWarning() << "[V3-TX] debug chunk: TX busy";
+        return;
+    }
+    QByteArray chunk(NativeBinary::DEFAULT_CHUNK_BYTES, '\0');
+    for (int i = 0; i < chunk.size(); ++i)
+        chunk[i] = static_cast<char>(i * 37 + 11);  // fixed test pattern
+    quint16 const pcrc = NativeBinary::payloadCrc16(chunk);
+
+    QString peer = ChunkedArq::effectivePeer(callsignSelected(), QString());
+    if (peer.isEmpty()) peer = QStringLiteral("TEST");
+    QString const marker = ChunkedArq::encodeChunkedData(
+        m_config.my_callsign(), peer,
+        NativeBinary::composeMarkerBody(true, chunk.size(), pcrc),
+        /*msgId=*/98, /*chunkId=*/1, /*total=*/1);
+
+    m_nativeBinaryTxActive = false;  // allow the marker build below
+    addMessageText(marker, /*clear=*/true);
+    {
+        QSignalBlocker const block(ui->startTxButton);
+        ui->startTxButton->setChecked(true);
+    }
+    if (!prepareNextMessageFrame()) {  // builds marker frames, pops #1
+        qWarning() << "[V3-TX] debug chunk: marker frame build failed";
+        return;
+    }
+    injectNativeBinaryFrames(/*chunkId=*/1, chunk);
+    m_nativeBinaryTxActive = true;   // guard the queued binary frames
+    if (!m_auto) {
+        auto_tx_mode(true);
+    }
+    qWarning() << "[V3-TX] debug chunk armed: peer=" << peer
+               << "pcrc=" << Qt::hex << pcrc;
+    // Debug rig only: release the guard after the queue must have
+    // drained (10 frames x 3.75 s << 90 s).
+    QPointer<UI_Constructor> const self(this);
+    QTimer::singleShot(90000, this, [self]() {
+        if (self) self->m_nativeBinaryTxActive = false;
+    });
+}
+
+// [TODO #107 Phase 2 DEBUG — REMOVE BEFORE PUSH] Burst experiment:
+// pre-generate 8 back-to-back encoded binary frames as ONE composite
+// waveform and play it under a single PTT via the Modulator full-frame
+// override (Visible Hail mechanism). The receiver's decode count of
+// the 8 frames is the level-4 go/no-go datum. ~20.2 s of continuous
+// audio — also probes the PTT/waveform-completion machinery beyond
+// the hail's proven 8.5 s.
+void UI_Constructor::debugSendNativeBurstChunk() {
+    if (m_nSubMode != Varicode::JS8CallFT2) {
+        qWarning() << "[V3-TX] burst: Subspace mode required";
+        return;
+    }
+    if (m_transmitting || m_txFrameCount > 0) {
+        qWarning() << "[V3-TX] burst: TX busy";
+        return;
+    }
+    QByteArray chunk(NativeBinary::DEFAULT_CHUNK_BYTES, '\0');
+    for (int i = 0; i < chunk.size(); ++i)
+        chunk[i] = static_cast<char>(i * 29 + 3);  // distinct pattern
+
+    float const f0 = static_cast<float>(freq() + m_XIT);
+    QVector<float> composite;
+    composite.reserve(8 * FT2_NWAVE);
+    std::vector<float> tmp(FT2_NWAVE);
+    std::array<int, FT2_NUM_SYMBOLS> tones{};
+    for (int seq = 0; seq < 8; ++seq) {
+        auto const f = NativeBinary::encodeFrame(
+            seq, /*chunkId=*/2, chunk.mid(seq * 8, 8));
+        std::int8_t msgbits77[77] = {};
+        for (int i = 0; i < 64; ++i)
+            msgbits77[i] = (f.value >> (63 - i)) & 1;
+        for (int i = 0; i < 8; ++i)
+            msgbits77[64 + i] = (f.rem >> (7 - i)) & 1;
+        msgbits77[74] = 1;  // Data
+        msgbits77[75] = 1;  // NativeBinary
+        ft2_encode_from_bits_c(msgbits77, tones.data());
+        ft2_gen_wave_c(tones.data(), FT2_NUM_SYMBOLS, FT2_TX_NSPS,
+                       48000.0f, f0, tmp.data(), FT2_NWAVE);
+        composite.append(QVector<float>(tmp.begin(), tmp.end()));
+    }
+    m_v3BurstWave = std::move(composite);
+    m_v3BurstPending = true;
+
+    // Arm one normal binary-frame TX cycle; the override replaces its
+    // waveform with the composite at Modulator start.
+    auto const carrier = NativeBinary::encodeFrame(0, 2, chunk.left(8));
+    m_nativeBinaryTxActive = false;
+    m_txFrameQueue.append(
+        {Varicode::pack72bits(carrier.value, carrier.rem),
+         Varicode::JS8CallData | Varicode::JS8CallNativeBinary});
+    ++m_txFrameCount;
+    {
+        QSignalBlocker const block(ui->startTxButton);
+        ui->startTxButton->setChecked(true);
+    }
+    if (!prepareNextMessageFrame()) {
+        qWarning() << "[V3-TX] burst: carrier frame prep failed";
+        m_v3BurstPending = false;
+        m_v3BurstWave.clear();
+        return;
+    }
+    m_nativeBinaryTxActive = true;
+    if (!m_auto) {
+        auto_tx_mode(true);
+    }
+    qWarning() << "[V3-TX] burst armed: 8 frames, chunkId=2, f0=" << f0;
+    QPointer<UI_Constructor> const self(this);
+    QTimer::singleShot(90000, this, [self]() {
+        if (self) self->m_nativeBinaryTxActive = false;
+    });
+}
+
 QString UI_Constructor::createMessageTransmitQueue(QString const &text,
                                                    bool reset, bool isData,
                                                    bool *pDisableTypeahead) {
@@ -4960,8 +5167,12 @@ bool UI_Constructor::prepareNextMessageFrame() {
     m_i3bit = Varicode::JS8Call;
 
     // typeahead
+    // [TODO #107] Gated off during a native-binary send: this branch
+    // CLEARS m_txFrameQueue and rebuilds it from the text box — which
+    // would vaporize queued binary frames. The box is read-only under
+    // the ARQ session lock anyway; this is defense in depth.
     bool shouldDisableTypeahead = false;
-    if (ui->extFreeTextMsgEdit->isDirty() &&
+    if (!m_nativeBinaryTxActive && ui->extFreeTextMsgEdit->isDirty() &&
         !ui->extFreeTextMsgEdit->isEmpty()) {
         // block edit events while computing next frame
         QString newText;
@@ -5009,6 +5220,38 @@ bool UI_Constructor::prepareNextMessageFrame() {
         m_nextFreeTextMsg.clear();
         updateTxButtonDisplay();
         return false;
+    }
+
+    // [BUILD 342.17 selfDecode] Subspace TX keeps audio capture ON
+    // (ring continuity — TODO #72), so wherever TX audio reaches the
+    // RX input (bench loopback, radio monitor) the async decoder
+    // decodes OUR OWN frames ~4 s after they air — bench 2026-07-20:
+    // self-decoded retry markers painted a second interleaved lane in
+    // the conversation window, and self-decoded binary frames
+    // polluted our own orphan store. Seed the SAME dupe cache the RX
+    // dedup checks (self-frames are bit-exact by definition); the
+    // seed has no absPos so the FT2 time-window rule applies —
+    // widened to 12 s in processDecodeEvent for exactly this case.
+    m_messageDupeCache[FrameCacheKey(0, frame)].add(
+        {QDateTime::currentDateTimeUtc(), 0});
+
+    // [TODO #107] Native-binary frame: the 12-char container holds RAW
+    // payload bits, not varicode — a DecodedText build here would
+    // misparse them into garbage. Skip the text accounting entirely:
+    // no m_totalTxMessage append, no charsSent/strike-through, no
+    // conversation-panel display (the chunk's MARKER text, sent via
+    // the normal path, is the operator-visible artifact). Keep the
+    // frame-count bookkeeping so the First-clear rule above stays
+    // consistent for anything queued behind us.
+    if (bits & Varicode::JS8CallNativeBinary) {
+        m_txFrameCountSent += 1;
+        m_nextFreeTextMsg = frame;
+        m_i3bit = bits;
+        qWarning() << "[V3-TX] frame staged:"
+                   << "queueRemaining=" << m_txFrameQueue.size()
+                   << "frame=" << frame;
+        updateTxButtonDisplay();
+        return true;
     }
 
     // append this frame to the total message sent so far
@@ -6663,15 +6906,55 @@ void UI_Constructor::startFileTransferWithFormat(
         JS8MessageBox::warning_message(
             this, QStringLiteral("File too large"),
             QStringLiteral(
-                "File is %1 bytes; Phase 1 cap is %2 bytes (%3 KB). "
-                "Compress externally or wait for Phase 2.")
-                .arg(fi.size())
-                .arg(FileTransfer::MAX_FILE_BYTES)
-                .arg(FileTransfer::MAX_FILE_BYTES / 1024));
+                "File is %1 KB — too large to send over radio. Even "
+                "with the built-in compression, transfers max out at "
+                "a few KB on the air.")
+                .arg(fi.size() / 1024));
         return;
     }
 
     FileTransfer::FileHeader header;
+
+    // [TODO #107] V3 native-binary arm: requires BOTH peer level >= 3
+    // AND Subspace mode (raw frames exist only in the Subspace
+    // transport) — otherwise SILENT V2/V1 fallback (operator decision
+    // 2026-07-18). Qualification: envelope must fit 99 chunks at the
+    // default chunk size.
+    if (peerLevel >= 3 && m_nSubMode == Varicode::JS8CallFT2) {
+        QByteArray const envelope =
+            FileTransfer::buildSendBodyV3(filePath, header);
+        if (!envelope.isEmpty()) {
+            int const needed =
+                (envelope.size() + NativeBinary::DEFAULT_CHUNK_BYTES - 1) /
+                NativeBinary::DEFAULT_CHUNK_BYTES;
+            if (needed > ChunkedArq::MAX_CHUNKS_ROLLOVER) {
+                JS8MessageBox::warning_message(
+                    this, QStringLiteral("File too large"),
+                    QStringLiteral(
+                        "After compression this file needs %1 bytes "
+                        "on the air; the Subspace maximum is %2 "
+                        "bytes. Send a smaller file.")
+                        .arg(envelope.size())
+                        .arg(ChunkedArq::MAX_CHUNKS_ROLLOVER *
+                             NativeBinary::DEFAULT_CHUNK_BYTES));
+                return;
+            }
+            qCWarning(chunkedarq_js8)
+                << "[FT-TX] wire format V3 NATIVE for peer=" << peer
+                << "(cached level=" << peerLevel
+                << ") envelopeBytes=" << envelope.size()
+                << "chunks=" << needed;
+            dispatchArqBodyBinary(envelope, peer);
+            return;
+        }
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] V3 envelope build failed — falling back to V2";
+    } else if (peerLevel >= 3) {
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] peer is level 3 but mode is not Subspace — "
+               "silent V2 fallback";
+    }
+
     // [BUILD 339 TODO #103] Wire-format negotiation: V2 (single-
     // envelope binary header, ~2 sub-messages smaller) only for
     // peers that advertised ARQ protocol level >= 2 via QUERY ARQ?
@@ -6708,13 +6991,26 @@ void UI_Constructor::startFileTransferWithFormat(
                         "build — or send a smaller file.")
                         .arg(needed).arg(peer).arg(maxChunks));
             } else {
+                // [BUILD 342.21 sizeMsg] Current-situation maximum,
+                // plus the ONE actionable suggestion: when both
+                // stations speak Subspace but we're in a legacy
+                // speed, switching modes genuinely raises the
+                // ceiling (V3 native ~6 KB vs V2 text ~3.7 KB).
+                QString body = QStringLiteral(
+                    "This file needs %1 sub-messages; the maximum "
+                    "here is %2. Send a smaller file.")
+                                   .arg(needed)
+                                   .arg(ChunkedArq::MAX_CHUNKS_ROLLOVER);
+                if (peerLevel >= 3 &&
+                    m_nSubMode != Varicode::JS8CallFT2) {
+                    body += QStringLiteral(
+                        "\n\nTip: both stations support Subspace — "
+                        "switch your Speed to Subspace to send "
+                        "larger files (up to about 6 KB on the "
+                        "air).");
+                }
                 JS8MessageBox::warning_message(
-                    this, QStringLiteral("File too large"),
-                    QStringLiteral(
-                        "This file needs %1 sub-messages; the maximum "
-                        "is %2. Send a smaller file.")
-                        .arg(needed)
-                        .arg(ChunkedArq::MAX_CHUNKS_ROLLOVER));
+                    this, QStringLiteral("File too large"), body);
             }
             return;
         }
@@ -6775,6 +7071,37 @@ void UI_Constructor::dispatchArqBody(QString const &body,
         qCWarning(chunkedarq_js8)
             << "[FT-TX] sendChunked rejected (" << res.error
             << "); ARQ restored to prior state immediately";
+    }
+}
+
+// [TODO #107] Binary sibling of dispatchArqBody: same ARQ auto-enable
+// + msgId-gated restore bookkeeping, dispatching the raw envelope via
+// sendChunkedBinary.
+void UI_Constructor::dispatchArqBodyBinary(QByteArray const &envelope,
+                                           QString const &peer) {
+    bool const arqWasOn = ui->actionModeReplicatorProtocol &&
+                          ui->actionModeReplicatorProtocol->isChecked();
+    bool arqAutoEnabled = false;
+    if (!arqWasOn && ui->actionModeReplicatorProtocol) {
+        ui->actionModeReplicatorProtocol->setChecked(true);
+        arqAutoEnabled = true;
+        qCWarning(chunkedarq_js8)
+            << "[V3-TX] ARQ auto-enabled for native transfer; will "
+               "restore on sendComplete/sendFailed";
+    }
+    auto const res = m_chunkedArq->sendChunkedBinary(
+        peer, envelope, m_nSubMode,
+        NativeBinary::DEFAULT_CHUNK_BYTES);
+    if (res.ok) {
+        if (arqAutoEnabled) {
+            m_fileSendMsgId          = res.msgId;
+            m_arqStateBeforeFileSend = arqWasOn;
+        }
+    } else if (arqAutoEnabled) {
+        ui->actionModeReplicatorProtocol->setChecked(arqWasOn);
+        qCWarning(chunkedarq_js8)
+            << "[V3-TX] sendChunkedBinary rejected (" << res.error
+            << "); ARQ restored immediately";
     }
 }
 

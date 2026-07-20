@@ -227,10 +227,24 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         if (bits[73] & 1) frameBits |= Varicode::JS8CallLast;
         if (bits[74] & 1) frameBits |= Varicode::JS8CallData;
 
-        // Filter garbage: reserved bits 75-76 must be 0.
+        // [TODO #107] Native-binary discriminator: bit75=1 WITH
+        // Data=1 marks a V3 raw-payload frame (routed to the binary
+        // reassembler upstream of any DecodedText interpretation).
+        // Bit75 without Data stays garbage; bit76 stays reserved.
+        // Field note (Phase-1 politeness proof, 2026-07-19): OLD
+        // builds drop these via reservedBad AND re-decode each one
+        // ~70x (never enters their known list) — passing them into
+        // keptBits here is what keeps the NEW build to one decode.
+        bool nativeBinary = (bits[75] & 1) && (bits[74] & 1) &&
+                            !(bits[76] & 1);
+        if (nativeBinary) frameBits |= Varicode::JS8CallNativeBinary;
+
+        // Filter garbage: reserved bits 75-76 must be 0 (except the
+        // native-binary pattern above).
         // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup.
         // noFlags removed — middle FrameCompoundDirected legitimately has First=Last=Data=0.
-        bool reservedBad = (bits[75] & 1) || (bits[76] & 1);
+        bool reservedBad = (bits[76] & 1) ||
+                           ((bits[75] & 1) && !(bits[74] & 1));
         bool noFlags = (frameBits == 0);
         bool syncLow = (sync < 2.2f && snr < -4);
         bool garbage = reservedBad || syncLow;

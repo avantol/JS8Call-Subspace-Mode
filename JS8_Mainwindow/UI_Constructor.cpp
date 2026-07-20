@@ -19,8 +19,14 @@
 #include "JS8_UI/SpeechBalloon.h"
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 
+#include <QAction>
+#include <QDesktopServices>
+#include <QDir>
 #include <QMenu>
 #include <QToolButton>
+#include <QUrl>
+
+#include "JS8_Main/FileTransfer.h"
 
 #ifdef JS8_ENABLE_FT2
 #include "JS8_Mode/ft2_bridge.h"
@@ -189,9 +195,29 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // TX.GET_TEXT check. Manager polls this between wantToTransmit and
     // ACK-timer-arm so the timer doesn't burn down during our own
     // cycle-aligned TX (~4-7.5 s on Subspace, ~16 s on Normal).
+    // [TODO #107] m_txFrameQueue is the V3 counterpart of the box:
+    // V2 text frames are rebuilt per-cycle FROM the box (so box-empty
+    // meant TX-done), but injected native-binary frames live only in
+    // m_txFrameQueue — without this check the poll saw "idle" between
+    // per-frame keyups mid-chunk and armed the 12 s ACK timer with 11
+    // frames still queued (bench 2026-07-19: retransmit storm, TX
+    // deaf to the peer's ACK, retries exhausted on a healthy link).
+    // [BUILD 342.6] m_txFrameCount == 0 closes the arming RACE the
+    // queue check alone still had: the queue empties when the LAST
+    // frame is STAGED (dequeued), ~3.8 s before it finishes airing,
+    // and m_transmitting is briefly false in each ~0.2 s inter-frame
+    // gap — the 1 s poll tick landing in that window armed the timer
+    // early (bench round 2, 2026-07-19 19:12:01 vs PTT drop
+    // 19:12:04.7) and the retry keyup stomped the arriving ACK.
+    // m_txFrameCount only resets in resetMessageTransmitQueue at the
+    // real end-of-TX wind-down (PTT drop), making this the same full
+    // idle predicate the rest of mainwindow uses. A stranded non-zero
+    // count is backstopped by the Manager's TX-idle safety cap.
     m_chunkedArq->setTxIdleCheck([this]() {
         return !m_transmitting
+            && m_txFrameCount == 0
             && m_txMessageQueue.isEmpty()
+            && m_txFrameQueue.isEmpty()
             && ui->extFreeTextMsgEdit->toPlainText().trimmed().isEmpty();
     });
     // ACK timeout scales with the currently active JS8 submode so the
@@ -251,6 +277,17 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // decodes the base32 payload, verifies SHA-256, writes the file.
     connect(m_chunkedArq, &ChunkedArq::Manager::fileMessageReceived,
             this, &UI_Constructor::onChunkedFileMessageReceived);
+    // [TODO #107] V3 native-binary transfer hooks: per-chunk TX
+    // (marker + injected raw frames) and completed-transfer RX.
+    connect(m_chunkedArq,
+            &ChunkedArq::Manager::wantToTransmitNativeChunk, this,
+            &UI_Constructor::onNativeChunkWantToTransmit);
+    connect(m_chunkedArq, &ChunkedArq::Manager::binaryMessageReceived,
+            this, &UI_Constructor::onNativeBinaryMessageReceived);
+    connect(m_chunkedArq, &ChunkedArq::Manager::nativeChunkCollected,
+            this, &UI_Constructor::onNativeChunkCollected);
+    connect(m_chunkedArq, &ChunkedArq::Manager::nativeMarkerSeen,
+            this, &UI_Constructor::onNativeMarkerSeen);
     connect(m_chunkedArq, &ChunkedArq::Manager::progressUpdate,
             this, &UI_Constructor::onChunkedProgressUpdate);
     connect(m_chunkedArq, &ChunkedArq::Manager::progressEnd,
@@ -535,6 +572,47 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     break; // logged by the helper
                 }
             });
+    // [TODO #106 / BUILD 342.20] File menu: open the received-files
+    // folder (<Downloads>/Subspace-FileTransfer) in the platform file
+    // manager. mkpath first so the action works before the first
+    // transfer ever lands; path comes from
+    // FileTransfer::receiveDirectory() — the same single definition
+    // the RX save hook uses. openUrl goes through the shell, so it
+    // behaves under MSIX too.
+    {
+        auto *openXferDir = new QAction(
+            QStringLiteral("Open file transfer directory"), this);
+        connect(openXferDir, &QAction::triggered, this, []() {
+            QString const dir = FileTransfer::receiveDirectory();
+            QDir().mkpath(dir);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        });
+        ui->menuFile->insertAction(ui->actionSettings, openXferDir);
+        ui->menuFile->insertSeparator(ui->actionSettings);
+    }
+
+    // [TODO #107 / BUILD 342.19] V3 debug TX rigs, gated on the
+    // diagnostic-logging setting (operator decision 2026-07-20 —
+    // KEEP fielded, was "remove before push"): the rigs are useless
+    // without a diag log, and a support session wants both together.
+    // Same startup-time semantics as the old JS8_V3_DEBUG env var —
+    // DiagnosticLogging is read once in main() (log file) and once
+    // here (menu); toggling the checkbox takes effect next launch.
+    // Both actions carry their own guards (Subspace-mode required,
+    // TX-busy bail), so a curious fleet operator can't key garbage.
+    if (m_config.diagnostic_logging() ||
+        qEnvironmentVariableIsSet("JS8_V3_DEBUG")) {
+        auto *v3Debug =
+            ui->menuHelp->addAction(QStringLiteral("TX native test chunk"));
+        connect(v3Debug, &QAction::triggered, this,
+                &UI_Constructor::debugSendNativeTestChunk);
+        auto *v3Burst = ui->menuHelp->addAction(
+            QStringLiteral("TX native burst chunk (experiment)"));
+        connect(v3Burst, &QAction::triggered, this,
+                &UI_Constructor::debugSendNativeBurstChunk);
+        qWarning() << "[V3-TX] debug menu actions enabled (JS8_V3_DEBUG)";
+    }
+
     // Reopen the Spots Map at startup if it was open at last exit
     // (one-time — NOT in a menu aboutToShow handler).
     if (m_spotMapWindow->wasVisibleAtShutdown()) {

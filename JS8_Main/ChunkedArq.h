@@ -36,6 +36,8 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+
+#include "JS8_Main/NativeBinary.h"
 #include <QTimer>
 
 Q_DECLARE_LOGGING_CATEGORY(chunkedarq_js8)
@@ -63,7 +65,11 @@ namespace ChunkedArq {
 // level-2-without-rollover population exists — dev builds only).
 // Advertised in the QUERY ARQ? "YES <level>" reply; senders use V2
 // and >31 chunks only for peers whose cached level is >= 2.
-constexpr int    ARQ_PROTOCOL_LEVEL      = 2;
+// [TODO #107] Level 3 = level 2 (V2 format + 99-chunk rollover) PLUS
+// native-binary F/V3 transfers (raw 72-bit Subspace frames, sparse
+// markers). Advertised via the existing "YES <level>" reply; V3 TX is
+// gated on peer >= 3 AND Subspace mode (silent V2 fallback otherwise).
+constexpr int    ARQ_PROTOCOL_LEVEL      = 3;
 
 constexpr int    MSG_ID_MIN              = 1;
 constexpr int    MSG_ID_MAX              = 99;
@@ -117,6 +123,13 @@ constexpr int    MAX_CHUNK_BODY_CHARS    = 60;    // body per chunk; tune for fa
 constexpr int    CHUNKED_MARKER_LEN      = 14;    // len("#NN.CC/TT.HHHH")
 
 constexpr int    DEFAULT_MAX_RETRIES     = 3;
+// Receiver-side mirror of DEFAULT_MAX_RETRIES for the V3 collect
+// watchdog: after this many consecutive no-progress expiries the
+// window stops NACKing (it stays passively open for late frames; the
+// assembly-evict timer does the final cleanup). Bench 2026-07-19:
+// unbounded re-NACK kept keying for 4.5 min after the sender halted,
+// garbling the next transfer's marker mid-decode.
+constexpr int    NATIVE_NACK_GIVEUP      = 3;
 constexpr int    DEFAULT_ACK_TIMEOUT_MS  = 12000; // 2x Subspace cycle + ACK decode slack (FT2 fallback)
 
 // Post-TX-done ACK budget per JS8 submode.
@@ -130,7 +143,14 @@ inline int ackTimeoutMsForSubmode(int submode) {
         case 1:  return 25000; // JS8CallFast   — 10 s cycle
         case 2:  return 16000; // JS8CallTurbo  —  6 s cycle
         case 4:  return 66000; // JS8CallSlow   — 30 s cycle
-        case 16: return 12000; // JS8CallFT2 / Subspace — 3.75 s cycle
+        // [BUILD 342.6] Subspace 12 s → 16 s: the V3 deferred-ACK
+        // worst case (receiver last-frame decode lag ~2-5 s + 250 ms
+        // audio ramp + slot align ≤3.75 s + 3.75 s ACK frame + our
+        // decode lag ~2-5 s) brushes 12 s — bench round 2 lost the
+        // ACK-vs-timeout race by <1 s on every chunk-2 attempt. The
+        // longer budget is FREE in the happy path (an arriving ACK
+        // cancels the timer); it only paces real-loss retries.
+        case 16: return 16000; // JS8CallFT2 / Subspace — 3.75 s cycle
         default: return 25000; // Unknown — pick a middling value
     }
 }
@@ -306,6 +326,15 @@ QList<QString> splitIntoChunks(QString const &body,
 struct SendState {
     int            msgId{0};
     QList<QString> chunks;           // body chunks (already normalized + split)
+    // [TODO #107] Binary (V3) sends: isBinary switches sendNextChunk
+    // to the native path — binaryChunks carry the raw bytes, chunks
+    // stays EMPTY except as a size mirror (the FSM's nextIdx/size
+    // bookkeeping is shared). totalBytes/chunkBytes ride the chunk-1
+    // marker.
+    bool               isBinary{false};
+    QList<QByteArray>  binaryChunks;
+    int                binaryTotalBytes{0};
+    int                binaryChunkBytesEach{0};
     int            nextIdx{0};       // 0-based index into chunks
     int            retries{0};       // per-chunk retry count (reset on each ACK)
     int            totalRetries{0};  // cumulative across the super-message; never resets
@@ -374,6 +403,32 @@ struct RxState {
     qint64                          lastNackMonoMs{0};
     QTimer                         *quietTimer{nullptr};
     bool                            sessionActive{false};
+
+    // [TODO #107] Native-binary (V3) receive state. ONE collect window
+    // per peer (stop-and-wait ⇒ at most one chunk in flight). The
+    // window AUTO-ADVANCES on each completed chunk — markers after
+    // chunk 1 are advisory (callsign ID + PCRC refresh); their loss
+    // costs nothing because the sender cannot pass chunk CC without
+    // our ACK.
+    struct NativeWindow {
+        bool active{false};
+        int  msgId{0};
+        int  chunkId{0};   // expected CC
+        int  total{0};     // TT (from the marker tail)
+        NativeBinary::ChunkCollector collector;
+        QTimer *collectTimer{nullptr};  // parented to the Manager
+        int  noProgressNacks{0};  // consecutive fruitless collect expiries
+    };
+    NativeWindow nativeWin;
+    // Per-msgId: TOTAL envelope bytes + chunk size (both from the
+    // chunk-1 marker, together authoritative for every chunk's byte
+    // count) and collected chunk bytes.
+    QHash<int, int>                    binaryTotalBytes;
+    QHash<int, int>                    binaryChunkBytes;
+    QHash<int, QHash<int, QByteArray>> binaryAssemblies;
+    // (Orphan frames — binary frames that beat their marker — are
+    //  MANAGER-GLOBAL, not per-peer: frames are anonymous until a
+    //  window binds them. See Manager::m_nativeOrphans.)
 
     // NOTE: the Python prototype carried a `next_expected_chunk` field
     // here to feed two extra NACK paths (unparseable freetext from an
@@ -556,6 +611,27 @@ class Manager : public QObject {
      */
     void haltAll();
 
+    /**
+     * @brief One collect-watchdog expiry for @a peer's native window
+     *        — the core of the onNativeCollectTimerExpired slot,
+     *        public so the offline FSM harness can drive expiries
+     *        without wire-realistic waits.
+     * @return true if the watchdog NACKed and re-armed (still
+     *         hunting); false if there was nothing to watch or it
+     *         gave up after NATIVE_NACK_GIVEUP fruitless expiries
+     *         (window stays passively open for late frames).
+     */
+    bool nativeCollectTimeout(QString const &peer);
+
+    /**
+     * @brief Test seam: shrink the V3 frame-slot duration (default
+     *        3750 ms, one Subspace T/R period) so the offline FSM
+     *        harness can exercise the delayed re-ACK and watchdog
+     *        arithmetic without wire-realistic waits. Production code
+     *        never calls this.
+     */
+    void setNativeFrameMs(int ms) { m_nativeFrameMs = ms; }
+
   public slots:
     /**
      * @brief Start a chunked send of `body` to `peer`. Splits into
@@ -573,10 +649,40 @@ class Manager : public QObject {
                            int maxChunks = MAX_CHUNKS_PER_MESSAGE);
 
     /**
+     * @brief [TODO #107] V3 native-binary send: the raw envelope
+     *        rides Subspace frames directly (no varicode). Markers on
+     *        chunk 1 + every MARKER_INTERVALth chunk; the whole
+     *        stop-and-wait FSM (ACK/NACK/timeout/retransmit) is the
+     *        text path's, unchanged. Level-3 + Subspace-mode peers
+     *        only (caller gates).
+     */
+    SendResult sendChunkedBinary(QString const &peer,
+                                 QByteArray const &envelope, int submode,
+                                 int chunkBytes =
+                                     NativeBinary::DEFAULT_CHUNK_BYTES);
+
+    /**
      * @brief Notify the manager that we received a chunked DATA frame.
      *        Called from processCommandActivity's RX hook.
      */
     void onChunkReceived(QString const &fromCall, ParsedChunk const &chunk);
+
+    /**
+     * @brief [TODO #107] A native-binary (V3) frame decoded — bit75
+     *        discriminated, already deduped by both RX layers. Binds
+     *        to the peer whose collect window is active (CHK4 sanity
+     *        tag); windowless frames go to the orphan store.
+     * @return true iff the frame was ACCEPTED into OUR active collect
+     *         window — the caller uses this to re-latch the auto-mode
+     *         submode switch mid-transfer (V3's counterpart of the
+     *         per-chunk re-latch V2 gets from every inbound chunked-
+     *         DATA text). Orphaned / rejected frames return false so
+     *         third-party listeners hearing someone else's transfer
+     *         never mode-switch (native frames carry no addressing).
+     */
+    bool onNativeFrameReceived(int seq, int chk4,
+                               QByteArray const &payload8,
+                               int freq, qint64 absPos);
 
     /**
      * @brief Notify the manager that we received an ACK for chunk `seq`
@@ -598,6 +704,36 @@ class Manager : public QObject {
      *        to enqueueMessage(PriorityHigh, text, -1, nullptr).
      */
     void wantToTransmit(QString const &text);
+
+    /**
+     * @brief [TODO #107] One V3 chunk is ready: TX the marker text
+     *        (EMPTY on markerless chunks) then inject the chunk's raw
+     *        binary frames. UI hook: onNativeChunkWantToTransmit.
+     *        peer + totalChunks ride along for the per-burst
+     *        "[Submsg N of M]" conversation-window feedback line
+     *        (rendered with the standard from/to/freq/mode header).
+     */
+    void wantToTransmitNativeChunk(QString const &peer,
+                                   QString const &markerText,
+                                   int chunkId, int totalChunks,
+                                   QByteArray const &chunkBytes);
+
+    /**
+     * @brief [TODO #107] RX side collected one V3 chunk (all frames,
+     *        PCRC OK — the ACK for it is staged). UI writes the
+     *        per-burst "[Submsg N of M]" conversation-window line.
+     */
+    void nativeChunkCollected(QString const &peer, int chunkId,
+                              int totalChunks);
+
+    /**
+     * @brief [TODO #107] A V3 marker for a LIVE (not yet delivered)
+     *        transfer decoded — cadence, retry, or mid-join. UI uses
+     *        it for receive-side feedback (outgoing-box placeholder
+     *        "MULTI-PART MSG IN PROGRESS...").
+     */
+    void nativeMarkerSeen(QString const &peer, int chunkId,
+                          int totalChunks);
 
     /**
      * @brief Manager wants this RX-side response (ACK / NACK) TX'd.
@@ -715,6 +851,14 @@ class Manager : public QObject {
      *        the file via FileTransfer::assembleReceivedFile.
      *        See TODO.md ARQ-file-transfer Phase 1 plan (2026-06-16).
      */
+    /**
+     * @brief [TODO #107] A V3 native-binary transfer fully collected:
+     *        all chunks complete, per-chunk integrity passed. envelope
+     *        = the raw compressed envelope for splitWireBodyV3.
+     */
+    void binaryMessageReceived(QString const &fromCall,
+                               QByteArray const &envelope, int msgId);
+
     void fileMessageReceived(QString const &fromCall,
                              QString const &body,
                              int            msgId);
@@ -779,6 +923,10 @@ class Manager : public QObject {
     void onAckTimerExpired();
     void onQuietTimerExpired();
     void onAssemblyEvictTimerExpired();
+    // [TODO #107] Native collect window watchdog — gaps after the
+    // expected frame count's airtime → rate-limited NACK; window
+    // stays open (the sender's ACK timeout drives the retry loop).
+    void onNativeCollectTimerExpired();
     void onTxIdlePollTick();
 
   private:
@@ -800,13 +948,47 @@ class Manager : public QObject {
     SendState &getOrCreateSend(QString const &peer);
     RxState &getOrCreateRx(QString const &peer);
 
+    // [TODO #107] Native-binary (V3) receive helpers.
+    // Marker chunk arrived (already text-CRC-verified): open/refresh
+    // the collect window, or re-ACK an already-collected chunk.
+    void handleNativeMarker(QString const &peer, RxState &rx,
+                            ParsedChunk const &chunk,
+                            NativeBinary::MarkerInfo const &mi);
+    // Open the window for chunk `chunkId` (marker- or auto-advance-
+    // driven), drain matching orphans, arm the collect timer. May
+    // complete immediately if orphans already fill the chunk.
+    void openNativeChunkWindow(QString const &peer, RxState &rx,
+                               int msgId, int chunkId, int total,
+                               quint16 pcrc, bool pcrcValid);
+    // Collector complete: PCRC verdict → store+ACK+advance/deliver,
+    // or NACK+reset.
+    void finishNativeChunk(QString const &peer, RxState &rx);
+    // Drop all V3 state for one peer (halt/evict/deliver cleanup).
+    void clearNativeState(RxState &rx);
+
     QString                     m_myCall;
     int                         m_nextMsgId{MSG_ID_MIN};
     QHash<QString, SendState>   m_sends;
     QHash<QString, RxState>     m_recv;
 
+    // [TODO #107] Binary frames that arrived with no open collect
+    // window (they beat their marker through the buffered-text
+    // pipeline, or are stale RF). Manager-global: frames are
+    // anonymous until a window's CHK4 binds them. Cap 16, TTL 30 s.
+    struct NativeOrphan {
+        int        seq{0};
+        int        chk4{0};
+        QByteArray p8;
+        qint64     monoMs{0};
+    };
+    QList<NativeOrphan>         m_nativeOrphans;
+
     IdleCheckFn                 m_txIdleCheck;
     AckTimeoutFn                m_ackTimeoutFn;
+    // V3 frame-slot duration (ms). One Subspace T/R period; the
+    // watchdog budgets and post-burst re-ACK delay derive from it.
+    // Overridable via setNativeFrameMs() for the offline harness.
+    int                         m_nativeFrameMs{3750};
     TxIdleCapFn                 m_txIdleCapFn;
     QTimer                     *m_txIdlePollTimer{nullptr};
     bool                        m_arqEnabled{false};
