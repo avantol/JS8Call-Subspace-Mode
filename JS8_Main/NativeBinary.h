@@ -48,7 +48,18 @@ constexpr int FRAME_PAYLOAD_BYTES  = 8;    // per frame, after the header byte
 constexpr int MARKER_FRAME_SEQ     = 0xF;
 constexpr int MAX_FRAMES_PER_CHUNK = 15;
 constexpr int DEFAULT_CHUNK_BYTES  = 64;   // K=8 (operator decision 2026-07-18)
+// [K-FALLBACK 2026-07-21] The single operator-in-loop retry step:
+// K=8 → K=4 on a timeout_exhausted failure. No further step.
+constexpr int FALLBACK_CHUNK_BYTES = 32;
 constexpr int MAX_CHUNK_BYTES      = 120;  // K=15; receivers accept from day one
+
+/// Chunks a given envelope needs at a given chunk size — the ONE
+/// stage-2 qualification formula (fit iff result ≤ the peer's chunk
+/// ceiling). Parameterized so the K=4 retry offer recomputes fit
+/// against the same rule the K=8 send used.
+constexpr int chunksNeeded(int envelopeBytes, int chunkBytes) {
+    return (envelopeBytes + chunkBytes - 1) / chunkBytes;
+}
 constexpr int MARKER_INTERVAL      = 4;    // BINARY marker cadence (sender policy)
 // Text-form marker cadence: station ID + operator-visible line. One
 // text marker per TEXT_ID_INTERVAL chunks ≈ 8.8 min at bench pacing —

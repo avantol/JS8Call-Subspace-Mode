@@ -115,6 +115,18 @@ class Modulator final : public AudioDevice {
 
     Q_SLOT void start(double audioFrequency, int submode, double tx_delay,
                       SoundOutput *stream, Channel channel);
+    // [TODO #108 keep-warm 2026-07-21] Open the output stream and park
+    // in KeepAlive (dithered silence) WITHOUT a transmission. Called at
+    // app startup and after audio-device changes so the FIRST real TX
+    // is a warm restart. Root cause being fixed: a cold ma_device start
+    // (pulse backend) consumes ~1.2 s of the stream instantly (buffer
+    // fill / clock catch-up) and never renders it — on a cold first TX
+    // that swallowed the 250 ms pre-roll plus ~870 ms of waveform head
+    // incl. the leading Costas (captured on-wire 2026-07-21 20:01Z,
+    // "waveform already done" at msSincePtt=1801 of a 3020 ms write).
+    // Warmed this way, the catch-up eats KeepAlive dither instead.
+    // No-op unless the state is Idle (dead stream).
+    Q_SLOT void warmStart(SoundOutput *stream, Channel channel);
     Q_SLOT void stop(bool quick = false);
     Q_SLOT void tune(bool state = true);
 
@@ -172,6 +184,9 @@ class Modulator final : public AudioDevice {
 
     QPointer<SoundOutput> m_stream;
     std::atomic<State> m_state = State::Idle;
+    // [TODO #108 keep-warm] Channel of the last start()/warmStart(),
+    // so the quickClose path can re-open straight into KeepAlive.
+    Channel m_warmChannel{Channel::Mono};
     bool m_quickClose = false;
     bool m_tuning = false;
     double m_audioFrequency;

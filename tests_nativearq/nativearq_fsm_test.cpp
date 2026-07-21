@@ -577,6 +577,92 @@ static void binaryMarkerOpen() {
           "binMarker: transfer completes with NO text marker at all");
 }
 
+// [K-FALLBACK prereq 2026-07-21] TOTAL/KB consistency guard: once a
+// msgId has latched its geometry, a conflicting first-form marker is
+// stale or alien (a sender restarting with different K uses a NEW
+// msgId) — it must be DROPPED, not overwrite the latch. Overwriting
+// mid-transfer silently reinterprets already-collected chunk
+// boundaries (final-chunk sizing + PCRC both derive from the pair).
+static void markerGeometryGuard() {
+    Rig r;
+    QByteArray const env = randomEnvelope(150);  // 3 chunks @64
+    auto const chunks = splitIntoBinaryChunks(env, 64);
+    r.marker(QStringLiteral("K9AVT"), 41, 1, 3,
+             composeMarkerBody(true, env.size(),
+                               payloadCrc16(chunks[0])));
+    r.sendChunkFrames(1, chunks[0]);
+    r.spin();
+    CHECK(r.ackCount(1) == 1, "kbGuard: chunk 1 collected at K=8");
+    // Conflicting first-form marker, same msgId: claims TOTAL=300.
+    r.marker(QStringLiteral("K9AVT"), 41, 2, 5,
+             composeMarkerBody(true, 300,
+                               payloadCrc16(chunks[1])));
+    r.spin();
+    // Original geometry must survive: chunks 2 + 3 (64/64/22) still
+    // assemble and deliver byte-identical.
+    r.sendChunkFrames(2, chunks[1]);
+    r.sendChunkFrames(3, chunks[2]);
+    r.spin();
+    CHECK(r.delivered == env && r.deliveredMsgId == 41,
+          "kbGuard: conflicting marker dropped, original geometry delivers");
+}
+
+// [K-FALLBACK prereq 2026-07-21] Variable-K sender: K=4 (32 B chunks)
+// end to end — geometry rides the markers, chunks re-join, and an RX
+// fed the same 32-byte geometry delivers byte-identical.
+static void senderK4RoundTrip() {
+    Rig tx;
+    QList<TxCapture> out;
+    bool complete = false;
+    QObject::connect(&tx.mgr,
+                     &ChunkedArq::Manager::wantToTransmitNativeChunk,
+                     [&out](QString const &, QString const &m, int cc,
+                            int tt, QByteArray const &mf,
+                            QByteArray const &b) {
+                         out.append({m, cc, tt, mf, b});
+                     });
+    QObject::connect(&tx.mgr, &ChunkedArq::Manager::sendComplete,
+                     [&complete](QString const &, int, int, int) {
+                         complete = true;
+                     });
+    QByteArray const env = randomEnvelope(150);  // 5 chunks @32
+    auto const res = tx.mgr.sendChunkedBinary(
+        QStringLiteral("K9AVT"), env, 16, /*chunkBytes=*/32);
+    CHECK(res.ok && res.totalChunks == 5,
+          "K=4: 150 B envelope = 5 chunks of 32");
+    for (int cc = 1; cc <= 5; ++cc)
+        tx.mgr.onAckReceived(QStringLiteral("K9AVT"),
+                             ChunkedArq::ackWireSeq(cc));
+    CHECK(complete && out.size() == 5, "K=4: sendComplete after 5 ACKs");
+    QByteArray rejoin;
+    for (auto const &t : out) rejoin += t.bytes;
+    CHECK(rejoin == env, "K=4: chunk bytes re-join to envelope");
+    // Chunk-1 binary marker carries KB=32.
+    NativeBinary::MarkerFrame mfd;
+    auto const f0 = NativeBinary::frameFromBytes(out[0].markerFrame);
+    CHECK(NativeBinary::decodeMarkerFrame(f0.value, f0.rem, &mfd) &&
+              mfd.chunkBytes == 32 && mfd.totalBytes == env.size(),
+          "K=4: binary marker carries KB=32 + TOTAL");
+    // Text marker parses with KB=32 too.
+    ChunkedArq::ParsedChunk pc;
+    NativeBinary::MarkerInfo mi;
+    CHECK(ChunkedArq::parseChunkedData(out[0].markerText, pc) &&
+              NativeBinary::parseMarkerBody(pc.body, &mi) &&
+              mi.isFirstChunkForm && mi.chunkBytes == 32,
+          "K=4: text marker carries KB=32");
+    // RX side: same geometry in → delivered byte-identical.
+    Rig rx;
+    auto const chunks = splitIntoBinaryChunks(env, 32);
+    rx.marker(QStringLiteral("K9AVT"), 42, 1, chunks.size(),
+              composeMarkerBody(true, env.size(),
+                                payloadCrc16(chunks[0]),
+                                /*chunkBytes=*/32));
+    for (int cc = 1; cc <= chunks.size(); ++cc)
+        rx.sendChunkFrames(cc, chunks[cc - 1]);
+    rx.spin();
+    CHECK(rx.delivered == env, "K=4: RX assembles 32-byte geometry");
+}
+
 int main(int argc, char *argv[]) {
     QCoreApplication app(argc, argv);
     QCoreApplication::setOrganizationName(
@@ -600,6 +686,8 @@ int main(int argc, char *argv[]) {
     implicitAckViaNack();
     frameTriggeredReAck();
     binaryMarkerOpen();
+    markerGeometryGuard();
+    senderK4RoundTrip();
 
     printf("\n%d failures\n", fails);
     return fails ? 1 : 0;

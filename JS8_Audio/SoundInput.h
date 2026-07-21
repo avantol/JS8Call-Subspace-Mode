@@ -10,6 +10,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <atomic>
+
 // Captures audio samples from the system's selected input device and
 // pushes them into an AudioDevice (QIODevice) sink — typically the
 // Detector.
@@ -51,6 +53,12 @@ class SoundInput : public QObject {
 
     ma_device m_device {};
     bool m_deviceInitialized = false;
+    // [TODO #108 keep-warm 2026-07-21] suspend()/resume() gate SAMPLE
+    // DELIVERY, not the device: the capture stream runs full-time so
+    // the codec never cold-starts (the original full-time-audio plan;
+    // ma_device_stop here was the reversion). Written on the audio
+    // QThread, read on miniaudio's worker.
+    std::atomic<bool> m_discarding{false};
     QPointer<AudioDevice> m_sink;
     AudioDeviceInfo m_lastDevice;
     AudioDevice::Channel m_lastChannel{AudioDevice::Mono};

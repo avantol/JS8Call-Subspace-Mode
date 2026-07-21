@@ -1334,6 +1334,24 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
         // Chunk-1 marker carries the authoritative TOTAL envelope
         // byte count AND the chunk size (every chunk's byte count
         // derives from the pair).
+        // [K-FALLBACK prereq 2026-07-21] Consistency guard: once a
+        // msgId has latched its geometry, a conflicting first-form
+        // marker is stale or alien — a sender restarting with a
+        // different chunk size uses a NEW msgId. Overwriting would
+        // silently reinterpret already-collected chunk boundaries
+        // (final-chunk sizing and PCRC both derive from the pair).
+        if (rx.binaryTotalBytes.contains(chunk.msgId) &&
+            (rx.binaryTotalBytes.value(chunk.msgId) != mi.totalBytes ||
+             rx.binaryChunkBytes.value(chunk.msgId) != mi.chunkBytes)) {
+            qCWarning(chunkedarq_js8)
+                << "[V3-RX] marker TOTAL/KB conflicts with latched"
+                << "geometry — drop: peer=" << peer
+                << "msgId=" << chunk.msgId
+                << "latched=" << rx.binaryTotalBytes.value(chunk.msgId)
+                << "/" << rx.binaryChunkBytes.value(chunk.msgId)
+                << "marker=" << mi.totalBytes << "/" << mi.chunkBytes;
+            return;
+        }
         rx.binaryTotalBytes[chunk.msgId] = mi.totalBytes;
         rx.binaryChunkBytes[chunk.msgId] = mi.chunkBytes;
     } else if (!rx.binaryTotalBytes.contains(chunk.msgId)) {

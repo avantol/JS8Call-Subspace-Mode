@@ -25,6 +25,7 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include <QAbstractButton>
 #include <QDateTime>
 #include <QMessageBox>
 
@@ -220,6 +221,14 @@ void UI_Constructor::onChunkedSendComplete(QString const &peer, int msgId,
                 << (m_arqStateBeforeFileSend ? "ON" : "OFF");
         }
     }
+    // [K-FALLBACK 2026-07-21] Delivered — the retained retry envelope
+    // is moot.
+    if (m_v3SendMsgId != 0 && msgId == m_v3SendMsgId) {
+        m_v3SendMsgId = 0;
+        m_v3SendEnvelope.clear();
+        m_v3SendPeer.clear();
+        m_v3SendChunkBytes = 0;
+    }
     // [TODO #107] V3 send over — release the binary queue-guard and
     // flush any still-queued native frames (a NACK-crossed retransmit
     // can be sitting in the queue when the final ACK lands; without
@@ -337,6 +346,35 @@ void UI_Constructor::onChunkedSendFailed(QString const &peer, int msgId,
                            {"REASON",        reason},
                        });
 
+    // [K-FALLBACK 2026-07-21] One-shot K=4 retry offer, operator-in-
+    // loop (spec held 2026-07-21, then approved). Consume the retained
+    // V3 send context either way; offer only when ALL of:
+    //   - this failure IS that V3 send (msgId match),
+    //   - reason is timeout_exhausted (the link-quality failure the
+    //     smaller chunk addresses),
+    //   - the failed run was K=8 (single step 8 → 4, never 4 → 2),
+    //   - the envelope FITS at K=4: ≤ 99 × 32 = 3168 B. Too large →
+    //     the option simply doesn't appear.
+    QByteArray retryEnvelope;
+    QString    retryPeer;
+    bool       offerK4 = false;
+    if (m_v3SendMsgId != 0 && msgId == m_v3SendMsgId) {
+        retryEnvelope = m_v3SendEnvelope;
+        retryPeer     = m_v3SendPeer;
+        int const kb  = m_v3SendChunkBytes;
+        m_v3SendMsgId = 0;
+        m_v3SendEnvelope.clear();
+        m_v3SendPeer.clear();
+        m_v3SendChunkBytes = 0;
+        offerK4 =
+            reason == QLatin1String("timeout_exhausted") &&
+            kb == NativeBinary::DEFAULT_CHUNK_BYTES &&
+            NativeBinary::chunksNeeded(
+                retryEnvelope.size(),
+                NativeBinary::FALLBACK_CHUNK_BYTES) <=
+                ChunkedArq::MAX_CHUNKS_ROLLOVER;
+    }
+
     // Modeless super-message-failure dialog. Same pattern as the
     // success path; Warning icon distinguishes at a glance.
     QString body;
@@ -370,6 +408,35 @@ void UI_Constructor::onChunkedSendFailed(QString const &peer, int msgId,
                                 QMessageBox::Ok, this);
     box->setAttribute(Qt::WA_DeleteOnClose);
     box->setModal(false);
+    if (offerK4) {
+        auto *retryBtn = box->addButton(
+            tr("Retry with smaller sub-messages"),
+            QMessageBox::ActionRole);
+        connect(box, &QMessageBox::buttonClicked, this,
+                [this, retryBtn, retryEnvelope,
+                 retryPeer](QAbstractButton *clicked) {
+                    if (clicked != retryBtn) {
+                        return;
+                    }
+                    // Native frames are Subspace-only (design decision
+                    // 2026-07-20) — if the operator left Subspace while
+                    // the dialog sat open, don't start a V3 send.
+                    if (m_nSubMode != Varicode::JS8CallFT2) {
+                        JS8MessageBox::warning_message(
+                            this, tr("Cannot retry"),
+                            tr("Switch your Speed back to Subspace, "
+                               "then send the file again."));
+                        return;
+                    }
+                    qCWarning(chunkedarq_js8)
+                        << "[V3-TX] operator retry at K=4: peer="
+                        << retryPeer
+                        << "envelopeBytes=" << retryEnvelope.size();
+                    dispatchArqBodyBinary(
+                        retryEnvelope, retryPeer,
+                        NativeBinary::FALLBACK_CHUNK_BYTES);
+                });
+    }
     box->show();
 }
 

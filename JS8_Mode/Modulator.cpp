@@ -55,6 +55,7 @@ void Modulator::start(double const frequency, int const submode,
     }
 
     m_quickClose = false;
+    m_warmChannel = channel;
     m_audioFrequency = frequency;
 #ifdef JS8_ENABLE_FT2
     if (submode == 16 /* Varicode::JS8CallFT2 */ && !m_tuning) {
@@ -227,6 +228,36 @@ void Modulator::start(double const frequency, int const submode,
     }
 }
 
+// [TODO #108 keep-warm] See the header comment. Opens the device and
+// parks in KeepAlive so the stream's cold-start catch-up (~1.2 s
+// consumed instantly on the pulse backend) swallows dither, never a
+// waveform head. Idempotent: any live state (KeepAlive/TX) is left
+// alone.
+void Modulator::warmStart(SoundOutput *const stream,
+                          Channel const channel) {
+    if (!stream) {
+        return;
+    }
+    auto const s = m_state.load();
+    if (s == State::Active || s == State::Synchronizing) {
+        return;  // TX in flight — never stomp it
+    }
+    if (s == State::KeepAlive && m_stream && isOpen() &&
+        m_stream->isStreaming()) {
+        return;  // already warm and live
+    }
+    // Idle, or KeepAlive whose stream died underneath (device change
+    // teardown) — (re)open into KeepAlive.
+    m_warmChannel = channel;
+    initialize(QIODevice::ReadOnly, channel);
+    m_state.store(State::KeepAlive);
+    m_stream = stream;
+    qCDebug(modulator_js8)
+        << "[FT2-TX] Modulator::warmStart — opening output stream into "
+           "KeepAlive (dithered silence)";
+    m_stream->restart(this);
+}
+
 /**
  * @brief Set tuning mode
  *
@@ -248,9 +279,21 @@ void Modulator::stop(bool const quickClose) {
                << "cycle#" << m_txCycleCount
                << "state=" << (int)m_state.load();
     if (quickClose) {
-        // Hard stop: kill the stream immediately (tune cancel, etc.)
+        // Hard stop: discard queued audio immediately (tune cancel,
+        // etc.). [TODO #108 keep-warm] …but never leave the stream
+        // dead: rebuild straight into KeepAlive so the fresh device's
+        // start-up catch-up eats dither and the NEXT TX is warm.
         m_quickClose = true;
         close();  // sets Idle, stops stream
+        m_quickClose = false;
+        if (m_stream) {
+            initialize(QIODevice::ReadOnly, m_warmChannel);
+            m_state.store(State::KeepAlive);
+            m_stream->restart(this);
+            qCDebug(modulator_js8)
+                << "[FT2-TX] Modulator::stop(quick) — stream re-warmed "
+                   "into KeepAlive";
+        }
         return;
     }
     auto s = m_state.load();

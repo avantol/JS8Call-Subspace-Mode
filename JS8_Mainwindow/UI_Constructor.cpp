@@ -407,6 +407,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             &Modulator::stop);
     connect(this, &UI_Constructor::tune, m_modulator, &Modulator::tune);
     connect(this, &UI_Constructor::sendMessage, m_modulator, &Modulator::start);
+    connect(this, &UI_Constructor::warmStartAudioOutput, m_modulator,
+            &Modulator::warmStart);
     connect(m_modulator, &Modulator::ft2WaveformDone, this, [this]() {
         qWarning() << "[FT2-TX] waveform complete: triggering stopTx()";
         stopTx();
@@ -977,6 +979,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         m_config.audio_output_device(),
         AudioDevice::Mono == m_config.audio_output_channel() ? 1 : 2,
         m_msAudioOutputBuffered);
+    // [TODO #108 keep-warm] First TX must be a warm restart — open the
+    // output stream into KeepAlive silence now, at startup.
+    Q_EMIT warmStartAudioOutput(m_soundOutput,
+                                m_config.audio_output_channel());
     Q_EMIT initializeNotificationAudioOutputStream(
         m_config.notification_audio_output_device(), m_msAudioOutputBuffered);
     Q_EMIT transmitFrequency(freq() + m_XIT);

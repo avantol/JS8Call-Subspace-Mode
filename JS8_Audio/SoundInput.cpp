@@ -79,6 +79,9 @@ SoundInput::s_dataCallback(ma_device * device,
 void
 SoundInput::onCapture(void const * pInput, ma_uint32 frameCount)
 {
+    // [TODO #108 keep-warm] Monitor-off discards samples here; the
+    // device itself keeps running (see m_discarding in the header).
+    if (m_discarding.load(std::memory_order_relaxed)) return;
     if (!m_sink || frameCount == 0) return;
 
     qint64 const bytes = static_cast<qint64>(frameCount) * m_sink->bytesPerFrame();
@@ -150,17 +153,19 @@ SoundInput::start(AudioDeviceInfo const & device,
 }
 
 /**
- * @brief Suspends audio input. miniaudio's ma_device_stop() is
- * deterministic — it stops the device and joins its worker before
- * returning. ma_device_start() resumes it.
+ * @brief "Suspends" audio input — [TODO #108 keep-warm 2026-07-21]
+ * the device is NOT stopped anymore. Stopping it (the old
+ * ma_device_stop) meant every monitor-off/on cycle cold-started the
+ * capture device; the original design intent was full-time input
+ * audio with monitor as a display/decode gate only. Suspend now just
+ * discards captured samples in onCapture — identical decode
+ * semantics (the sink sees nothing), warm device.
  */
 void
 SoundInput::suspend()
 {
-    if (m_deviceInitialized) {
-        ma_device_stop(&m_device);
-        Q_EMIT status(tr("Suspended"));
-    }
+    m_discarding.store(true, std::memory_order_relaxed);
+    Q_EMIT status(tr("Suspended"));
 }
 
 void
@@ -168,13 +173,15 @@ SoundInput::resume()
 {
     if (m_sink) m_sink->reset();
 
+    m_discarding.store(false, std::memory_order_relaxed);
+    // Safety: if some path left the device stopped, restart it.
     if (m_deviceInitialized && !ma_device_is_started(&m_device)) {
         if (ma_device_start(&m_device) != MA_SUCCESS) {
             Q_EMIT error(tr("Failed to resume audio input device."));
-        } else {
-            Q_EMIT status(tr("Receiving"));
+            return;
         }
     }
+    Q_EMIT status(tr("Receiving"));
 }
 
 /**

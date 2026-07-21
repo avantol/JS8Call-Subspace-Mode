@@ -595,6 +595,13 @@ class UI_Constructor : public QMainWindow {
                                                           unsigned) const;
     Q_SIGNAL void initializeAudioOutputStream(AudioDeviceInfo, unsigned channels,
                                               unsigned msBuffered) const;
+    // [TODO #108 keep-warm] Emitted right after
+    // initializeAudioOutputStream (startup + device change): opens the
+    // output stream into KeepAlive silence so the first TX is a warm
+    // restart. Queued to the same audio thread, so ordering after the
+    // format set is guaranteed.
+    Q_SIGNAL void warmStartAudioOutput(SoundOutput *,
+                                       AudioDevice::Channel) const;
     Q_SIGNAL void stopAudioOutputStream() const;
     Q_SIGNAL void startAudioInputStream(AudioDeviceInfo const &,
                                         int framesPerBuffer, AudioDevice *sink,
@@ -807,8 +814,12 @@ class UI_Constructor : public QMainWindow {
     void dispatchArqBody(QString const &body, QString const &peer,
                          int peerLevel);
     // [TODO #107] Binary sibling: raw V3 envelope via sendChunkedBinary.
+    // [K-FALLBACK 2026-07-21] chunkBytes: K=8 default; the fail-dialog
+    // "Retry with smaller sub-messages" offer re-enters at K=4.
     void dispatchArqBodyBinary(QByteArray const &envelope,
-                               QString const &peer);
+                               QString const &peer,
+                               int chunkBytes =
+                                   NativeBinary::DEFAULT_CHUNK_BYTES);
     // [BUILD 336 TODO #97] Wall-clock ms of the last accepted AVHAIL?
     // remote trigger — global once-per-hour rate limit / replay guard
     // (the protocol has no anti-replay; a replayed trigger must not
@@ -827,6 +838,15 @@ class UI_Constructor : public QMainWindow {
     // m_fileSendMsgId means we're holding ARQ open for that send.
     int  m_fileSendMsgId{0};
     bool m_arqStateBeforeFileSend{false};
+    // [K-FALLBACK 2026-07-21] Last dispatched V3 send, retained for
+    // the one-shot "Retry with smaller sub-messages" (K=4) offer on a
+    // timeout_exhausted failure — the V3 mirror of the V2 text path
+    // restoring the failed body into the outgoing box. Consumed by
+    // onChunkedSendFailed, cleared by onChunkedSendComplete.
+    QByteArray m_v3SendEnvelope;
+    QString    m_v3SendPeer;
+    int        m_v3SendMsgId{0};
+    int        m_v3SendChunkBytes{0};
     QSettings *m_settings;
     bool m_settings_read;
     QScopedPointer<Ui::UI_Constructor> ui;

@@ -1216,6 +1216,10 @@ void UI_Constructor::openSettings(int tab) {
                 m_config.audio_output_device(),
                 AudioDevice::Mono == m_config.audio_output_channel() ? 1 : 2,
                 m_msAudioOutputBuffered);
+            // [TODO #108 keep-warm] Device changed → re-open the
+            // stream into KeepAlive so the next TX stays warm.
+            Q_EMIT warmStartAudioOutput(m_soundOutput,
+                                        m_config.audio_output_channel());
         }
 
         if (m_config.restart_notification_audio_output() &&
@@ -6967,9 +6971,8 @@ void UI_Constructor::startFileTransferWithFormat(
         QByteArray const envelope =
             FileTransfer::buildSendBodyV3(filePath, header);
         if (!envelope.isEmpty()) {
-            int const needed =
-                (envelope.size() + NativeBinary::DEFAULT_CHUNK_BYTES - 1) /
-                NativeBinary::DEFAULT_CHUNK_BYTES;
+            int const needed = NativeBinary::chunksNeeded(
+                envelope.size(), NativeBinary::DEFAULT_CHUNK_BYTES);
             if (needed > ChunkedArq::MAX_CHUNKS_ROLLOVER) {
                 JS8MessageBox::warning_message(
                     this, QStringLiteral("File too large"),
@@ -7119,9 +7122,13 @@ void UI_Constructor::dispatchArqBody(QString const &body,
 
 // [TODO #107] Binary sibling of dispatchArqBody: same ARQ auto-enable
 // + msgId-gated restore bookkeeping, dispatching the raw envelope via
-// sendChunkedBinary.
+// sendChunkedBinary. [K-FALLBACK 2026-07-21] chunkBytes parameterized
+// (K=8 default; the fail-dialog retry re-enters here at K=4), and the
+// envelope is retained for that offer — the V3 mirror of the V2 text
+// path restoring the failed body into the outgoing box for a retry.
 void UI_Constructor::dispatchArqBodyBinary(QByteArray const &envelope,
-                                           QString const &peer) {
+                                           QString const &peer,
+                                           int const chunkBytes) {
     bool const arqWasOn = ui->actionModeReplicatorProtocol &&
                           ui->actionModeReplicatorProtocol->isChecked();
     bool arqAutoEnabled = false;
@@ -7133,9 +7140,12 @@ void UI_Constructor::dispatchArqBodyBinary(QByteArray const &envelope,
                "restore on sendComplete/sendFailed";
     }
     auto const res = m_chunkedArq->sendChunkedBinary(
-        peer, envelope, m_nSubMode,
-        NativeBinary::DEFAULT_CHUNK_BYTES);
+        peer, envelope, m_nSubMode, chunkBytes);
     if (res.ok) {
+        m_v3SendEnvelope   = envelope;
+        m_v3SendPeer       = peer;
+        m_v3SendMsgId      = res.msgId;
+        m_v3SendChunkBytes = chunkBytes;
         if (arqAutoEnabled) {
             m_fileSendMsgId          = res.msgId;
             m_arqStateBeforeFileSend = arqWasOn;
