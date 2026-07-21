@@ -545,27 +545,44 @@ void Manager::sendNextChunk(QString const &peer) {
     // function's timer/progress machinery is shared verbatim.
     if (state.isBinary) {
         QByteArray const &binBody = state.binaryChunks[state.nextIdx];
-        // [BUILD 342.9 lastAck] retries > 0: EVERY retransmit carries
-        // the marker, not just the cadence chunks. A markerless retry
-        // is anonymous (SEQ + CHK4 only) — if the receiver's window is
-        // gone it can never re-ACK. Bench 2026-07-19: blocked final
-        // ACK → receiver delivered + closed → 3 retries of chunk 3/3
-        // all orphaned → sender failed a COMPLETED transfer (the
-        // classic stop-and-wait last-ACK hole; V2 is immune because
-        // every V2 chunk is text with full identity). With the marker,
-        // handleNativeMarker's deliveredMsgs check re-ACKs.
-        bool const wantMarker =
-            (cc % NativeBinary::MARKER_INTERVAL) == 1 || cc == 1 ||
+        quint16 const pcrc = NativeBinary::payloadCrc16(binBody);
+        // [BUILD 344 binMarker] Marker duties split by strength:
+        //  - BINARY marker frame (1 native frame, single-frame robust)
+        //    rides the old marker cadence: chunk 1, every
+        //    MARKER_INTERVALth, and EVERY retransmit (the .342.9
+        //    lastAck identity now travels as one frame instead of a
+        //    3-frame text tail that died to any single loss — on-air
+        //    msg-33, 2026-07-20).
+        //  - TEXT marker (addressing + station ID + operator-visible
+        //    line) only where it's load-bearing: chunk 1 (fresh-
+        //    contact open, incl. every chunk-1 retry since the
+        //    decision is by cc) and every TEXT_ID_INTERVALth chunk
+        //    (ID rule for transfers longer than ~10 min).
+        bool const wantBinaryMarker =
+            (cc % NativeBinary::MARKER_INTERVAL) == 1 ||
             state.retries > 0;
+        bool const wantTextMarker =
+            (cc % NativeBinary::TEXT_ID_INTERVAL) == 1;
         QString markerText;
-        if (wantMarker) {
-            quint16 const pcrc = NativeBinary::payloadCrc16(binBody);
+        if (wantTextMarker) {
             markerText = encodeChunkedData(
                 m_myCall, peer,
                 NativeBinary::composeMarkerBody(
                     cc == 1, state.binaryTotalBytes, pcrc,
                     state.binaryChunkBytesEach),
                 state.msgId, cc, tt);
+        }
+        QByteArray markerFrame9;
+        if (wantBinaryMarker) {
+            NativeBinary::MarkerFrame m;
+            m.msgId      = state.msgId;
+            m.chunkId    = cc;
+            m.totalBytes = state.binaryTotalBytes;
+            m.chunkBytes = state.binaryChunkBytesEach;
+            m.pcrc       = pcrc;
+            m.peerHash   = NativeBinary::peerHash16(m_myCall);
+            markerFrame9 = NativeBinary::frameToBytes(
+                NativeBinary::encodeMarkerFrame(m));
         }
         if (state.ackTimer) {
             state.ackTimer->stop();
@@ -582,7 +599,7 @@ void Manager::sendNextChunk(QString const &peer) {
             << "retries=" << state.retries;
         emit progressUpdate(cc, tt, state.totalRetries);
         emit wantToTransmitNativeChunk(peer, markerText, cc, tt,
-                                       binBody);
+                                       markerFrame9, binBody);
         ensureTxIdlePolling();
         return;
     }
@@ -1349,6 +1366,50 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
     evict->start(ASSEMBLY_EVICT_TIMEOUT_MS);
     openNativeChunkWindow(peer, rx, chunk.msgId, chunk.chunkId,
                           chunk.total, mi.pcrc, /*pcrcValid=*/true);
+}
+
+bool Manager::onNativeMarkerFrameReceived(
+    NativeBinary::MarkerFrame const &m, int const freq) {
+    // Resolve the sender by callsign hash among peers we have ANY
+    // state for (active window, past deliveries, or a registered
+    // negotiation asker). No match → drop: only the text marker may
+    // open a session with a never-seen station.
+    QString peer;
+    for (auto it = m_recv.begin(); it != m_recv.end(); ++it) {
+        if (NativeBinary::peerHash16(it.key()) == m.peerHash) {
+            peer = it.key();
+            break;
+        }
+    }
+    if (peer.isEmpty()) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] binary marker: no candidate for peerHash="
+            << Qt::hex << m.peerHash << Qt::dec
+            << "msgId=" << m.msgId << "chunk=" << m.chunkId
+            << "freq=" << freq << "— dropped";
+        return false;
+    }
+    ParsedChunk chunk;
+    chunk.msgId   = m.msgId;
+    chunk.chunkId = m.chunkId;
+    chunk.total   = (m.totalBytes + m.chunkBytes - 1) / m.chunkBytes;
+    NativeBinary::MarkerInfo mi;
+    mi.isFirstChunkForm = true;   // binary form ALWAYS carries TOTAL+KB
+    mi.totalBytes = m.totalBytes;
+    mi.chunkBytes = m.chunkBytes;
+    mi.pcrc       = m.pcrc;
+    qCWarning(chunkedarq_js8)
+        << "[V3-RX] binary marker: peer=" << peer
+        << "msgId=" << m.msgId << "chunk=" << m.chunkId
+        << "/" << chunk.total << "totalBytes=" << m.totalBytes
+        << "kb=" << m.chunkBytes;
+    handleNativeMarker(peer, getOrCreateRx(peer), chunk, mi);
+    return true;
+}
+
+void Manager::registerPeerCandidate(QString const &peer) {
+    if (peer.trimmed().isEmpty()) return;
+    getOrCreateRx(peer.trimmed().toUpper());
 }
 
 void Manager::openNativeChunkWindow(QString const &peer, RxState &rx,

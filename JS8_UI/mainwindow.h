@@ -292,6 +292,7 @@ class UI_Constructor : public QMainWindow {
     // [TODO #107] Append one V3 chunk's raw binary frames to
     // m_txFrameQueue (native-layer file transfer; see NativeBinary.h).
     void injectNativeBinaryFrames(int chunkId, QByteArray const &chunkBytes);
+    void injectNativeMarkerFrame(QByteArray const &frame9);
     QPair<QString, int> popMessageFrame();
     void tryNotify(const QString &key, int submode = -1);
     void processDecodeEvent(JS8::Event::Variant const &);
@@ -774,6 +775,7 @@ class UI_Constructor : public QMainWindow {
     void onNativeChunkWantToTransmit(QString const &peer,
                                      QString const &markerText,
                                      int chunkId, int totalChunks,
+                                     QByteArray const &markerFrame9,
                                      QByteArray const &chunkBytes);
     void onNativeChunkCollected(QString const &peer, int chunkId,
                                 int totalChunks);

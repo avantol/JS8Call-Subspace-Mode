@@ -943,7 +943,8 @@ void UI_Constructor::promptAndSaveReceivedFile(
 // the guard protects the injected frames from any stale-box refill).
 void UI_Constructor::onNativeChunkWantToTransmit(
     QString const &peer, QString const &markerText, int const chunkId,
-    int const totalChunks, QByteArray const &chunkBytes) {
+    int const totalChunks, QByteArray const &markerFrame9,
+    QByteArray const &chunkBytes) {
     if (!ui->extFreeTextMsgEdit) {
         return;
     }
@@ -972,9 +973,14 @@ void UI_Constructor::onNativeChunkWantToTransmit(
                 << markerText.left(40);
             return;
         }
+        // [BUILD 344 binMarker] Binary marker AHEAD of the payload —
+        // opens/refreshes the receiver window even if the text
+        // marker's varicode frames are clipped (on-air msg-33).
+        injectNativeMarkerFrame(markerFrame9);
         injectNativeBinaryFrames(chunkId, chunkBytes);
         m_nativeBinaryTxActive = true;
     } else {
+        injectNativeMarkerFrame(markerFrame9);
         injectNativeBinaryFrames(chunkId, chunkBytes);
         m_nativeBinaryTxActive = true;
         {

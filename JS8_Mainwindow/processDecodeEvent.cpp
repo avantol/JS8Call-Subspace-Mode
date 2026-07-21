@@ -175,6 +175,32 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     quint8 rem = 0;
                     quint64 const value = Varicode::unpack72bits(
                         QString::fromStdString(ev.data), &rem);
+                    // [BUILD 344 binMarker] SEQ=15 = binary marker
+                    // frame; everything else is a data frame.
+                    NativeBinary::MarkerFrame mf;
+                    if (m_chunkedArq &&
+                        NativeBinary::decodeMarkerFrame(value, rem,
+                                                        &mf)) {
+                        bool const accepted =
+                            m_chunkedArq->onNativeMarkerFrameReceived(
+                                mf, static_cast<int>(ev.frequency));
+                        if (accepted &&
+                            m_nSubMode != Varicode::JS8CallFT2) {
+                            if (m_arqPreSwitchSubmode == -1) {
+                                m_arqPreSwitchSubmode = m_nSubMode;
+                                qWarning() << "[ARQ-RX] stashed "
+                                              "pre-switch submode="
+                                           << m_arqPreSwitchSubmode
+                                           << "for post-ACK restore";
+                            }
+                            qWarning() << "[ARQ-RX] auto-mode (binary "
+                                          "marker): was=" << m_nSubMode
+                                       << "→ now="
+                                       << Varicode::JS8CallFT2;
+                            setSubmode(Varicode::JS8CallFT2);
+                        }
+                        return;
+                    }
                     int seq = 0, chk4 = 0;
                     QByteArray p8;
                     if (NativeBinary::decodeFrame(value, rem, &seq,

@@ -2004,15 +2004,22 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 // Action tooltip surfaces the size envelope + auto-
                 // ARQ behavior on hover so the operator knows what
                 // they're committing to before the file picker opens.
+                // [BUILD 344 tooltip] Rewritten for the V3 era: size
+                // numbers were V2-only, and "Base32" is untrue for
+                // native transfers (raw binary frames).
                 m_sendFileAction->setToolTip(
-                    "Send file via ARQ. Pick a local file (any format), max size depends on "
-                    "compressibility (typically ~3 KB text or "
-                    "~1 KB binary). Perfect for certain forms where spaces may be meaningful. Sent reliably with per-sub-message "
-                    "ACK/NACK and SHA-256 verify. The file is compressed "
-                    "using GZIP and encoded using Base32, but is NOT encrypted. "
-                    "Encryption is not permitted on amateur bands. "
-                    "Tip: a text file can carry web links — the "
-                    "receiver gets them as clickable URLs.");
+                    "Send file via ARQ. Pick a local file (any "
+                    "format). Capacity depends on compressibility and "
+                    "speed mode — in Subspace up to ~6 KB on the air "
+                    "after built-in compression (often 10-30 KB of "
+                    "text); less in legacy speeds or to older builds. "
+                    "Preserves the file exactly (byte-for-byte, "
+                    "SHA-256 verified), so it's ideal for forms where "
+                    "spacing matters. Compressed with GZIP but NOT "
+                    "encrypted — encryption is not permitted on "
+                    "amateur bands. Tip: a text file can carry a "
+                    "number of web links — the receiver gets them as "
+                    "clickable URLs.");
 
                 // [BUILD 338] "Send web link (URL)…" — directly below
                 // Send file. Prompts for a URL, wraps it in link.txt,

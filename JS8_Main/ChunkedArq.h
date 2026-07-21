@@ -594,6 +594,28 @@ class Manager : public QObject {
     bool hasActiveTxSession() const { return !m_sends.isEmpty(); }
 
     /**
+     * @brief [BUILD 343.3 rxLock] True while a V3 native RECEIVE is
+     *        actively in progress: a collect window is open AND its
+     *        watchdog is still running (hunting frames or between
+     *        chunks). Goes false at delivery, at watchdog give-up
+     *        (window turns passive), and after evict — so UI locks
+     *        keyed on this release promptly when a sender vanishes,
+     *        instead of waiting out the 5-minute assembly evict the
+     *        way binaryAssemblies-based checks would.
+     */
+    bool hasActiveRxWindow() const {
+        for (auto it = m_recv.constBegin(); it != m_recv.constEnd();
+             ++it) {
+            if (it.value().nativeWin.active &&
+                it.value().nativeWin.collectTimer &&
+                it.value().nativeWin.collectTimer->isActive()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * @brief Set by UI_Constructor in response to the operator
      *        toggling the ARQ menu action. The actual gate (mode +
      *        this flag) lives in prepareSending and Modulator; this
@@ -622,6 +644,29 @@ class Manager : public QObject {
      *         (window stays passively open for late frames).
      */
     bool nativeCollectTimeout(QString const &peer);
+
+    /**
+     * @brief [BUILD 344 binMarker] A decoded BINARY marker frame.
+     *        Resolves the sender by peerHash16 against known-peer
+     *        candidates (any m_recv entry — active windows, past
+     *        deliveries, registered negotiation askers); no match =
+     *        silent drop (the text marker is the only fresh-contact
+     *        open). On match, routes through handleNativeMarker
+     *        exactly like a first-chunk-form text marker (the binary
+     *        form always carries TOTAL+KB, so mid-join works too).
+     * @return true iff resolved + handled (caller re-latches submode).
+     */
+    bool onNativeMarkerFrameReceived(NativeBinary::MarkerFrame const &m,
+                                     int freq);
+
+    /**
+     * @brief [BUILD 344 binMarker] Make `peer` resolvable by the
+     *        binary marker's hash before any transfer state exists —
+     *        the UI calls this when answering QUERY ARQ?, so a fresh
+     *        transfer right after negotiation can bind even if the
+     *        chunk-1 TEXT marker is lost (on-air msg-33 failure).
+     */
+    void registerPeerCandidate(QString const &peer);
 
     /**
      * @brief Test seam: shrink the V3 frame-slot duration (default
@@ -712,10 +757,18 @@ class Manager : public QObject {
      *        peer + totalChunks ride along for the per-burst
      *        "[Submsg N of M]" conversation-window feedback line
      *        (rendered with the standard from/to/freq/mode header).
+     *        [BUILD 344 binMarker] markerFrame9: the BINARY marker
+     *        frame's 9 wire bytes (NativeBinary::frameToBytes),
+     *        EMPTY when this burst carries none — inject it AHEAD of
+     *        the payload frames. markerText may now be empty on
+     *        bursts that still carry a binary marker (cadence and
+     *        retries went native; text remains on chunk 1 + every
+     *        TEXT_ID_INTERVALth for station ID).
      */
     void wantToTransmitNativeChunk(QString const &peer,
                                    QString const &markerText,
                                    int chunkId, int totalChunks,
+                                   QByteArray const &markerFrame9,
                                    QByteArray const &chunkBytes);
 
     /**

@@ -249,19 +249,19 @@ static void foreignFrame() {
           "foreign frame: wrong chk4 ignored, chunk clean");
 }
 
-// Scenario 10+K16: NB=128 chunks (K=16) work end to end.
+// Scenario 10+K16: NB=120 chunks (K=15) work end to end.
 static void k16Chunk() {
     Rig r;
-    QByteArray const env = randomEnvelope(200);   // 128 + 72
-    auto const chunks = splitIntoBinaryChunks(env, 128);
+    QByteArray const env = randomEnvelope(200);   // 120 + 80
+    auto const chunks = splitIntoBinaryChunks(env, 120);
     r.marker(QStringLiteral("K9AVT"), 19, 1, 2,
              composeMarkerBody(true, env.size(),
                                payloadCrc16(chunks[0]),
-                               /*chunkBytes=*/128));
+                               /*chunkBytes=*/120));
     r.sendChunkFrames(1, chunks[0]);
     r.sendChunkFrames(2, chunks[1]);
     r.spin();
-    CHECK(r.delivered == env, "K=16: 128-byte chunks deliver");
+    CHECK(r.delivered == env, "K=15: 120-byte chunks deliver");
 }
 
 // Periodic marker arriving for an ALREADY-OPEN auto-advanced window
@@ -295,6 +295,7 @@ struct TxCapture {
     QString markerText;
     int chunkId{0};
     int total{0};
+    QByteArray markerFrame;   // [BUILD 344] 9 wire bytes or empty
     QByteArray bytes;
 };
 
@@ -307,8 +308,9 @@ static void senderSparseMarkers() {
     QObject::connect(&r.mgr,
                      &ChunkedArq::Manager::wantToTransmitNativeChunk,
                      [&tx](QString const &, QString const &m, int cc,
-                           int tt, QByteArray const &b) {
-                         tx.append({m, cc, tt, b});
+                           int tt, QByteArray const &mf,
+                           QByteArray const &b) {
+                         tx.append({m, cc, tt, mf, b});
                      });
     QObject::connect(&r.mgr, &ChunkedArq::Manager::sendComplete,
                      [&complete](QString const &, int, int, int) {
@@ -329,12 +331,26 @@ static void senderSparseMarkers() {
     bool cadenceOk = true;
     QByteArray rejoin;
     for (auto const &t : tx) {
-        bool const wantMarker =
+        // [BUILD 344 binMarker] binary marker on 1,5,9; TEXT only on
+        // chunk 1 (9 chunks < TEXT_ID_INTERVAL=16).
+        bool const wantBinary =
             (t.chunkId % NativeBinary::MARKER_INTERVAL) == 1;
-        if (t.markerText.isEmpty() == wantMarker) cadenceOk = false;
+        bool const wantText = (t.chunkId == 1);
+        if (t.markerFrame.isEmpty() == wantBinary) cadenceOk = false;
+        if (t.markerText.isEmpty() == wantText) cadenceOk = false;
         rejoin += t.bytes;
     }
-    CHECK(cadenceOk, "sender: markers exactly on chunks 1,5,9");
+    CHECK(cadenceOk,
+          "sender: binary markers on 1,5,9; text on chunk 1 only");
+    // Binary marker round-trips with the full field set.
+    NativeBinary::MarkerFrame mfd;
+    auto const f0 = NativeBinary::frameFromBytes(tx[0].markerFrame);
+    CHECK(NativeBinary::decodeMarkerFrame(f0.value, f0.rem, &mfd) &&
+              mfd.totalBytes == env.size() && mfd.chunkBytes == 64 &&
+              mfd.chunkId == 1 &&
+              mfd.peerHash ==
+                  NativeBinary::peerHash16(QStringLiteral("WM8Q")),
+          "sender: chunk-1 binary marker fields + own-call hash");
     CHECK(rejoin == env, "sender: chunk bytes re-join to envelope");
     // Chunk-1 marker parses with TOTAL/KB (strip the ARQ tail via the
     // real parser).
@@ -355,8 +371,9 @@ static void senderNackRetransmit() {
     QObject::connect(&r.mgr,
                      &ChunkedArq::Manager::wantToTransmitNativeChunk,
                      [&tx](QString const &, QString const &m, int cc,
-                           int tt, QByteArray const &b) {
-                         tx.append({m, cc, tt, b});
+                           int tt, QByteArray const &mf,
+                           QByteArray const &b) {
+                         tx.append({m, cc, tt, mf, b});
                      });
     QByteArray const env = randomEnvelope(150);  // 3 chunks
     r.mgr.sendChunkedBinary(QStringLiteral("K9AVT"), env, 16);
@@ -368,17 +385,17 @@ static void senderNackRetransmit() {
     r.mgr.onAckReceived(QStringLiteral("K9AVT"),
                         ChunkedArq::ackWireSeq(1));
     CHECK(tx.size() == 3 && tx[2].chunkId == 2 &&
-              tx[2].markerText.isEmpty(),
-          "sender: fresh markerless chunk sends without marker");
+              tx[2].markerText.isEmpty() && tx[2].markerFrame.isEmpty(),
+          "sender: fresh markerless chunk carries NO markers");
     r.mgr.onNackReceived(QStringLiteral("K9AVT"),
                          ChunkedArq::ackWireSeq(2));
-    // [BUILD 342.9 lastAck] Retransmits ALWAYS carry the marker so a
-    // receiver whose window is gone (delivered / evicted) can identify
-    // the frames and re-ACK. The old "stays markerless" expectation
-    // was the last-ACK hole.
+    // [BUILD 344 binMarker] Retransmit identity now rides the BINARY
+    // marker frame (single-frame robust); retry text markers are gone
+    // for non-chunk-1 chunks.
     CHECK(tx.size() == 4 && tx[3].chunkId == 2 &&
-              !tx[3].markerText.isEmpty(),
-          "sender: retransmit gains identity marker (lastAck fix)");
+              tx[3].markerText.isEmpty() &&
+              !tx[3].markerFrame.isEmpty(),
+          "sender: retransmit carries BINARY identity marker");
     r.mgr.haltAll();
 }
 
@@ -431,11 +448,17 @@ static void watchdogNackGiveUp() {
           "watchdog: expiries 1-3 NACK and re-arm");
     CHECK(!r.mgr.nativeCollectTimeout(peer),
           "watchdog: expiry 4 gives up (mirrors DEFAULT_MAX_RETRIES)");
+    // [BUILD 343.3 rxLock] UI locks key on hasActiveRxWindow — must
+    // release at give-up (passive window), not at the 5-min evict.
+    CHECK(!r.mgr.hasActiveRxWindow(),
+          "rxLock: released at watchdog give-up");
     r.spin();
     CHECK(r.nackCount(1) >= 1,
           "watchdog: at least one NACK emitted while hunting");
     // Progress resets the count: one frame in → hunting again.
     r.frame(0, 1, chunks[0].mid(0, 8));
+    CHECK(r.mgr.hasActiveRxWindow(),
+          "rxLock: re-engages when frames resume (accept re-arms)");
     CHECK(r.mgr.nativeCollectTimeout(peer),
           "watchdog: accepted frame resets the give-up count");
     // Window stayed open through the give-up: chunk still completes.
@@ -457,8 +480,9 @@ static void implicitAckViaNack() {
     QObject::connect(&r.mgr,
                      &ChunkedArq::Manager::wantToTransmitNativeChunk,
                      [&tx](QString const &, QString const &m, int cc,
-                           int tt, QByteArray const &b) {
-                         tx.append({m, cc, tt, b});
+                           int tt, QByteArray const &mf,
+                           QByteArray const &b) {
+                         tx.append({m, cc, tt, mf, b});
                      });
     QByteArray const env = randomEnvelope(150);  // 3 chunks
     r.mgr.sendChunkedBinary(QStringLiteral("K9AVT"), env, 16);
@@ -522,6 +546,37 @@ static void frameTriggeredReAck() {
           "frameReAck: transfer completes after the detour");
 }
 
+// [BUILD 344 binMarker] The msg-33 rescue: chunk-1 TEXT marker lost,
+// but the single binary marker frame opens the window — IF the peer
+// is resolvable by hash (registered negotiation asker or any prior
+// state). Unknown hashes drop silently (text marker remains the only
+// fresh-contact open).
+static void binaryMarkerOpen() {
+    Rig r;
+    QByteArray const env = randomEnvelope(87);   // 64 + 23, msg-33 shape
+    auto const chunks = splitIntoBinaryChunks(env, 64);
+    MarkerFrame m;
+    m.msgId = 33; m.chunkId = 1;
+    m.totalBytes = env.size(); m.chunkBytes = 64;
+    m.pcrc = payloadCrc16(chunks[0]);
+    m.peerHash = peerHash16(QStringLiteral("K9AVT"));
+    auto const f = encodeMarkerFrame(m);
+    MarkerFrame d;
+    decodeMarkerFrame(f.value, f.rem, &d);
+
+    CHECK(!r.mgr.onNativeMarkerFrameReceived(d, 1500),
+          "binMarker: unknown peer hash → silent drop");
+    r.mgr.registerPeerCandidate(QStringLiteral("K9AVT"));
+    CHECK(r.mgr.onNativeMarkerFrameReceived(d, 1500),
+          "binMarker: registered asker resolves by hash");
+    r.sendChunkFrames(1, chunks[0]);
+    r.sendChunkFrames(2, chunks[1]);   // auto-advance, markerless
+    r.spin();
+    CHECK(r.ackCount(1) == 1 && r.ackCount(2) == 1 &&
+              r.delivered == env && r.deliveredMsgId == 33,
+          "binMarker: transfer completes with NO text marker at all");
+}
+
 int main(int argc, char *argv[]) {
     QCoreApplication app(argc, argv);
     QCoreApplication::setOrganizationName(
@@ -544,6 +599,7 @@ int main(int argc, char *argv[]) {
     finalAckLossReAck();
     implicitAckViaNack();
     frameTriggeredReAck();
+    binaryMarkerOpen();
 
     printf("\n%d failures\n", fails);
     return fails ? 1 : 0;

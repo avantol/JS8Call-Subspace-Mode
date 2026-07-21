@@ -42,10 +42,19 @@
 namespace NativeBinary {
 
 constexpr int FRAME_PAYLOAD_BYTES  = 8;    // per frame, after the header byte
-constexpr int MAX_FRAMES_PER_CHUNK = 16;   // SEQ is 4 bits
+// [BUILD 344 binMarker] SEQ 15 is the MARKER FRAME discriminator, so
+// data frames use SEQ 0..14 → 15 frames → 120-byte chunk ceiling
+// (was 16/128; shipped K=8 unaffected).
+constexpr int MARKER_FRAME_SEQ     = 0xF;
+constexpr int MAX_FRAMES_PER_CHUNK = 15;
 constexpr int DEFAULT_CHUNK_BYTES  = 64;   // K=8 (operator decision 2026-07-18)
-constexpr int MAX_CHUNK_BYTES      = 128;  // K=16; receivers accept from day one
-constexpr int MARKER_INTERVAL      = 4;    // sender policy, NOT wire contract
+constexpr int MAX_CHUNK_BYTES      = 120;  // K=15; receivers accept from day one
+constexpr int MARKER_INTERVAL      = 4;    // BINARY marker cadence (sender policy)
+// Text-form marker cadence: station ID + operator-visible line. One
+// text marker per TEXT_ID_INTERVAL chunks ≈ 8.8 min at bench pacing —
+// inside the 10-minute ID rule for max-length transfers (chunk 1's
+// text marker covers everything shorter).
+constexpr int TEXT_ID_INTERVAL     = 16;
 
 /// The exact Varicode::pack72bits domain: `value` = wire bits 71..8
 /// (bytes 0..7 big-endian), `rem` = wire bits 7..0 (byte 8). Mirrors
@@ -65,6 +74,56 @@ Frame72 encodeFrame(int seq, int chunkId, QByteArray const &payload8);
 /// future range rules).
 bool decodeFrame(quint64 value, quint8 rem,
                  int *seq, int *chk4, QByteArray *payload8);
+
+/**
+ * [BUILD 344 binMarker] The BINARY marker frame — one native frame
+ * (SEQ=15) carrying everything the text marker carries except
+ * callsigns, single-frame robust like the payload (2026-07-20 on-air
+ * msg-33: two 100%-decoded payload bursts orphaned because the
+ * 5-frame TEXT marker lost one varicode frame each time). Rides
+ * chunk-1 bursts (redundant with the text marker), every
+ * MARKER_INTERVALth chunk, and every retransmit. Peer binding is a
+ * 16-bit callsign hash validated against the receiver's known-peer
+ * candidates — no match, silent drop (the text marker remains the
+ * only fresh-contact open).
+ *
+ * Wire layout of the 72 bits (MSB-first after the header byte):
+ *   byte 0:    [7..4]=SEQ=0xF  [3..0]=chunkId & 0xF
+ *   bits 63..: msgId(7) CC(7) TOTAL(14) KB/8-1(4) PCRC(16) HASH(16)
+ */
+struct MarkerFrame {
+    int     msgId{0};        // 1..99
+    int     chunkId{0};      // 1..99 (full value; header chk4 = &0xF)
+    int     totalBytes{0};   // envelope bytes, authoritative (<= 14 bits)
+    int     chunkBytes{0};   // KB, 8..120 in steps of 8
+    quint16 pcrc{0};         // payloadCrc16 of THIS chunk
+    quint16 peerHash{0};     // peerHash16(sender callsign)
+};
+/// 9-wire-byte carrier form (signal-friendly): bytes 0..7 = value
+/// big-endian, byte 8 = rem. Empty QByteArray = "no marker frame".
+inline QByteArray frameToBytes(Frame72 const &f) {
+    QByteArray b(9, '\0');
+    for (int i = 0; i < 8; ++i)
+        b[i] = static_cast<char>((f.value >> (8 * (7 - i))) & 0xFF);
+    b[8] = static_cast<char>(f.rem);
+    return b;
+}
+inline Frame72 frameFromBytes(QByteArray const &b) {
+    Frame72 f;
+    if (b.size() != 9) return f;
+    for (int i = 0; i < 8; ++i)
+        f.value = (f.value << 8) | static_cast<quint8>(b.at(i));
+    f.rem = static_cast<quint8>(b.at(8));
+    return f;
+}
+
+Frame72 encodeMarkerFrame(MarkerFrame const &m);
+/// Strict parse: false unless SEQ==MARKER_FRAME_SEQ, header chk4
+/// matches CC, and every field is in range.
+bool decodeMarkerFrame(quint64 value, quint8 rem, MarkerFrame *out);
+/// FNV-1a 32 over the trimmed uppercased callsign, low 16 bits.
+/// Stable across builds — part of the wire contract.
+quint16 peerHash16(QString const &callsign);
 
 /// Slice the compressed envelope into chunk-sized byte blocks.
 QList<QByteArray> splitIntoBinaryChunks(QByteArray const &envelope,

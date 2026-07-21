@@ -749,7 +749,14 @@ void UI_Constructor::on_menuModeJS8_aboutToShow() {
     // — fires only when WE are sending an ARQ super-msg, NOT when
     // we are receiving one. Receiver-side menus stay usable mid-RX
     // (operator can keep working while chunks arrive).
-    bool const arqBusy = (m_chunkedArq && m_chunkedArq->hasActiveTxSession());
+    // [BUILD 343.3 rxLock] Speed/mode also lock during an active V3
+    // RECEIVE (operator decision 2026-07-20, revising the RX-SIDE
+    // NO-LOCK call of 2026-06-10 — the V3 receiver keys ACKs and a
+    // mode switch mid-collect kills the transfer).
+    bool const arqRxBusy =
+        m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+    bool const arqBusy =
+        (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) || arqRxBusy;
     // [BUILD 342.22 v3SpeedLock] m_nativeBinaryTxActive locks speed
     // for the FULL V3 native session — including the idle gaps
     // between chunks where the plain TX checks release. V2 keeps its
@@ -758,7 +765,7 @@ void UI_Constructor::on_menuModeJS8_aboutToShow() {
     // Subspace transport, so a mid-session switch kills the transfer.
     bool const canChangeSpeed =
         !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty()
-        && !m_nativeBinaryTxActive;
+        && !m_nativeBinaryTxActive && !arqRxBusy;
     bool const canChangeMode = canChangeSpeed && !arqBusy;
     ui->actionModeJS8Normal->setEnabled(canChangeSpeed);
     ui->actionModeJS8Fast->setEnabled(canChangeSpeed);
@@ -3582,8 +3589,19 @@ void UI_Constructor::guiUpdate() {
         // the chunked TX — not unlock for the 20-130 s gap in the
         // middle. Cleared by capability capture (resumes into the
         // session lock), timeout fallback (ditto), or abort.
+        // [BUILD 343.3 rxLock] Operator decision 2026-07-20 revising
+        // the RX-SIDE NO-LOCK call of 2026-06-10: with V3 the
+        // receiver is an active protocol participant (ACK keyups
+        // every chunk), so speed/mode/macros/send lock during an
+        // active native RECEIVE too. The outgoing text box stays
+        // EDITABLE on the RX side (compose while receiving — "TYPE
+        // AN OUTGOING MESSAGE HERE, WAIT TO SEND"); only the box's
+        // TX-side lock keys on arqBusy below.
+        bool const arqRxBusy =
+            m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
         bool const arqBusy =
             (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
+            arqRxBusy ||
             !m_pendingFilePath.isEmpty() || !m_pendingLinkUrl.isEmpty();
         // Two-tier gate (2026-06-08, follow-up):
         //   canChangeSpeed — speed mode buttons (S/N/F/T/⚡). Re-
@@ -3597,10 +3615,11 @@ void UI_Constructor::guiUpdate() {
         //     IS unsafe.
         // [BUILD 342.22 v3SpeedLock] See the menu-action site: V3
         // native sessions lock speed for the whole session.
+        // [BUILD 343.3 rxLock] And the RX side of one (arqRxBusy).
         bool const canChangeSpeed =
             !m_transmitting && !m_tune &&
             m_txFrameCount == 0 && m_txFrameQueue.isEmpty() &&
-            !m_nativeBinaryTxActive;
+            !m_nativeBinaryTxActive && !arqRxBusy;
         bool const canChangeMode = canChangeSpeed && !arqBusy;
         if (m_modeBtnNormal && m_modeBtnNormal->isEnabled() != canChangeSpeed) m_modeBtnNormal->setEnabled(canChangeSpeed);
         if (m_modeBtnFast && m_modeBtnFast->isEnabled() != canChangeSpeed) m_modeBtnFast->setEnabled(canChangeSpeed);
@@ -3643,8 +3662,15 @@ void UI_Constructor::guiUpdate() {
         // existing per-frame readOnly toggling at prepareNextMessageFrame
         // already handles single-frame TX; this extends to span
         // chunk-to-chunk gaps inside an ARQ super-message.
+        // [BUILD 343.3 rxLock] Box lock is TX-side ONLY (session or
+        // parked negotiation) — the RX-side lock (arqRxBusy) gates
+        // buttons/menus above but leaves the box editable so the
+        // operator can compose while receiving.
+        bool const arqBoxBusy =
+            (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
+            !m_pendingFilePath.isEmpty() || !m_pendingLinkUrl.isEmpty();
         if (ui->extFreeTextMsgEdit) {
-            if (arqBusy && !ui->extFreeTextMsgEdit->isReadOnly()) {
+            if (arqBoxBusy && !ui->extFreeTextMsgEdit->isReadOnly()) {
                 ui->extFreeTextMsgEdit->setReadOnly(true);
                 update_dynamic_property(ui->extFreeTextMsgEdit,
                                         "transmitting", true);
@@ -3653,7 +3679,7 @@ void UI_Constructor::guiUpdate() {
                 // negotiation).
                 m_arqBoxLocked = true;
                 refreshOutgoingPlaceholder();
-            } else if (!arqBusy && !m_transmitting &&
+            } else if (!arqBoxBusy && !m_transmitting &&
                        (ui->extFreeTextMsgEdit->isReadOnly() ||
                         m_arqBoxLocked) &&
                        m_txFrameQueue.isEmpty()) {
@@ -4872,6 +4898,23 @@ QString UI_Constructor::appendMessage(QString const &text, bool isData,
 // bit-writer, the queue-final OR, and typeahead cosmetics — a
 // mid-queue Last is not terminal; continuation is purely
 // shouldContinue.)
+// [BUILD 344 binMarker] Queue ONE binary marker frame (9 wire bytes
+// from NativeBinary::frameToBytes). No-op on empty — markerless
+// bursts pass an empty QByteArray.
+void UI_Constructor::injectNativeMarkerFrame(QByteArray const &frame9) {
+    if (frame9.size() != 9) return;
+    if (!m_txFrameQueue.isEmpty()) {
+        m_txFrameQueue.last().second |= Varicode::JS8CallLast;
+    }
+    auto const f = NativeBinary::frameFromBytes(frame9);
+    m_txFrameQueue.append(
+        {Varicode::pack72bits(f.value, f.rem),
+         Varicode::JS8CallData | Varicode::JS8CallNativeBinary});
+    ++m_txFrameCount;
+    qWarning() << "[V3-TX] injected binary marker frame:"
+               << "queueDepth=" << m_txFrameQueue.size();
+}
+
 void UI_Constructor::injectNativeBinaryFrames(int const chunkId,
                                               QByteArray const &chunkBytes) {
     if (!m_txFrameQueue.isEmpty()) {
@@ -8624,7 +8667,15 @@ void UI_Constructor::updateTextDisplay() {
     bool emptyText = ui->extFreeTextMsgEdit->toPlainText().isEmpty();
 
     // Disable Send when nothing to send (only update if state changed to avoid flash)
-    setDisabledIfChanged(ui->startTxButton, !canTransmit || isTransmitting || emptyText);
+    // [BUILD 343.3 rxLock] …and during an active V3 receive: the box
+    // stays editable (compose while receiving), but Send waits —
+    // that's the banner's literal promise ("WAIT TO SEND"). Protocol
+    // ACKs bypass this button, so responses still flow.
+    bool const rxHold =
+        m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+    setDisabledIfChanged(ui->startTxButton,
+                         !canTransmit || isTransmitting || emptyText ||
+                             rxHold);
     // [FILE-XFER build 283] Chevron button stays enabled full-time
     // for discoverability — the operator can always open the menu
     // and see what send-options exist. Gating moves to the menu
@@ -8637,11 +8688,17 @@ void UI_Constructor::updateTextDisplay() {
         // [BUILD 309 TODO #70(a)] Also disable during an in-flight ARQ
         // super-message so the operator can't kick off a second
         // chunked-ARQ session on top of one already running.
-        bool const arqTxBusy = m_chunkedArq && m_chunkedArq->hasActiveTxSession();
-        m_sendFileAction->setEnabled(canTransmit && !isTransmitting && !arqTxBusy);
+        // [BUILD 343.3 rxLock] Both directions now: can't start a
+        // transfer while sending OR receiving one (the RX side is
+        // busy keying ACKs; stop-and-wait is one session per peer).
+        bool const arqSessionBusy =
+            m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+                             m_chunkedArq->hasActiveRxWindow());
+        m_sendFileAction->setEnabled(canTransmit && !isTransmitting &&
+                                     !arqSessionBusy);
         if (m_sendWebLinkAction)
             m_sendWebLinkAction->setEnabled(
-                canTransmit && !isTransmitting && !arqTxBusy);
+                canTransmit && !isTransmitting && !arqSessionBusy);
     }
     // [BUILD 331-visHailEpi8] Gate "Send audio-visual HAIL" menu item.
     // Disabled while a Visible Hail sequence is already in flight

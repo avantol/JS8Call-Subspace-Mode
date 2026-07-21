@@ -173,9 +173,9 @@ static void markerTests() {
               mi.totalBytes == 6336 && mi.chunkBytes == 64 &&
               mi.pcrc == crc,
           "marker: first-chunk form round trip (default KB)");
-    CHECK(parseMarkerBody(composeMarkerBody(true, 200, crc, 128), &mi) &&
-              mi.chunkBytes == 128,
-          "marker: first-chunk form carries explicit KB=128");
+    CHECK(parseMarkerBody(composeMarkerBody(true, 200, crc, 120), &mi) &&
+              mi.chunkBytes == 120,
+          "marker: first-chunk form carries explicit KB=120");
     CHECK(parseMarkerBody(periodic, &mi) && !mi.isFirstChunkForm &&
               mi.pcrc == crc,
           "marker: periodic form round trip");
@@ -198,6 +198,54 @@ static void markerTests() {
     for (auto const *r : rejects)
         if (parseMarkerBody(QString::fromUtf8(r), nullptr)) ++bad;
     CHECK(bad == 0, "marker: all malformed forms rejected");
+}
+
+// [BUILD 344 binMarker] Marker-frame codec: exact round trip across
+// field extremes, strict-reject on bad ranges / non-marker SEQ, and
+// hash stability (wire contract — a changed hash strands the fleet).
+static void markerFrameTests() {
+    MarkerFrame m;
+    m.msgId = 22; m.chunkId = 33; m.totalBytes = 3078;
+    m.chunkBytes = 64; m.pcrc = 0xA998;
+    m.peerHash = peerHash16(QStringLiteral("WM8Q"));
+    Frame72 const f = encodeMarkerFrame(m);
+    MarkerFrame d;
+    CHECK(decodeMarkerFrame(f.value, f.rem, &d) &&
+              d.msgId == 22 && d.chunkId == 33 &&
+              d.totalBytes == 3078 && d.chunkBytes == 64 &&
+              d.pcrc == 0xA998 && d.peerHash == m.peerHash,
+          "markerFrame: round trip, typical fields");
+
+    MarkerFrame hi;
+    hi.msgId = 99; hi.chunkId = 99;
+    hi.totalBytes = 99 * MAX_CHUNK_BYTES;  // 11880, 14-bit max case
+    hi.chunkBytes = MAX_CHUNK_BYTES; hi.pcrc = 0xFFFF;
+    hi.peerHash = 0xFFFF;
+    Frame72 const fh = encodeMarkerFrame(hi);
+    MarkerFrame dh;
+    CHECK(decodeMarkerFrame(fh.value, fh.rem, &dh) &&
+              dh.totalBytes == hi.totalBytes &&
+              dh.chunkBytes == MAX_CHUNK_BYTES &&
+              dh.chunkId == 99,
+          "markerFrame: round trip at field maxima");
+
+    // A data frame (SEQ 0..14) must NOT parse as a marker.
+    Frame72 const df = encodeFrame(7, 3, QByteArray(8, '\x5A'));
+    CHECK(!decodeMarkerFrame(df.value, df.rem, nullptr),
+          "markerFrame: data frame rejected (SEQ != 15)");
+
+    // Header chk4 / CC mismatch rejected (corruption guard).
+    Frame72 fx = encodeMarkerFrame(m);
+    fx.value ^= (quint64(1) << 56);  // flip a header chk4 bit
+    CHECK(!decodeMarkerFrame(fx.value, fx.rem, nullptr),
+          "markerFrame: chk4/CC mismatch rejected");
+
+    // Hash stability + case/space insensitivity (wire contract).
+    CHECK(peerHash16(QStringLiteral("wm8q ")) ==
+              peerHash16(QStringLiteral("WM8Q")) &&
+          peerHash16(QStringLiteral("WM8Q")) !=
+              peerHash16(QStringLiteral("WM8Q/P")),
+          "markerFrame: peerHash16 normalized + discriminates");
 }
 
 static void collectorTests() {
@@ -341,6 +389,7 @@ int main() {
     frameCodecTests();
     chunkTests();
     markerTests();
+    markerFrameTests();
     collectorTests();
     fileTransferV3Tests();
     printf("\n%d failures\n", fails);

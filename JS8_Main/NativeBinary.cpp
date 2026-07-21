@@ -49,6 +49,70 @@ bool decodeFrame(quint64 const value, quint8 const rem,
     return true;
 }
 
+Frame72 encodeMarkerFrame(MarkerFrame const &m) {
+    quint8 b[9] = {};
+    b[0] = static_cast<quint8>((MARKER_FRAME_SEQ << 4) |
+                               (m.chunkId & 0xF));
+    // msgId(7) CC(7) TOTAL(14) KB/8-1(4) PCRC(16) HASH(16) = 64 bits.
+    quint64 acc = static_cast<quint64>(m.msgId & 0x7F);
+    acc = (acc << 7)  | static_cast<quint64>(m.chunkId & 0x7F);
+    acc = (acc << 14) | static_cast<quint64>(m.totalBytes & 0x3FFF);
+    acc = (acc << 4)  | static_cast<quint64>(((m.chunkBytes / 8) - 1) & 0xF);
+    acc = (acc << 16) | m.pcrc;
+    acc = (acc << 16) | m.peerHash;
+    for (int i = 0; i < 8; ++i)
+        b[1 + i] = static_cast<quint8>((acc >> (8 * (7 - i))) & 0xFF);
+
+    Frame72 f;
+    for (int i = 0; i < 8; ++i)
+        f.value = (f.value << 8) | b[i];
+    f.rem = b[8];
+    return f;
+}
+
+bool decodeMarkerFrame(quint64 const value, quint8 const rem,
+                       MarkerFrame *out) {
+    quint8 b[9];
+    for (int i = 0; i < 8; ++i)
+        b[i] = static_cast<quint8>((value >> (8 * (7 - i))) & 0xFF);
+    b[8] = rem;
+
+    if (((b[0] >> 4) & 0xF) != MARKER_FRAME_SEQ)
+        return false;
+    quint64 acc = 0;
+    for (int i = 0; i < 8; ++i)
+        acc = (acc << 8) | b[1 + i];
+
+    MarkerFrame m;
+    m.peerHash   = static_cast<quint16>(acc & 0xFFFF);  acc >>= 16;
+    m.pcrc       = static_cast<quint16>(acc & 0xFFFF);  acc >>= 16;
+    m.chunkBytes = (static_cast<int>(acc & 0xF) + 1) * 8; acc >>= 4;
+    m.totalBytes = static_cast<int>(acc & 0x3FFF);      acc >>= 14;
+    m.chunkId    = static_cast<int>(acc & 0x7F);        acc >>= 7;
+    m.msgId      = static_cast<int>(acc & 0x7F);
+
+    // Strict ranges + header/CC consistency: anything off is treated
+    // as not-a-marker (falls back to the orphan path harmlessly).
+    if (m.msgId < 1 || m.msgId > 99) return false;
+    if (m.chunkId < 1 || m.chunkId > 99) return false;
+    if ((b[0] & 0xF) != (m.chunkId & 0xF)) return false;
+    if (m.chunkBytes < 8 || m.chunkBytes > MAX_CHUNK_BYTES) return false;
+    if (m.totalBytes < 1 ||
+        m.totalBytes > 99 * MAX_CHUNK_BYTES) return false;
+    if (out) *out = m;
+    return true;
+}
+
+quint16 peerHash16(QString const &callsign) {
+    QByteArray const utf8 = callsign.trimmed().toUpper().toUtf8();
+    quint32 h = 2166136261u;                 // FNV-1a 32-bit
+    for (char const c : utf8) {
+        h ^= static_cast<quint8>(c);
+        h *= 16777619u;
+    }
+    return static_cast<quint16>(h & 0xFFFF);
+}
+
 QList<QByteArray> splitIntoBinaryChunks(QByteArray const &envelope,
                                         int const chunkBytes) {
     QList<QByteArray> out;

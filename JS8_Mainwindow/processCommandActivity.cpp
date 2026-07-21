@@ -1641,6 +1641,13 @@ void UI_Constructor::processCommandActivity() {
         // deferral — a capability negotiation on the other end times
         // out in 20 s.
         if (arqProtocolReply) {
+            // [BUILD 344 binMarker] The asker is about to become a V3
+            // sender — register it as a peer candidate so a fresh
+            // transfer's BINARY marker can bind by callsign hash even
+            // if the chunk-1 TEXT marker is clipped (on-air msg-33).
+            if (m_chunkedArq) {
+                m_chunkedArq->registerPeerCandidate(d.from);
+            }
             QString const responseText = reply;
             QPointer<UI_Constructor> const self(this);
             QTimer::singleShot(
