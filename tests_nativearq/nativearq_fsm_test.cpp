@@ -399,6 +399,52 @@ static void senderNackRetransmit() {
     r.mgr.haltAll();
 }
 
+// [TURNHOLD 2026-07-21] holdMs>0 defers the NEXT chunk's keyup so it
+// lands after the peer's radio is back in receive (the async decoder
+// reads the ACK before its tail airs; keying 14 ms later lost seq-0
+// on ~40% of unmarked chunks). State advances at once; only the send
+// waits. holdMs omitted / 0 = immediate (every existing test relies
+// on that default — unchanged).
+static void senderTurnaroundHold() {
+    Rig r;
+    QList<TxCapture> tx;
+    bool complete = false;
+    QObject::connect(&r.mgr,
+                     &ChunkedArq::Manager::wantToTransmitNativeChunk,
+                     [&tx](QString const &, QString const &m, int cc,
+                           int tt, QByteArray const &mf,
+                           QByteArray const &b) {
+                         tx.append({m, cc, tt, mf, b});
+                     });
+    QObject::connect(&r.mgr, &ChunkedArq::Manager::sendComplete,
+                     [&complete](QString const &, int, int, int) {
+                         complete = true;
+                     });
+    QByteArray const env = randomEnvelope(150);  // 3 chunks
+    r.mgr.sendChunkedBinary(QStringLiteral("K9AVT"), env, 16);
+    CHECK(tx.size() == 1, "hold: chunk 1 sent immediately");
+    // ACK 1 with a turnaround hold — chunk 2 must be DEFERRED, and
+    // the FSM state must advance now (a duplicate/stale ACK during the
+    // hold is caught by the stale-seq guard, not re-sent).
+    r.mgr.onAckReceived(QStringLiteral("K9AVT"),
+                        ChunkedArq::ackWireSeq(1), 30);
+    CHECK(tx.size() == 1, "hold: chunk 2 deferred during hold window");
+    r.mgr.onAckReceived(QStringLiteral("K9AVT"),
+                        ChunkedArq::ackWireSeq(1), 30);
+    CHECK(tx.size() == 1, "hold: stale dup ACK during hold is a no-op");
+    r.spin(90);  // past the 30 ms hold
+    CHECK(tx.size() == 2 && tx[1].chunkId == 2,
+          "hold: chunk 2 fires once the hold elapses");
+    // holdMs omitted (default 0) → immediate, exactly as before.
+    r.mgr.onAckReceived(QStringLiteral("K9AVT"),
+                        ChunkedArq::ackWireSeq(2));
+    CHECK(tx.size() == 3 && tx[2].chunkId == 3,
+          "hold: holdMs=0 keeps the immediate path");
+    r.mgr.onAckReceived(QStringLiteral("K9AVT"),
+                        ChunkedArq::ackWireSeq(3));
+    CHECK(complete, "hold: transfer completes through the held path");
+}
+
 // [BUILD 342.9 lastAck] Andy's bench scenario 2026-07-19: final ACK
 // blocked → sender retries the last chunk. The retry now carries a
 // periodic-form marker; the receiver (delivered, window closed) must
@@ -681,6 +727,7 @@ int main(int argc, char *argv[]) {
     periodicMarkerRefresh();
     senderSparseMarkers();
     senderNackRetransmit();
+    senderTurnaroundHold();
     watchdogNackGiveUp();
     finalAckLossReAck();
     implicitAckViaNack();

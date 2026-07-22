@@ -572,6 +572,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             cmd.utcTimestamp = cd.utcTimestamp;
                             cmd.tdrift = cd.tdrift;
                             cmd.submode = cd.submode;
+                            cmd.absPos = ev.absPos;  // [TURNHOLD] terminal-frame end-of-air
                             cmd.text = decodedtext.message();
 
                             // TODO: check bits so we only auto respond to
@@ -603,6 +604,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             cmd.utcTimestamp = cd.utcTimestamp;
                             cmd.tdrift = cd.tdrift;
                             cmd.submode = cd.submode;
+                            cmd.absPos = ev.absPos;  // [TURNHOLD] terminal-frame end-of-air
 
                             // TODO: check bits so we only auto respond to
                             // "finished" heartbeats
@@ -730,6 +732,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     cmd.extra =
                         parts.length() > 2 ? parts.mid(3).join(" ") : "";
                     cmd.submode = decodedtext.submode();
+                    cmd.absPos = ev.absPos;  // [TURNHOLD] end-of-air source
                     cmd.tdrift = (cmd.submode == Varicode::JS8CallFT2)
                                      ? 0.0
                                      : m_wideGraph->shouldAutoSyncSubmode(cmd.submode)

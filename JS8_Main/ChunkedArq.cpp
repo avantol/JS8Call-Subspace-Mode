@@ -717,7 +717,41 @@ void Manager::onTxIdlePollTick() {
     }
 }
 
-void Manager::onAckReceived(QString const &fromCall, int seq) {
+// [TURNHOLD 2026-07-21] Defer the next chunk's keyup until the peer's
+// radio is plausibly back in receive. State (nextIdx/retries) has
+// already advanced synchronously — only the SEND waits, so duplicate
+// ACK/NACKs during the hold hit the normal stale-seq ignores. The
+// singleShot re-resolves the peer's SendState at fire time; a halt or
+// completion in between makes it a clean no-op inside sendNextChunk.
+void Manager::scheduleSendNextChunk(QString const &peer, int holdMs) {
+    auto sendIt = m_sends.find(peer);
+    bool const binary = sendIt != m_sends.end() && sendIt.value().isBinary;
+    if (holdMs <= 0 || !binary) {
+        sendNextChunk(peer);
+        return;
+    }
+    SendState &state = sendIt.value();
+    if (state.sendHoldPending) {
+        qCWarning(chunkedarq_js8)
+            << "[ARQ-TX] turnaround hold already pending: peer=" << peer
+            << "— ignoring duplicate schedule";
+        return;
+    }
+    state.sendHoldPending = true;
+    qCWarning(chunkedarq_js8)
+        << "[ARQ-TX] turnaround hold: peer=" << peer
+        << "holdMs=" << holdMs << "before next keyup";
+    QTimer::singleShot(holdMs, this, [this, peer]() {
+        auto it = m_sends.find(peer);
+        if (it != m_sends.end()) {
+            it.value().sendHoldPending = false;
+        }
+        sendNextChunk(peer);
+    });
+}
+
+void Manager::onAckReceived(QString const &fromCall, int seq,
+                            int const holdMs) {
     auto sendIt = m_sends.find(fromCall);
     if (sendIt == m_sends.end()) {
         return;  // no in-flight send for this peer
@@ -745,10 +779,11 @@ void Manager::onAckReceived(QString const &fromCall, int seq) {
         << "[ARQ-TX] ACK received peer=" << fromCall
         << "chunk=" << seq << "/" << state.chunks.size()
         << "next=" << state.nextIdx;
-    sendNextChunk(fromCall);
+    scheduleSendNextChunk(fromCall, holdMs);
 }
 
-void Manager::onNackReceived(QString const &fromCall, int seq) {
+void Manager::onNackReceived(QString const &fromCall, int seq,
+                             int const holdMs) {
     auto sendIt = m_sends.find(fromCall);
     if (sendIt == m_sends.end()) {
         return;
@@ -770,7 +805,7 @@ void Manager::onNackReceived(QString const &fromCall, int seq) {
             << "[ARQ-TX] NACK for next chunk => implicit ACK: peer="
             << fromCall << "nacked=" << (expectedCc + 1)
             << "implies delivered=" << expectedCc;
-        onAckReceived(fromCall, ackWireSeq(expectedCc));
+        onAckReceived(fromCall, ackWireSeq(expectedCc), holdMs);
         return;
     }
     // [BUILD 339 TODO #104] Modulo-31 wire compare (see onAckReceived).
@@ -810,7 +845,7 @@ void Manager::onNackReceived(QString const &fromCall, int seq) {
         << "[ARQ-TX] NACK -> retransmit: peer=" << fromCall
         << "chunk=" << expectedCc << "/" << state.chunks.size()
         << "retry=" << state.retries;
-    sendNextChunk(fromCall);
+    scheduleSendNextChunk(fromCall, holdMs);
 }
 
 void Manager::onAckTimerExpired() {

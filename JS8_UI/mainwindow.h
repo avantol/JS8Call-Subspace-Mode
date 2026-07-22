@@ -1005,6 +1005,11 @@ class UI_Constructor : public QMainWindow {
         float tdrift;
         int submode;
         QString relayPath;
+        // [TURNHOLD 2026-07-21] Ring position of this frame's Costas
+        // (mirror of ActivityDetail::absPos; 0 = not set). The ARQ
+        // ACK/NACK handler derives the peer's frame end-of-air from
+        // it to time the inter-chunk turnaround hold.
+        std::int64_t absPos{0};
     };
 
     struct ActivityDetail {

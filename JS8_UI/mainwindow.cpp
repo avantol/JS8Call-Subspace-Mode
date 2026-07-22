@@ -7937,6 +7937,16 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
     // to advance — the message stalls at one chunk forever.
     if (m_chunkedArq && m_stopTxButtonIsLongterm) {
         m_chunkedArq->haltAll();
+        // [TODO #109 2026-07-21] haltAll() stops the RX collect
+        // watchdog (clearNativeState), but the operator-visible
+        // "MULTI-PART MSG IN PROGRESS... WAIT TO SEND" banner is only
+        // dropped on delivery or the 60 s restore timer — and every
+        // watchdog NACK keyup re-arms that timer, so on a failed/
+        // halted RECEIVE it lingers. restoreArqPlaceholder() is the
+        // banner's existing counterpart (called on delivery at
+        // onNativeBinaryMessageReceived); Halt is another terminal —
+        // drop the banner now instead of waiting the timer out.
+        restoreArqPlaceholder();
     }
 
     if (m_stopTxButtonIsLongterm) {
@@ -8503,11 +8513,21 @@ void UI_Constructor::updateButtonDisplay() {
     // Baking arqBusy into the local isTransmitting flag holds them
     // all disabled for the entire ARQ session in one stroke without
     // touching each setDisabledIfChanged call.
-    // [RX-SIDE NO-LOCK 2026-06-10] hasActiveTxSession() — macro
-    // buttons stay usable on the receiver side mid-RX (operator can
-    // type STATUS / INFO / HB / etc. while chunks arrive from a peer).
+    // [BUILD 343.3 rxLock REVISION 2026-07-21] The 2026-06-10 RX-no-
+    // lock rule (macro buttons usable mid-RX, hasActiveTxSession()
+    // only) was revised on 2026-07-20 to ALSO lock during an active
+    // native RECEIVE: any macro auto-keys, and keying mid-collect
+    // collides with our own ACKs and kills the transfer. That
+    // revision reached the Speed/Mode gates in guiUpdate but MISSED
+    // this shared isTransmitting flag — the actual gate for the whole
+    // CQ..Saved macro row — so the buttons stayed live on RX. Fold
+    // hasActiveRxWindow() in here to lock the entire row in one stroke
+    // (the compose box stays editable on RX — that lock is arqBoxBusy,
+    // TX-only, separate).
     bool isTransmitting = isMessageQueuedForTransmit() ||
-                          (m_chunkedArq && m_chunkedArq->hasActiveTxSession());
+                          (m_chunkedArq &&
+                           (m_chunkedArq->hasActiveTxSession() ||
+                            m_chunkedArq->hasActiveRxWindow()));
 
     auto selectedCallsign = callsignSelected(true);
     bool emptyCallsign = selectedCallsign.isEmpty();
@@ -8862,6 +8882,17 @@ void UI_Constructor::updateTextStatsDisplay(QString text, int count) {
 void UI_Constructor::updateTxButtonDisplay() {
     // can we transmit at all?
     bool canTransmit = ensureCanTransmit();
+    // [BUILD 343.3 rxLock REVISION 2026-07-21] Third of the three
+    // button-gate functions (guiUpdate + updateButtonDisplay are the
+    // others). The RX-side lock must hold the Send button + Send-file
+    // + Send-web-link during an active native RECEIVE too — otherwise
+    // the operator keys a fresh TX mid-collect and stomps our own
+    // ACKs. NOT folded into ensureCanTransmit(): that's the shared
+    // monitor-TX gate the protocol's OWN ACK path relies on (ACKs
+    // bypass this button via onChunkedWantToTransmit). Compose box
+    // stays editable (arqBoxBusy, TX-only).
+    bool const arqRxBusy =
+        m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
 
     // if we're tuning or have a message queued
     if (m_tune || isMessageQueuedForTransmit()) {
@@ -8899,7 +8930,7 @@ void UI_Constructor::updateTxButtonDisplay() {
                 ? State::timed(State::Send, m_txFrameCountEstimate * m_TRperiod)
                 : State::Send.toString();
         ui->startTxButton->setText(buttonText);
-        bool const sendEnabled = canTransmit &&
+        bool const sendEnabled = canTransmit && !arqRxBusy &&
                                  m_txFrameCountEstimate > 0 &&
                                  !ui->extFreeTextMsgEdit->toPlainText().isEmpty();
         ui->startTxButton->setEnabled(sendEnabled);
@@ -8909,9 +8940,10 @@ void UI_Constructor::updateTxButtonDisplay() {
         // an empty outgoing box is a valid starting state for "pick
         // a file to send". Chevron button itself stays enabled
         // full-time for discoverability.
-        if (m_sendFileAction) m_sendFileAction->setEnabled(canTransmit);
+        if (m_sendFileAction)
+            m_sendFileAction->setEnabled(canTransmit && !arqRxBusy);
         if (m_sendWebLinkAction)
-            m_sendWebLinkAction->setEnabled(canTransmit);
+            m_sendWebLinkAction->setEnabled(canTransmit && !arqRxBusy);
     }
 }
 

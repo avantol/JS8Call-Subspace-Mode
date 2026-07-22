@@ -120,6 +120,15 @@ QString leadingPeerOf(QString const &boxText);
 // enabled).
 QString effectivePeer(QString const &selected, QString const &boxText);
 constexpr int    MAX_CHUNK_BODY_CHARS    = 60;    // body per chunk; tune for failure rate
+
+// [TURNHOLD 2026-07-21] V3 inter-chunk turnaround hold. The next
+// chunk's keyup waits until the peer's ACK/NACK has finished AIRING
+// (end-of-air derived from the decode's absPos; the async decoder can
+// decode a frame before its own tail airs) plus the peer's 250 ms
+// post-roll plus a TX→RX turnaround margin. FT2 frame = 105 symbols ×
+// 288 samples = 30240 ring samples @ 12 kHz.
+constexpr qint64 TURNAROUND_FRAME_SAMPLES = 30240;
+constexpr int    TURNAROUND_TAIL_MS       = 1750;  // 250 post-roll + 1500 margin
 constexpr int    CHUNKED_MARKER_LEN      = 14;    // len("#NN.CC/TT.HHHH")
 
 constexpr int    DEFAULT_MAX_RETRIES     = 3;
@@ -348,6 +357,10 @@ struct SendState {
     // ACK budget on our own cycle-alignment + frame TX.
     bool           awaitingTxDone{false};
     qint64         awaitingSinceMs{0};
+
+    // [TURNHOLD 2026-07-21] A deferred sendNextChunk singleShot is
+    // pending (V3 turnaround hold) — guards against double-scheduling.
+    bool           sendHoldPending{false};
 
     // Set in sendChunked() when the body's leading token looks like a
     // JS8 "MSG" directive (either bare "MSG ..." for inbox or
@@ -734,14 +747,26 @@ class Manager : public QObject {
      *        from `fromCall`. Called from processCommandActivity's ACK
      *        handler.
      */
-    void onAckReceived(QString const &fromCall, int seq);
+    /**
+     * [TURNHOLD 2026-07-21] holdMs > 0 defers the NEXT chunk's send
+     * (V3 only) so our keyup lands after the peer's radio is back in
+     * receive. Bench 2026-07-21 (logs 210707Z/211222Z): the async
+     * decoder reads the peer's ACK from the ring BEFORE the ACK's own
+     * post-roll finishes airing, and we keyed the next chunk 14 ms
+     * later — while the peer was still keyed / in TX→RX turnaround.
+     * Result: seq-0 lost on ~40% of unmarked chunks, ~40-50 s retry
+     * each. The caller computes holdMs from the ACK's end-of-air
+     * (absPos) + TURNAROUND_TAIL_MS. State advances immediately;
+     * only the send is deferred.
+     */
+    void onAckReceived(QString const &fromCall, int seq, int holdMs = 0);
 
     /**
      * @brief Notify the manager that we received a NACK for chunk `seq`
      *        from `fromCall`. Triggers immediate retransmission of the
      *        in-flight chunk if it matches.
      */
-    void onNackReceived(QString const &fromCall, int seq);
+    void onNackReceived(QString const &fromCall, int seq, int holdMs = 0);
 
   signals:
     /**
@@ -986,6 +1011,9 @@ class Manager : public QObject {
     // Fire the next pending chunk for `peer`, or finish the send if
     // all chunks have been delivered.
     void sendNextChunk(QString const &peer);
+    // [TURNHOLD 2026-07-21] sendNextChunk now, or after holdMs (V3
+    // sends only — V2's box/typeahead path is naturally slow enough).
+    void scheduleSendNextChunk(QString const &peer, int holdMs);
     // Send a NACK to `peer` for chunk `seq`, rate-limited per peer.
     void tryNack(QString const &peer, int seq);
     // Send an ACK to `peer` for chunk `seq` (always, unrate-limited).

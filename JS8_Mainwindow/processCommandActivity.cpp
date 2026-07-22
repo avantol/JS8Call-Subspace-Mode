@@ -295,13 +295,34 @@ void UI_Constructor::processCommandActivity() {
             bool extraOk = false;
             int const seq = d.extra.toInt(&extraOk);
             if (extraOk) {
+                // [TURNHOLD 2026-07-21] The async decoder can decode
+                // the peer's ACK/NACK BEFORE its tail finishes airing
+                // (bench: keyed 14 ms after decode while the peer was
+                // still in TX → its radio missed our first frame,
+                // seq-0 lost on ~40% of unmarked chunks). Hold the
+                // next keyup until the frame's END-OF-AIR (absPos +
+                // one FT2 frame, against the live ring position) plus
+                // the peer's post-roll + turnaround margin. absPos==0
+                // (no ring context) falls back to the tail alone.
+                int holdMs = ChunkedArq::TURNAROUND_TAIL_MS;
+                if (d.absPos > 0) {
+                    qint64 remain =
+                        (d.absPos + ChunkedArq::TURNAROUND_FRAME_SAMPLES) -
+                        m_l2RingPos.load();
+                    // A just-decoded frame can have at most one frame
+                    // still airing — clamp so a stale/bogus absPos can
+                    // never produce an unbounded hold.
+                    remain = qBound<qint64>(
+                        0, remain, ChunkedArq::TURNAROUND_FRAME_SAMPLES);
+                    holdMs += static_cast<int>(remain * 1000 / 12000);
+                }
                 if (d.cmd == " ACK") {
-                    m_chunkedArq->onAckReceived(d.from, seq);
+                    m_chunkedArq->onAckReceived(d.from, seq, holdMs);
                     // Fall through — the existing ACK handler below
                     // does notification (tryNotify) and we want that
                     // to fire as the operator-visible cue too.
                 } else if (d.cmd == " NACK") {
-                    m_chunkedArq->onNackReceived(d.from, seq);
+                    m_chunkedArq->onNackReceived(d.from, seq, holdMs);
                     // Fall through — operator-visible cue in the
                     // conversation window matters for NACK too;
                     // without the display we only saw NACKs in the
