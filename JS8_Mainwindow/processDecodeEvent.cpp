@@ -387,11 +387,24 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
 
                     // if we have a data frame, and a message buffer has been
                     // established, buffer it...
-                    if (hasExistingMessageBuffer(decodedtext.submode(),
+                    // [EARLY-FRAMES 2026-07-22] ...and if no buffer exists
+                    // YET, HOLD the frame instead of dropping it: it may be
+                    // a body frame decoded ahead of its own header (one
+                    // decode pass can surface two frames and report them out
+                    // of transmission order, since candidates come back
+                    // ordered by frequency/sync, not by time). It is drained
+                    // into the buffer the moment the header opens it.
+                    // Call order preserved: hasExistingMessageBuffer
+                    // MIGRATES a nearby buffer as a side effect, so it must
+                    // still run first and exactly once.
+                    bool const haveMsgBuffer =
+                        hasExistingMessageBuffer(decodedtext.submode(),
                                                  d.offset, true,
-                                                 &prevBufferOffset) &&
+                                                 &prevBufferOffset);
+                    bool const isPlainDataFrame =
                         !decodedtext.isCompound() &&
-                        !decodedtext.isDirectedMessage()) {
+                        !decodedtext.isDirectedMessage();
+                    if (haveMsgBuffer && isPlainDataFrame) {
                         qCDebug(mainwindow_js8)
                             << "buffering data" << d.dial << d.offset << d.text;
                         d.isBuffered = true;
@@ -439,6 +452,15 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             logCallActivity(cd, false);
                         }
                         // TODO: incremental display if it's "to" me.
+                    } else if (isPlainDataFrame && d.absPos > 0) {
+                        // [EARLY-FRAMES] No buffer yet — this may be a body
+                        // frame decoded ahead of its own header. Hold it;
+                        // the header reclaims it via drainEarlyTextFrames.
+                        // absPos > 0 means it came from the Subspace async
+                        // decoder — the only path that can invert order,
+                        // and the only one with a ring position to judge
+                        // ownership by.
+                        holdEarlyTextFrame(d);
                     }
 
                     m_rxActivityQueue.append(d);
@@ -779,6 +801,16 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
 
                         m_messageBuffer[cmd.offset].cmd = cmd;
                         m_messageBuffer[cmd.offset].msgs.clear();
+                        // [EARLY-FRAMES 2026-07-22] The clear above is
+                        // correct — this buffer belongs to a NEW message —
+                        // but body frames of THIS message may already have
+                        // been decoded ahead of this header and parked.
+                        // Reclaim them now, judged by ring position (they
+                        // sit later on the ring than this header). Without
+                        // this the message assembles short and every
+                        // retransmission fails identically.
+                        drainEarlyTextFrames(cmd.submode, cmd.offset,
+                                             cmd.absPos);
                     } else {
                         m_rxCommandQueue.append(cmd);
                     }

@@ -1277,6 +1277,24 @@ class UI_Constructor : public QMainWindow {
     QMap<int, int> m_rxFrameBlockNumbers; // freq -> block
     BandActivity m_bandActivity; // freq -> [(text, last timestamp), ...]
     QMap<int, MessageBuffer> m_messageBuffer; // freq -> (cmd, [frames, ...])
+    // [EARLY-FRAMES 2026-07-22] Data frames decoded BEFORE the header
+    // frame that opens their message buffer. Until now such a frame was
+    // silently DISCARDED (it only reached band activity), because
+    // buffering required an already-established buffer — so a message
+    // assembled one frame short, failed CRC, and every retransmission
+    // failed IDENTICALLY (the same audio yields the same decode order),
+    // making the chunk permanently undeliverable. Proven on air
+    // 2026-07-22: sub-msg 4/7 lost exactly "AYDAMGKF" four times.
+    //
+    // This is the text-path mirror of the V3 native ORPHAN STORE, which
+    // already solves the same problem for binary frames: hold what you
+    // can't place yet, drain it when the owner appears, and let the
+    // monotonic ring position decide order. Bounded by age AND count so
+    // stray traffic from other stations can't accumulate.
+    QList<ActivityDetail> m_earlyTextFrames;
+    void holdEarlyTextFrame(ActivityDetail const &d);
+    void drainEarlyTextFrames(int submode, int offset,
+                              std::int64_t headerAbsPos);
     int m_lastClosedMessageBufferOffset;
     QMap<QString, CallDetail>
         m_callActivity; // call -> (last freq, last timestamp)

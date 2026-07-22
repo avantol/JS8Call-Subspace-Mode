@@ -262,21 +262,23 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                    << (garbage ? "FILTERED" : "");
 
         if (garbage) {
-            // Show sync-low rejects in UI for WM8Q analysis
-            if (showRejected && syncLow && !reservedBad && !noFlags) {
-                auto rejData = QString("<REJECTED> %1").arg(frame).toStdString();
-                emitEvent(Event::Decoded{
-                    .utc = utc,
-                    .snr = snr,
-                    .xdt = dt,
-                    .frequency = freq,
-                    .data = rejData,
-                    .type = frameBits,
-                    .quality = 1.0f,
-                    .mode = 16,
-                    .l2 = true
-                });
-            }
+            // [2026-07-22] REMOVED: the old "show sync-low rejects in the
+            // UI" hook emitted a REAL Decoded event whose payload was the
+            // diagnostic string "<REJECTED> <frame>". Downstream that is
+            // indistinguishable from a body frame, so it was concatenated
+            // straight into multi-frame text messages — body 83 chars
+            // instead of 60, CRC mismatch, NACK, retransmit. Proven on air
+            // 2026-07-22: msgId 69 chunks 6 and 14 were the ONLY retries in
+            // a 15-chunk transfer, both with "<REJECTED> ..." at the head
+            // of the body. It was enabled by a callsign test
+            // (startsWith("WM8Q")), so it corrupted only the developer's
+            // own stations — invisible to the fleet and easy to misread as
+            // poor conditions.
+            //
+            // Nothing is lost for analysis: every rejected frame is ALREADY
+            // logged by the qWarning above, tagged SYNC-LOW / RESERVED-BAD /
+            // NO-FLAGS / FILTERED. Rejected frames must never enter the
+            // decode pipeline — a diagnostic is not a frame.
             continue;
         }
 

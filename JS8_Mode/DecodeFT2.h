@@ -30,8 +30,13 @@ class DecodeFT2 {
      */
     static inline std::atomic<bool> fortranLock{false};
 
-    /** Show sync-low rejected frames in UI (for developer analysis) */
-    static inline bool showRejected{false};
+    // [2026-07-22] showRejected REMOVED. It surfaced sync-low rejects by
+    // emitting them as real Decoded events carrying "<REJECTED> <frame>";
+    // downstream that is indistinguishable from a body frame and corrupted
+    // multi-frame text messages. Rejected frames are logged by the decoder
+    // (SYNC-LOW / RESERVED-BAD / NO-FLAGS / FILTERED) — that is the
+    // supported way to analyse them. Do not reintroduce a path that feeds
+    // rejects into the decode pipeline.
 
     /**
      * Run FT2 decode on audio data from dec_data.

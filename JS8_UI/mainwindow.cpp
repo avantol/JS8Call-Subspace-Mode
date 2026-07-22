@@ -2542,6 +2542,68 @@ bool UI_Constructor::hasExistingMessageBuffer(int submode, int offset,
     return false;
 }
 
+// [EARLY-FRAMES 2026-07-22] Hold a data frame that arrived before the
+// header frame which will open its message buffer. Bounded two ways so
+// stray traffic (other stations' body frames whose header we never
+// decode) cannot accumulate: drop anything older than the age limit,
+// then cap the total, oldest out first.
+namespace {
+constexpr int EARLY_FRAME_MAX_AGE_S = 60;   // header should land within
+                                            // a few passes; 60 s covers a
+                                            // long message plus late decode
+constexpr int EARLY_FRAME_CAP       = 32;   // ~3 full messages' worth
+}
+
+void UI_Constructor::holdEarlyTextFrame(ActivityDetail const &d) {
+    auto const now = DriftingDateTime::currentDateTimeUtc();
+    for (int i = m_earlyTextFrames.size() - 1; i >= 0; --i) {
+        if (m_earlyTextFrames.at(i).utcTimestamp.secsTo(now) >
+            EARLY_FRAME_MAX_AGE_S) {
+            m_earlyTextFrames.removeAt(i);
+        }
+    }
+    m_earlyTextFrames.append(d);
+    while (m_earlyTextFrames.size() > EARLY_FRAME_CAP) {
+        m_earlyTextFrames.removeFirst();
+    }
+    qCDebug(mainwindow_js8)
+        << "[EARLY-FRAMES] held frame with no buffer yet: offset=" << d.offset
+        << "absPos=" << d.absPos << "held=" << m_earlyTextFrames.size();
+}
+
+// Move held frames belonging to the message just opened at `offset` into
+// its buffer. "Belonging" is decided by the monotonic ring position, not
+// by arrival order: the header is always transmitted FIRST, so a frame of
+// this message sits LATER on the ring than the header. Anything at or
+// before the header's position is from an earlier message and is dropped.
+// Frames are appended in whatever order they come out — the assembly step
+// already sorts by ring position, which is the whole point.
+void UI_Constructor::drainEarlyTextFrames(int submode, int offset,
+                                          std::int64_t headerAbsPos) {
+    if (m_earlyTextFrames.isEmpty() || headerAbsPos <= 0) {
+        return;
+    }
+    int const range = JS8::Submode::rxThreshold(submode);
+    int moved = 0;
+    for (int i = m_earlyTextFrames.size() - 1; i >= 0; --i) {
+        auto const &e = m_earlyTextFrames.at(i);
+        if (e.submode != submode || qAbs(e.offset - offset) > range) {
+            continue;
+        }
+        if (e.absPos > headerAbsPos) {
+            m_messageBuffer[offset].msgs.append(e);
+            ++moved;
+        }
+        m_earlyTextFrames.removeAt(i);   // consumed or stale — either way
+    }
+    if (moved) {
+        qCWarning(mainwindow_js8)
+            << "[EARLY-FRAMES] restored" << moved
+            << "frame(s) decoded before their header into buffer at offset="
+            << offset << "headerAbsPos=" << headerAbsPos;
+    }
+}
+
 bool UI_Constructor::hasClosedExistingMessageBuffer(int offset) {
 #if 0
     int range = 10;
@@ -10365,8 +10427,12 @@ void UI_Constructor::l2TryDecode(char const *source) {
             }
         }
 
-        // Show rejected sync-low frames for WM8Q analysis
-        JS8::DecodeFT2::showRejected = m_config.my_callsign().startsWith("WM8Q");
+        // [2026-07-22] REMOVED: this set showRejected from a callsign test
+        // (startsWith("WM8Q")), which made rejected frames enter the decode
+        // pipeline as "<REJECTED> ..." text and corrupt multi-frame
+        // messages — on the developer's own stations only. A debug hook
+        // must never be keyed on callsign, and must never alter data
+        // handling. Rejected frames are still fully logged by the decoder.
 
         std::int8_t newBits[77 * 20] = {};
         int nNewDecoded = 0;
