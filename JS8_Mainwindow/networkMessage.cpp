@@ -18,6 +18,27 @@
  *
  * @param message The network message to process
  */
+// [TODO #112 2026-07-23] "Is an ARQ transfer in flight?" — either
+// direction. Used both to synthesise a non-zero TX queue depth (so
+// existing API clients, which already treat non-zero as "don't send",
+// need no changes) and to populate the explicit BUSY fields.
+bool UI_Constructor::arqBusyNow() const {
+    return m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+                            m_chunkedArq->hasActiveRxTransfer());
+}
+
+// Short machine-readable reason, for clients that want to distinguish
+// "wait for a long transfer" from "wait for one frame".
+QString UI_Constructor::busyReason() const {
+    if (m_chunkedArq && m_chunkedArq->hasActiveTxSession())
+        return QStringLiteral("arq_tx");
+    if (m_chunkedArq && m_chunkedArq->hasActiveRxTransfer())
+        return QStringLiteral("arq_rx");
+    if (m_transmitting)
+        return QStringLiteral("transmitting");
+    return QString{};
+}
+
 void UI_Constructor::networkMessage(Message const &message) {
     auto type = message.type();
 
@@ -229,6 +250,29 @@ void UI_Constructor::networkMessage(Message const &message) {
         sendNetworkMessage("STATION.STATUS", m_config.my_status(),
                            {
                                {"_ID", id},
+                           });
+        return;
+    }
+    /** @brief STATION.GET_BUSY: [TODO #112] Is the program busy — i.e.
+     * would transmitting right now collide with something already in
+     * progress? True while an ARQ transfer is in flight in EITHER
+     * direction (file, web link or plain super-message) or while we are
+     * keyed. Clients that cannot be updated should instead just honour
+     * TX.QUEUE_DEPTH, which now reads non-zero for the whole session. */
+    if (type == "STATION.GET_BUSY") {
+        sendNetworkMessage("STATION.BUSY", busyReason(),
+                           {
+                               {"_ID", id},
+                               {"BUSY", QVariant(arqBusyNow() ||
+                                                 m_transmitting)},
+                               {"BUSY_REASON", busyReason()},
+                               {"PTT", QVariant(m_transmitting)},
+                               {"ARQ_TX_ACTIVE",
+                                QVariant(m_chunkedArq &&
+                                         m_chunkedArq->hasActiveTxSession())},
+                               {"ARQ_RX_ACTIVE",
+                                QVariant(m_chunkedArq &&
+                                         m_chunkedArq->hasActiveRxTransfer())},
                            });
         return;
     }
@@ -545,6 +589,19 @@ if(type == "STATION.SET_SPOT") {
      */
     if(type == "TX.GET_QUEUE_DEPTH"){
       int depth = m_txMessageQueue.size();
+      // [TODO #112 2026-07-23] Report BUSY as a non-zero depth so that
+      // EXISTING clients need no changes: they already treat non-zero as
+      // "don't send". This extends the convention the line below has
+      // always used (transmitting + empty queue => report 1) from a
+      // single frame to a whole ARQ session. Without it a client polling
+      // this sees an IDLE station in the middle of a ~55 minute
+      // transfer, because the message queue genuinely empties between
+      // chunks — the same false-idle reading that once armed our own ACK
+      // timer mid-chunk. Value stays 1 rather than the remaining-chunk
+      // count so clients that size buffers or display this are not
+      // surprised; precise state is in the explicit fields on
+      // QSO.CONTEXT / STATION.BUSY.
+      if(arqBusyNow() && depth==0) depth=1;
       if(m_transmitting && depth==0) depth=1;
       sendNetworkMessage("TX.QUEUE_DEPTH", "", {
 	  {"_ID", id},
@@ -672,6 +729,9 @@ if(type == "STATION.SET_SPOT") {
      * need a cheap "what's the current picture?" call. */
     if (type == "QSO.GET_CONTEXT") {
         int depth = m_txMessageQueue.size();
+        // [TODO #112] See TX.GET_QUEUE_DEPTH — busy reads as depth 1 so
+        // existing clients behave correctly with no changes.
+        if (arqBusyNow() && depth == 0) depth = 1;
         if (m_transmitting && depth == 0) depth = 1;
 
         auto now = DriftingDateTime::currentDateTimeUtc();
@@ -696,6 +756,16 @@ if(type == "STATION.SET_SPOT") {
                 {"OFFSET", QVariant((quint64)freq())},
                 {"PTT", QVariant(m_transmitting)},
                 {"TX_QUEUE_DEPTH", depth},
+                // [TODO #112] Explicit busy state for clients that want
+                // precision rather than inferring it from depth.
+                {"BUSY", QVariant(arqBusyNow() || m_transmitting)},
+                {"BUSY_REASON", busyReason()},
+                {"ARQ_TX_ACTIVE",
+                 QVariant(m_chunkedArq &&
+                          m_chunkedArq->hasActiveTxSession())},
+                {"ARQ_RX_ACTIVE",
+                 QVariant(m_chunkedArq &&
+                          m_chunkedArq->hasActiveRxTransfer())},
                 {"CALL_SELECTED", callsignSelected()},
                 {"ACTIVE_OFFSETS_2MIN", recentDecodes},
                 {"UTC", QVariant(now.toMSecsSinceEpoch())},
@@ -733,6 +803,29 @@ if(type == "STATION.SET_SPOT") {
         auto ok = false;
         auto const speed =
             message.params().value("SPEED", QVariant(m_nSubMode)).toInt(&ok);
+        // [TODO #112 2026-07-23] Honour the SAME speed lock the UI uses.
+        // Until now this path forced the change regardless: the lock only
+        // calls setEnabled(false) on the mode actions, and setChecked()
+        // on a DISABLED action still works programmatically — so an API
+        // client could switch speed in the middle of a V3 native session
+        // even while every button was greyed out, killing the transfer
+        // (V3 binary frames exist only in the Subspace transport). Seen
+        // with msg-rotator.sh, which sets speed 2-3x per cycle.
+        if (ok && !canChangeSpeedNow()) {
+            qWarning() << "[API] MODE.SET_SPEED refused: speed is locked"
+                       << "(transmitting/tuning/frames queued/native TX or"
+                          " RX session in progress)";
+            sendNetworkMessage("MODE.SET_SPEED", "",
+                               {
+                                   {"_ID", id},
+                                   {"SPEED", m_nSubMode},
+                                   {"REFUSED", true},
+                                   {"REASON", busyReason().isEmpty()
+                                                  ? QStringLiteral("tx_busy")
+                                                  : busyReason()},
+                               });
+            return;
+        }
         if (ok) {
             if (speed == Varicode::JS8CallNormal)
                 ui->actionModeJS8Normal->setChecked(true);

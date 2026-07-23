@@ -616,6 +616,40 @@ class Manager : public QObject {
      *        instead of waiting out the 5-minute assembly evict the
      *        way binaryAssemblies-based checks would.
      */
+    /**
+     * @brief [TODO #112 2026-07-23] True while ANY chunked ARQ transfer
+     *        is inbound to us — V1/V2 text assemblies (file transfers,
+     *        web links AND plain ARQ super-messages) or a V3 native
+     *        collect window / partial binary assembly.
+     *
+     *        Deliberately broader than hasActiveRxWindow() (V3 only):
+     *        the collision physics are identical whatever the payload —
+     *        stop-and-wait, half-duplex, we go deaf while transmitting,
+     *        and any auto-reply we key mid-transfer stomps our own ACK
+     *        and costs a full retry cycle. The reply dispatch already
+     *        suppressed auto-replies while a single multi-frame message
+     *        was assembling to us (hasExistingMessageBufferToMe); this
+     *        is that same rule at transfer scale, which is the more
+     *        justified case, not the less.
+     *
+     *        Release: text assemblies clear on completion or the 5 min
+     *        assembly evict; the native window clears at delivery or
+     *        watchdog give-up. So a vanished sender releases the
+     *        suppression at evict rather than instantly — bounded, and
+     *        the same bound the assemblies themselves live under.
+     */
+    bool hasActiveRxTransfer() const {
+        for (auto it = m_recv.constBegin(); it != m_recv.constEnd();
+             ++it) {
+            if (!it.value().assemblies.isEmpty() ||
+                it.value().nativeWin.active ||
+                !it.value().binaryAssemblies.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool hasActiveRxWindow() const {
         for (auto it = m_recv.constBegin(); it != m_recv.constEnd();
              ++it) {
@@ -723,7 +757,21 @@ class Manager : public QObject {
      * @brief Notify the manager that we received a chunked DATA frame.
      *        Called from processCommandActivity's RX hook.
      */
-    void onChunkReceived(QString const &fromCall, ParsedChunk const &chunk);
+    /**
+     * [TURNHOLD-ACK 2026-07-23] ackHoldMs delays the ACK/NACK KEYUP (V1/V2
+     * text path) so it lands after the SENDER has finished its chunk and
+     * switched TX->RX. Without it the receiver keys the ACK ~250 ms after
+     * decoding the sender's last frame — which is the same instant the
+     * sender is turning around — so the ACK's leading Costas airs in the
+     * sender's AGC/relay dead zone and is missed ~half the time, forcing a
+     * full retransmit cycle (both logs, 2026-07-23: 4 retries on a 7-chunk
+     * transfer at -2 dB, every retry an ACK TIMEOUT on a chunk the receiver
+     * HAD ACKed). This is the receiver-side counterpart of the Build 346
+     * sender turnhold. Default = ACK_TX_DELAY_MS keeps the old behaviour
+     * for callers that do not compute a hold (harness, V3 re-ACKs).
+     */
+    void onChunkReceived(QString const &fromCall, ParsedChunk const &chunk,
+                         int ackHoldMs = ACK_TX_DELAY_MS);
 
     /**
      * @brief [TODO #107] A native-binary (V3) frame decoded — bit75
@@ -1015,9 +1063,13 @@ class Manager : public QObject {
     // sends only — V2's box/typeahead path is naturally slow enough).
     void scheduleSendNextChunk(QString const &peer, int holdMs);
     // Send a NACK to `peer` for chunk `seq`, rate-limited per peer.
-    void tryNack(QString const &peer, int seq);
+    // holdMs: keyup delay (see onChunkReceived's ackHoldMs).
+    void tryNack(QString const &peer, int seq,
+                 int holdMs = ACK_TX_DELAY_MS);
     // Send an ACK to `peer` for chunk `seq` (always, unrate-limited).
-    void sendAck(QString const &peer, int seq);
+    // holdMs: keyup delay (see onChunkReceived's ackHoldMs).
+    void sendAck(QString const &peer, int seq,
+                 int holdMs = ACK_TX_DELAY_MS);
     // Touch the session-active flag and (re-)arm the quiet timer.
     void markSessionActive(QString const &peer);
     // Ensure the TX-idle poll timer is running (lazy-init + start).

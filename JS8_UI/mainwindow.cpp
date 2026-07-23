@@ -6,6 +6,9 @@
  */
 
 #include "mainwindow.h"
+
+#include <cstdlib>   // std::_Exit — shutdown watchdog (see ~UI_Constructor)
+
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 #include "JS8_Main/FileTransfer.h"
 #include "JS8_Main/NativeBinary.h"
@@ -176,8 +179,6 @@ void UI_Constructor::ensureMessageDock()
             displayCallActivity();
         });
 }
-
-bool checkVersion(); // JS8_Mainwindow/checkVersion.cpp
 
 void UI_Constructor::checkStartupWarnings() {
     checkVersion(false);  // Always check for updates at startup
@@ -369,18 +370,63 @@ UI_Constructor::~UI_Constructor() {
         fftwf_export_wisdom_to_filename(wisdomFileName());
     }
 
+    // [SHUTDOWN WATCHDOG 2026-07-23] These joins used to be unbounded,
+    // and the audio one could block FOREVER. Captured deadlock
+    // (~/bench-audio/hang-20260723T041629Z.txt, gdb):
+    //
+    //   main   ~UI_Constructor -> QThread::wait()          [blocked]
+    //   audio  SoundInput::stop() -> ma_device_uninit()
+    //          -> pthread_join(worker)                     [blocked]
+    //   worker ma_device_data_loop__pulse -> pa_mainloop_poll -> ppoll
+    //                                                      [never returns]
+    //
+    // A device re-enumeration (USB codec re-added; its server index had
+    // jumped) destroys our server-side streams — pactl showed ZERO
+    // source-outputs and ZERO sink-inputs — but miniaudio's PulseAudio
+    // worker never notices and keeps polling dead descriptors. The
+    // uninit join then waits on a thread that will never exit, so the
+    // window vanishes while the PROCESS lives on holding JS8Call.lock,
+    // blocking every relaunch until it is killed by hand.
+    //
+    // Joining these threads at shutdown buys nothing — the process is
+    // dying and the OS reclaims everything; the join exists only to
+    // prevent use-after-free in a RUNNING process. So bound EVERY join
+    // and, if any overruns, force-exit. Settings are synced first
+    // because the force-exit path skips destructors and atexit handlers.
+    //
+    // [2026-07-23 hardening] EVERY thread wait is now bounded, not just
+    // the audio ones. The earlier version left m_networkThread.wait()
+    // unbounded AND ordered it FIRST — so a wedged network thread would
+    // hang before the audio watchdog ever ran (and the update-check now
+    // owns a QNetworkAccessManager). Quit all, then wait each with a
+    // deadline; ANY overrun => _Exit.
+    constexpr int SHUTDOWN_JOIN_MS = 3000;
     m_networkThread.quit();
-    m_networkThread.wait();
-
     m_audioThread.quit();
-    m_audioThread.wait();
-
     m_notificationAudioThread.quit();
-    m_notificationAudioThread.wait();
+
+    bool const netJoined    = m_networkThread.wait(SHUTDOWN_JOIN_MS);
+    bool const audioJoined  = m_audioThread.wait(SHUTDOWN_JOIN_MS);
+    bool const notifyJoined = m_notificationAudioThread.wait(SHUTDOWN_JOIN_MS);
 
     m_decoder.quit();
 
     remove_child_from_event_filter(this);
+
+    if (!netJoined || !audioJoined || !notifyJoined) {
+        qWarning() << "[SHUTDOWN] a worker thread did not exit within"
+                   << SHUTDOWN_JOIN_MS
+                   << "ms (net=" << netJoined << "audio=" << audioJoined
+                   << "notify=" << notifyJoined
+                   << ") — almost certainly miniaudio's PulseAudio worker "
+                      "stuck in pa_mainloop_poll after a device/route "
+                      "change. Forcing exit so the instance lock is "
+                      "released and JS8Call can be restarted.";
+        if (m_settings) {
+            m_settings->sync();
+        }
+        std::_Exit(0);
+    }
 }
 
 //-------------------------------------------------------- writeSettings()
@@ -733,6 +779,20 @@ void UI_Constructor::showSoundOutError(const QString &errorMsg) {
                                     errorMsg);
 }
 
+// [TODO #113 2026-07-23] Configured audio device missing → miniaudio
+// opened the system default instead. Warning, not critical: the device
+// selection is deliberately NOT invalidated (operator decision) so a
+// re-plug can just work without re-picking in the system mixer.
+void UI_Constructor::showSoundInDeviceFallback(const QString &msg) {
+    JS8MessageBox::warning_message(this, tr("Audio Input Device Changed"),
+                                   msg);
+}
+
+void UI_Constructor::showSoundOutDeviceFallback(const QString &msg) {
+    JS8MessageBox::warning_message(this, tr("Audio Output Device Changed"),
+                                   msg);
+}
+
 void UI_Constructor::showStatusMessage(const QString &statusMsg) {
     statusBar()->showMessage(statusMsg, 5000);
 }
@@ -763,9 +823,9 @@ void UI_Constructor::on_menuModeJS8_aboutToShow() {
     // mid-session speed freedom (text chunks re-encode per mode and
     // the receiver auto-follows); V3 binary frames exist ONLY in the
     // Subspace transport, so a mid-session switch kills the transfer.
-    bool const canChangeSpeed =
-        !m_transmitting && m_txFrameCount == 0 && m_txFrameQueue.isEmpty()
-        && !m_nativeBinaryTxActive && !arqRxBusy;
+    // [TODO #112] Single definition — see canChangeSpeedNow(). This
+    // site previously omitted the !m_tune term the other one had.
+    bool const canChangeSpeed = canChangeSpeedNow();
     bool const canChangeMode = canChangeSpeed && !arqBusy;
     ui->actionModeJS8Normal->setEnabled(canChangeSpeed);
     ui->actionModeJS8Fast->setEnabled(canChangeSpeed);
@@ -2604,6 +2664,22 @@ void UI_Constructor::drainEarlyTextFrames(int submode, int offset,
     }
 }
 
+// [TODO #112 2026-07-23] THE speed-change gate — one definition, used by
+// the UI polls AND the TCP API (MODE.SET_SPEED). It previously existed
+// only as two inline copies inside guiUpdate that had already drifted
+// (one omitted the !m_tune term), and the API had no copy at all, so a
+// client could force a speed change while every button was greyed out.
+// V3 native frames exist only in the Subspace transport, so a mid-session
+// switch kills the transfer — hence hasActiveRxWindow() (V3-specific);
+// V2 text keeps its mid-session speed freedom by design.
+bool UI_Constructor::canChangeSpeedNow() const {
+    bool const arqRxBusy =
+        m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+    return !m_transmitting && !m_tune && m_txFrameCount == 0 &&
+           m_txFrameQueue.isEmpty() && !m_nativeBinaryTxActive &&
+           !arqRxBusy;
+}
+
 bool UI_Constructor::hasClosedExistingMessageBuffer(int offset) {
 #if 0
     int range = 10;
@@ -3682,10 +3758,8 @@ void UI_Constructor::guiUpdate() {
         // [BUILD 342.22 v3SpeedLock] See the menu-action site: V3
         // native sessions lock speed for the whole session.
         // [BUILD 343.3 rxLock] And the RX side of one (arqRxBusy).
-        bool const canChangeSpeed =
-            !m_transmitting && !m_tune &&
-            m_txFrameCount == 0 && m_txFrameQueue.isEmpty() &&
-            !m_nativeBinaryTxActive && !arqRxBusy;
+        // [TODO #112] Single definition — see canChangeSpeedNow().
+        bool const canChangeSpeed = canChangeSpeedNow();
         bool const canChangeMode = canChangeSpeed && !arqBusy;
         if (m_modeBtnNormal && m_modeBtnNormal->isEnabled() != canChangeSpeed) m_modeBtnNormal->setEnabled(canChangeSpeed);
         if (m_modeBtnFast && m_modeBtnFast->isEnabled() != canChangeSpeed) m_modeBtnFast->setEnabled(canChangeSpeed);

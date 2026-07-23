@@ -282,7 +282,28 @@ void UI_Constructor::processCommandActivity() {
                                << "chunk=" << parsed.chunkId << ")";
                     setSubmode(targetMode);
                 }
-                m_chunkedArq->onChunkReceived(d.from, parsed);
+                // [TURNHOLD-ACK 2026-07-23] Delay the ACK/NACK keyup to
+                // AFTER the sender has finished this chunk and switched
+                // TX->RX. The sender's last frame ended at d.absPos on our
+                // ring; hold = (its end-of-air still ahead of the write
+                // head, clamped to one frame) + TURNAROUND_TAIL_MS
+                // (250 post-roll + 1500 margin). Same computation as the
+                // Build 346 sender turnhold. Without it the ACK keys
+                // ~250 ms after we decode the sender's last frame — right
+                // in its turnaround dead zone — and is missed ~half the
+                // time (both logs 2026-07-23). absPos==0 (standard
+                // decoder / no ring context) => the tail alone, still far
+                // better than the old 250 ms.
+                int ackHoldMs = ChunkedArq::TURNAROUND_TAIL_MS;
+                if (d.absPos > 0) {
+                    qint64 remain =
+                        (d.absPos + ChunkedArq::TURNAROUND_FRAME_SAMPLES) -
+                        m_l2RingPos.load();
+                    remain = qBound<qint64>(
+                        0, remain, ChunkedArq::TURNAROUND_FRAME_SAMPLES);
+                    ackHoldMs += static_cast<int>(remain * 1000 / 12000);
+                }
+                m_chunkedArq->onChunkReceived(d.from, parsed, ackHoldMs);
                 continue;
             }
         }
@@ -1611,6 +1632,27 @@ void UI_Constructor::processCommandActivity() {
             !isRemoteObligation) {
             qCDebug(mainwindow_js8) << "skipping reply due to open buffer"
                                     << bufferOffset << m_messageBuffer.count();
+            continue;
+        }
+
+        // [TODO #112 2026-07-23] ...and do not queue an auto-reply while
+        // an ARQ transfer is INBOUND to us (file, web link, or plain
+        // super-message). Keying up mid-transfer collides with our own
+        // session: half-duplex means we go deaf to the sender while we
+        // transmit, our ACK is stomped, and the sender burns a retry —
+        // on a 98-chunk transfer that window is ~55 minutes, so a
+        // third-party query landing inside it is likely on a busy band.
+        // This is the transfer-scale twin of the open-buffer gate right
+        // above (operator request; RX side only).
+        //
+        // arqProtocolReply is exempt via isRemoteObligation, so our own
+        // ACK/NACK to the transfer peer keep flowing — that traffic IS
+        // the session and must not be suppressed.
+        if (m_chunkedArq && m_chunkedArq->hasActiveRxTransfer() &&
+            !isRemoteObligation) {
+            qWarning() << "[REPLY-GATE] suppressed: ARQ transfer inbound"
+                       << "from=" << d.from << "cmd=" << d.cmd
+                       << "reply=" << reply.left(40);
             continue;
         }
         if (isRelayForward) {

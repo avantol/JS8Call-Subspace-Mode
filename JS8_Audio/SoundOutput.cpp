@@ -198,6 +198,37 @@ SoundOutput::buildAndStart(QIODevice * source)
         m_source = nullptr;
         return false;
     }
+
+    // [TODO #113 2026-07-23] Report what we ACTUALLY opened (see the
+    // matching block in SoundInput::start).
+    QString const openedName =
+        QString::fromUtf8(m_device_ma.playback.name);
+    qWarning() << "[AUDIO-OUT] device started:"
+               << "requested=" << (m_device.isNull()
+                                       ? QStringLiteral("(default)")
+                                       : m_device.description)
+               << "opened=" << openedName
+               << "| callback:" << m_device_ma.sampleRate << "Hz"
+               << m_device_ma.playback.channels << "ch"
+               << ma_get_format_name(m_device_ma.playback.format)
+               << "| hardware:" << m_device_ma.playback.internalSampleRate
+               << "Hz" << m_device_ma.playback.internalChannels << "ch"
+               << ma_get_format_name(m_device_ma.playback.internalFormat);
+
+    if (!m_device.isNull() && !haveDevice) {
+        qWarning() << "[AUDIO-OUT] CONFIGURED DEVICE NOT FOUND — fell back "
+                      "to system default:" << openedName;
+        Q_EMIT deviceFallback(
+            tr("Your selected audio output device was not found, so the "
+               "system default is being used instead.\n\n"
+               "Selected: %1\nNow using: %2\n\n"
+               "Transmitted audio is probably not reaching the radio. "
+               "This usually happens when a USB audio device is "
+               "unplugged, re-plugged, or renumbered. Reselect the "
+               "device in Settings once it is back.")
+                .arg(m_device.description, openedName));
+    }
+
     Q_EMIT status(tr("Sending"));
     return true;
 }

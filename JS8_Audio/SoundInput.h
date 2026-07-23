@@ -43,6 +43,17 @@ class SoundInput : public QObject {
 
     Q_SIGNAL void error(QString message) const;
     Q_SIGNAL void status(QString message) const;
+    // [TODO #113 2026-07-23] The CONFIGURED capture device could not be
+    // resolved, so miniaudio was handed a null device id and opened the
+    // SYSTEM DEFAULT instead. Previously silent — and the single most
+    // expensive silent failure on Linux: after a USB codec is removed
+    // and re-added, we quietly end up capturing the built-in mic. The
+    // waterfall looks completely normal (room noise) while nothing
+    // decodes, with no error anywhere. Deliberately NOT the error()
+    // signal: error() also invalidates the configured device, and the
+    // operator's device choice should survive a re-plug (dialog-only,
+    // operator decision 2026-07-23).
+    Q_SIGNAL void deviceFallback(QString message) const;
 
   private:
     static void s_dataCallback(ma_device * device,

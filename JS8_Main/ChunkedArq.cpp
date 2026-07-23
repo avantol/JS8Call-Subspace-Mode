@@ -884,7 +884,9 @@ void Manager::onAckTimerExpired() {
     sendNextChunk(peer);
 }
 
-void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk) {
+void Manager::onChunkReceived(QString const &fromCall,
+                              ParsedChunk const &chunk,
+                              int const ackHoldMs) {
     qCWarning(chunkedarq_js8)
         << "[ARQ-DIAG] onChunkReceived ENTRY from=" << fromCall
         << "msgId=" << chunk.msgId << "chunk=" << chunk.chunkId << "/" << chunk.total
@@ -932,7 +934,7 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
             << "msgId=" << chunk.msgId << "chunk=" << chunk.chunkId
             << "advertised=" << chunk.crcHex << "computed=" << computed
             << "body=" << chunk.body;
-        tryNack(fromCall, chunk.chunkId);
+        tryNack(fromCall, chunk.chunkId, ackHoldMs);
         return;
     }
 
@@ -948,7 +950,8 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
     }
 
     // ACK the chunk (always — duplicates need re-ACK or sender retries forever).
-    sendAck(fromCall, chunk.chunkId);
+    // [TURNHOLD-ACK] ackHoldMs keys the ACK after the sender's turnaround.
+    sendAck(fromCall, chunk.chunkId, ackHoldMs);
 
     // Already-delivered msg? Skip re-buffering (sender retransmitted
     // chunks of a message we already completed). The re-ACK above
@@ -1159,7 +1162,7 @@ void Manager::onChunkReceived(QString const &fromCall, ParsedChunk const &chunk)
     }
 }
 
-void Manager::tryNack(QString const &peer, int seq) {
+void Manager::tryNack(QString const &peer, int seq, int const holdMs) {
     auto &rx = getOrCreateRx(peer);
     qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
     if (nowMs - rx.lastNackMonoMs < MIN_NACK_INTERVAL_MS) {
@@ -1176,13 +1179,12 @@ void Manager::tryNack(QString const &peer, int seq) {
                              .arg(peer).arg(ackWireSeq(seq));
     qCWarning(chunkedarq_js8)
         << "[ARQ-RX] sending NACK peer=" << peer << "seq=" << seq
-        << "delayed by" << ACK_TX_DELAY_MS << "ms for output ramp-up";
-    // [NACK-TX-DELAY 2026-06-10 build 238]
-    // Same 250 ms delay as ACK (see ACK_TX_DELAY_MS commentary in
-    // ChunkedArq.h). Operator noted NACK frames are NOT rare in
-    // practice, so apply the same audio-output ramp-up window so the
-    // NACK's leading Costas tones don't appear abrupt on the wire.
-    QTimer::singleShot(ACK_TX_DELAY_MS, this, [this, text]() {
+        << "keyup delayed by" << holdMs << "ms";
+    // [NACK-TX-DELAY 2026-06-10 build 238] / [TURNHOLD-ACK 2026-07-23]
+    // holdMs is the turnaround-aware keyup delay (default = the 250 ms
+    // output ramp). A NACK collides with the sender's TX->RX turnaround
+    // exactly as an ACK does, so it gets the same hold.
+    QTimer::singleShot(holdMs, this, [this, text]() {
         // [RESPONSE-TX SIGNAL 2026-06-14 build 268] Route via the
         // dedicated wantsResponseTx signal so the host can save/restore
         // outgoing-text widget contents around this transmission (see
@@ -1191,13 +1193,13 @@ void Manager::tryNack(QString const &peer, int seq) {
     });
 }
 
-void Manager::sendAck(QString const &peer, int seq) {
+void Manager::sendAck(QString const &peer, int seq, int const holdMs) {
     // [BUILD 339 TODO #104] Absolute seq → modulo-31 wire seq.
     QString const text = QStringLiteral("%1 ACK %2")
                              .arg(peer).arg(ackWireSeq(seq));
     qCWarning(chunkedarq_js8)
         << "[ARQ-RX] sending ACK peer=" << peer << "seq=" << seq
-        << "delayed by" << ACK_TX_DELAY_MS << "ms for output ramp-up";
+        << "keyup delayed by" << holdMs << "ms";
     // [ACK-TX-DELAY 2026-06-10 build 237]
     // 250 ms delay before emitting wantToTransmit so the audio output
     // device has time to settle into a clean ramp-up window before
@@ -1206,7 +1208,10 @@ void Manager::sendAck(QString const &peer, int seq) {
     // receiver, suggesting the output device wasn't fully ready.
     // QTimer::singleShot's `this` parented variant cleans up if the
     // Manager is destroyed before the delay expires.
-    QTimer::singleShot(ACK_TX_DELAY_MS, this, [this, text]() {
+    // [TURNHOLD-ACK 2026-07-23] holdMs (default = the 250 ms ramp) is the
+    // turnaround-aware keyup delay so the ACK airs AFTER the sender is
+    // back in receive, not into its TX->RX dead zone.
+    QTimer::singleShot(holdMs, this, [this, text]() {
         // [RESPONSE-TX SIGNAL 2026-06-14 build 268] see sendNack above.
         emit wantsResponseTx(text);
     });

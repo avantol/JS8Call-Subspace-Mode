@@ -229,6 +229,10 @@ class UI_Constructor : public QMainWindow {
   public slots:
     void showSoundInError(const QString &errorMsg);
     void showSoundOutError(const QString &errorMsg);
+    // [TODO #113] Configured device missing → system default opened.
+    // Warning dialog only; does NOT invalidate the device selection.
+    void showSoundInDeviceFallback(const QString &msg);
+    void showSoundOutDeviceFallback(const QString &msg);
     void showStatusMessage(const QString &statusMsg);
     void dataSink(qint64 frames);
     /**
@@ -536,6 +540,13 @@ class UI_Constructor : public QMainWindow {
     void udpNetworkMessage(Message const &message);
     void tcpNetworkMessage(Message const &message);
     void networkMessage(Message const &message);
+    // [TODO #112] ARQ transfer in flight (either direction), and a short
+    // reason string, for the API busy status.
+    bool arqBusyNow() const;
+    QString busyReason() const;
+    // [TODO #112] THE speed-change gate — shared by the UI polls and the
+    // TCP API so they cannot drift apart.
+    bool canChangeSpeedNow() const;
     bool canSendNetworkMessage();
     void sendNetworkMessage(QString const &type, QString const &message);
     void sendNetworkMessage(QString const &type, QString const &message,

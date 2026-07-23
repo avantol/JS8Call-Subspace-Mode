@@ -53,6 +53,11 @@ class SoundOutput : public QObject {
   Q_SIGNALS:
     void error(QString message) const;
     void status(QString message) const;
+    // [TODO #113 2026-07-23] Configured playback device unresolvable →
+    // miniaudio opened the SYSTEM DEFAULT instead. See the matching
+    // comment in SoundInput.h; dialog-only by design (error() would
+    // also clear the operator's device selection).
+    void deviceFallback(QString message) const;
 
   private:
     static void s_dataCallback(ma_device * device,

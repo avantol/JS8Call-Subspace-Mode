@@ -149,6 +149,48 @@ SoundInput::start(AudioDeviceInfo const & device,
         return;
     }
 
+    // [TODO #113 2026-07-23] Report what we ACTUALLY opened. Until now
+    // nothing recorded the negotiated device/format, so a silent switch
+    // to the wrong input was undetectable from the logs.
+    QString const openedName = QString::fromUtf8(m_device.capture.name);
+    qWarning() << "[AUDIO-IN] device started:"
+               << "requested=" << (device.isNull()
+                                       ? QStringLiteral("(default)")
+                                       : device.description)
+               << "opened=" << openedName
+               << "| callback:" << m_device.sampleRate << "Hz"
+               << m_device.capture.channels << "ch"
+               << ma_get_format_name(m_device.capture.format)
+               << "| hardware:" << m_device.capture.internalSampleRate << "Hz"
+               << m_device.capture.internalChannels << "ch"
+               << ma_get_format_name(m_device.capture.internalFormat);
+
+    // A configured device that could not be resolved means miniaudio was
+    // given a null id and picked the SYSTEM DEFAULT — we are now
+    // capturing something other than the radio, with a normal-looking
+    // waterfall and zero decodes. Tell the operator, by name.
+    if (!device.isNull() && !haveDevice) {
+        qWarning() << "[AUDIO-IN] CONFIGURED DEVICE NOT FOUND — fell back "
+                      "to system default:" << openedName;
+        Q_EMIT deviceFallback(
+            tr("Your selected audio input device was not found, so the "
+               "system default is being used instead.\n\n"
+               "Selected: %1\nNow using: %2\n\n"
+               "You are probably not listening to the radio — the "
+               "waterfall may look normal but nothing will decode. This "
+               "usually happens when a USB audio device is unplugged, "
+               "re-plugged, or renumbered. Reselect the device in "
+               "Settings, or restart it there, once it is back.")
+                .arg(device.description, openedName));
+    } else if (m_device.sampleRate != 48000u) {
+        // Informational only: miniaudio resamples to our requested rate,
+        // so this should never differ. If it ever does, decode timing is
+        // wrong and the log will say so.
+        qWarning() << "[AUDIO-IN] UNEXPECTED callback sample rate"
+                   << m_device.sampleRate << "(expected 48000) — decode "
+                      "timing will be wrong";
+    }
+
     Q_EMIT status(tr("Receiving"));
 }
 

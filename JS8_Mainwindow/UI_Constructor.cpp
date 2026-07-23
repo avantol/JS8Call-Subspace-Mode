@@ -380,6 +380,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             &UI_Constructor::showSoundOutError);
     connect(m_soundOutput, &SoundOutput::error, &m_config,
             &Configuration::invalidate_audio_output_device);
+    // [TODO #113] Device-fallback warning: dialog only, no invalidate.
+    connect(m_soundOutput, &SoundOutput::deviceFallback, this,
+            &UI_Constructor::showSoundOutDeviceFallback);
     connect(this, &UI_Constructor::outAttenuationChanged, m_soundOutput,
             &SoundOutput::setAttenuation);
     connect(&m_audioThread, &QThread::finished, m_soundOutput,
@@ -433,6 +436,9 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             &UI_Constructor::showSoundInError);
     connect(m_soundInput, &SoundInput::error, &m_config,
             &Configuration::invalidate_audio_input_device);
+    // [TODO #113] Device-fallback warning: dialog only, no invalidate.
+    connect(m_soundInput, &SoundInput::deviceFallback, this,
+            &UI_Constructor::showSoundInDeviceFallback);
     // connect(m_soundInput, &SoundInput::status, this,
     // &UI_Constructor::showStatusMessage);
     connect(&m_audioThread, &QThread::finished, m_soundInput,
