@@ -30,6 +30,13 @@ bool UI_Constructor::arqBusyNow() const {
 // Short machine-readable reason, for clients that want to distinguish
 // "wait for a long transfer" from "wait for one frame".
 QString UI_Constructor::busyReason() const {
+    // [2026-07-23 negophase] Negotiation is the opening phase of a TX
+    // session, so BUSY is already true via hasActiveTxSession(); name
+    // it distinctly so a client can tell "20-130 s of setup" from
+    // "a transfer is actually running". BUSY itself is unchanged, so
+    // clients that only read the flag need no update.
+    if (m_chunkedArq && m_chunkedArq->isNegotiating())
+        return QStringLiteral("arq_negotiating");
     if (m_chunkedArq && m_chunkedArq->hasActiveTxSession())
         return QStringLiteral("arq_tx");
     if (m_chunkedArq && m_chunkedArq->hasActiveRxTransfer())

@@ -268,7 +268,14 @@ void Manager::haltAll() {
     // state automatically (it lives on each SendState).
     qCWarning(chunkedarq_js8)
         << "[ARQ] haltAll: sends=" << m_sends.size()
-        << "recv=" << m_recv.size();
+        << "recv=" << m_recv.size()
+        << "negotiating=" << m_negotiating;
+
+    // [2026-07-23 negophase] Halt is a session terminal, and the
+    // negotiation phase is part of the session — so it ends here too.
+    // (The UI clears the parked payload alongside; see
+    // abortCapabilityNegotiation.)
+    endNegotiation();
 
     for (auto it = m_sends.begin(); it != m_sends.end(); ++it) {
         if (it.value().ackTimer) {
@@ -945,7 +952,7 @@ void Manager::onChunkReceived(QString const &fromCall,
     // inside the handler (marker retransmit after our lost ACK).
     if (NativeBinary::MarkerInfo mi;
         NativeBinary::parseMarkerBody(chunk.body, &mi)) {
-        handleNativeMarker(fromCall, rx, chunk, mi);
+        handleNativeMarker(fromCall, rx, chunk, mi, ackHoldMs);
         return;
     }
 
@@ -1297,7 +1304,8 @@ constexpr int    ACK_RTT_SLOTS        = 4;
 
 void Manager::handleNativeMarker(QString const &peer, RxState &rx,
                                  ParsedChunk const &chunk,
-                                 NativeBinary::MarkerInfo const &mi) {
+                                 NativeBinary::MarkerInfo const &mi,
+                                 int const holdMs) {
     // [BUILD 342.10 reAckDelay] Both re-ACK paths DELAY the response
     // to land AFTER the sender's retry burst ends: the marker decodes
     // at the HEAD of the burst, with up to 8 binary frames (~30 s)
@@ -1333,6 +1341,13 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
             << "[V3-RX] re-ACK scheduled post-burst: peer=" << peer
             << "msgId=" << msgId << "chunk=" << cc
             << "delayMs=" << delayMs;
+        // [TODO #119] NOT given a turnaround hold, deliberately: this
+        // ACK is already scheduled delayMs into the future off the
+        // MARKER decode, a figure tuned on the bench to land inside
+        // the sender's 16 s post-burst listen window. Adding 1.75 s+
+        // on top would push it back out — the very failure the delay
+        // was tuned to avoid. The hold belongs on the sites that fire
+        // immediately off a frame decode, not on ones already timed.
         QTimer::singleShot(delayMs, this, [this, peer, cc]() {
             sendAck(peer, cc);
         });
@@ -1422,12 +1437,16 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
                 &Manager::onAssemblyEvictTimerExpired);
     }
     evict->start(ASSEMBLY_EVICT_TIMEOUT_MS);
+    // [TODO #119] Marker's own turnaround hold governs any ACK an
+    // immediate orphan-drain completion sends.
     openNativeChunkWindow(peer, rx, chunk.msgId, chunk.chunkId,
-                          chunk.total, mi.pcrc, /*pcrcValid=*/true);
+                          chunk.total, mi.pcrc, /*pcrcValid=*/true,
+                          holdMs);
 }
 
 bool Manager::onNativeMarkerFrameReceived(
-    NativeBinary::MarkerFrame const &m, int const freq) {
+    NativeBinary::MarkerFrame const &m, int const freq,
+    int const holdMs) {
     // Resolve the sender by callsign hash among peers we have ANY
     // state for (active window, past deliveries, or a registered
     // negotiation asker). No match → drop: only the text marker may
@@ -1461,7 +1480,7 @@ bool Manager::onNativeMarkerFrameReceived(
         << "msgId=" << m.msgId << "chunk=" << m.chunkId
         << "/" << chunk.total << "totalBytes=" << m.totalBytes
         << "kb=" << m.chunkBytes;
-    handleNativeMarker(peer, getOrCreateRx(peer), chunk, mi);
+    handleNativeMarker(peer, getOrCreateRx(peer), chunk, mi, holdMs);
     return true;
 }
 
@@ -1473,7 +1492,8 @@ void Manager::registerPeerCandidate(QString const &peer) {
 void Manager::openNativeChunkWindow(QString const &peer, RxState &rx,
                                     int const msgId, int const chunkId,
                                     int const total, quint16 const pcrc,
-                                    bool const pcrcValid) {
+                                    bool const pcrcValid,
+                                    int const holdMs) {
     int const totalBytes = rx.binaryTotalBytes.value(msgId, 0);
     int const kb = rx.binaryChunkBytes.value(
         msgId, NativeBinary::DEFAULT_CHUNK_BYTES);
@@ -1532,13 +1552,25 @@ void Manager::openNativeChunkWindow(QString const &peer, RxState &rx,
 
     // Orphans may already complete the chunk (deep pipeline lag).
     if (rx.nativeWin.collector.complete()) {
-        finishNativeChunk(peer, rx);
+        // [TODO #119] The completing frames arrived earlier as
+        // orphans, so the anchor is the MARKER that just drained them
+        // — its hold, computed by the caller from the marker frame's
+        // own absPos, is threaded in here. (Hardcoding the flat tail
+        // instead broke the FSM harness's 400 ms orphan-drain wait,
+        // which was the tell that this path had a real anchor
+        // available and should use it.)
+        finishNativeChunk(peer, rx, holdMs);
     }
 }
 
 bool Manager::onNativeFrameReceived(int const seq, int const chk4,
                                     QByteArray const &payload8,
-                                    int const freq, qint64 const absPos) {
+                                    int const freq, qint64 const absPos,
+                                    int const frameHoldMs) {
+    // [TODO #119 v3ackhold] absPos itself stays unused here — the
+    // caller has already turned it into frameHoldMs, because the ring
+    // position it must be measured against lives on the UI side (same
+    // division of labour as the V1/V2 text path).
     Q_UNUSED(absPos);
     // Bind to the (single realistic) active window whose CHK4 tag
     // matches. Stop-and-wait means at most one active window per
@@ -1577,7 +1609,9 @@ bool Manager::onNativeFrameReceived(int const seq, int const chk4,
                     << "— re-ACK: peer=" << it.key()
                     << "msgId=" << rx.nativeWin.msgId
                     << "chunk=" << prevCc;
-                sendAck(it.key(), prevCc);
+                // [TODO #119] Triggered by the LAST frame of the
+                // retry burst — sender is in turnaround right now.
+                sendAck(it.key(), prevCc, frameHoldMs);
             }
             return true;  // ours; keep out of the orphan store
         }
@@ -1597,7 +1631,9 @@ bool Manager::onNativeFrameReceived(int const seq, int const chk4,
         // a 37.5 s budget (bench 2026-07-19 "NACK too soon").
         rx.nativeWin.noProgressNacks = 0;
         if (rx.nativeWin.collector.complete()) {
-            finishNativeChunk(it.key(), rx);
+            // [TODO #119] This frame COMPLETED the chunk, so it is the
+            // sender's last — its turnaround hold governs our ACK.
+            finishNativeChunk(it.key(), rx, frameHoldMs);
         } else if (rx.nativeWin.collectTimer) {
             rx.nativeWin.collectTimer->start(
                 (rx.nativeWin.collector.frameCount() + 2) *
@@ -1620,7 +1656,8 @@ bool Manager::onNativeFrameReceived(int const seq, int const chk4,
     return false;
 }
 
-void Manager::finishNativeChunk(QString const &peer, RxState &rx) {
+void Manager::finishNativeChunk(QString const &peer, RxState &rx,
+                                int const holdMs) {
     auto &win = rx.nativeWin;
     if (win.collectTimer) {
         win.collectTimer->stop();
@@ -1630,7 +1667,7 @@ void Manager::finishNativeChunk(QString const &peer, RxState &rx) {
             << "[V3-RX] chunk complete but PCRC MISMATCH — NACK"
             << "peer=" << peer << "msgId=" << win.msgId
             << "chunk=" << win.chunkId;
-        tryNack(peer, win.chunkId);
+        tryNack(peer, win.chunkId, holdMs);
         win.collector.reset();
         if (win.collectTimer) {
             win.collectTimer->start(
@@ -1656,7 +1693,7 @@ void Manager::finishNativeChunk(QString const &peer, RxState &rx) {
         << "msgId=" << win.msgId << "chunk=" << win.chunkId
         << "/" << win.total
         << "bytes=" << win.collector.bytes().size();
-    sendAck(peer, win.chunkId);
+    sendAck(peer, win.chunkId, holdMs);
     emit nativeChunkCollected(peer, win.chunkId, win.total);
 
     if (win.chunkId == win.total) {
@@ -1704,8 +1741,12 @@ void Manager::finishNativeChunk(QString const &peer, RxState &rx) {
     // AUTO-ADVANCE: expect the next chunk immediately — markerless
     // chunks bind here; a periodic marker for it merely refreshes
     // the window with a PCRC.
+    // [TODO #119] Carry this completion's hold forward: if orphans
+    // already fill the NEXT chunk it completes and ACKs inside this
+    // call, and the anchoring frame is still the one we just handled.
     openNativeChunkWindow(peer, rx, win.msgId, win.chunkId + 1,
-                          win.total, /*pcrc=*/0, /*pcrcValid=*/false);
+                          win.total, /*pcrc=*/0, /*pcrcValid=*/false,
+                          holdMs);
 }
 
 void Manager::onNativeCollectTimerExpired() {
@@ -1746,6 +1787,11 @@ bool Manager::nativeCollectTimeout(QString const &peer) {
         << "chunk=" << rx.nativeWin.chunkId
         << "missing=" << rx.nativeWin.collector.missingSeqs()
         << "noProgress=" << rx.nativeWin.noProgressNacks;
+    // [TODO #119] NOT given a turnaround hold, deliberately: this NACK
+    // fires from the collect WATCHDOG, not off a frame decode. The
+    // budget has already expired, so the sender stopped transmitting
+    // seconds ago and is listening — there is no turnaround to clear,
+    // and no frame anchor to measure one from. 250 ms is correct here.
     tryNack(peer, rx.nativeWin.chunkId);
     // Window stays open; the sender's ACK timeout drives the
     // retransmit. Re-arm so persistent gaps keep re-NACKing (the

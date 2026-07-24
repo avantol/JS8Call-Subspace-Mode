@@ -1238,6 +1238,11 @@ void UI_Constructor::openSettings(int tab) {
                                << m_config.my_callsign();
                     m_chunkedArq->haltAll();
                 }
+                // [2026-07-23 negophase] A transfer parked on QUERY
+                // ARQ? is the same hazard: the query went out under
+                // the OLD callsign, so any reply is addressed to a
+                // station we no longer are. Same terminal as Halt.
+                abortCapabilityNegotiation("callsign change");
                 m_chunkedArq->setMyCall(
                     m_config.my_callsign().trimmed());
             }
@@ -3741,10 +3746,13 @@ void UI_Constructor::guiUpdate() {
         // TX-side lock keys on arqBusy below.
         bool const arqRxBusy =
             m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+        // [2026-07-23 negophase] The "|| m_pending*" hand-copy that
+        // used to be spliced in here is GONE: hasActiveTxSession() now
+        // reports the negotiation phase itself, so this reads the same
+        // way every other consumer does.
         bool const arqBusy =
             (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
-            arqRxBusy ||
-            !m_pendingFilePath.isEmpty() || !m_pendingLinkUrl.isEmpty();
+            arqRxBusy;
         // Two-tier gate (2026-06-08, follow-up):
         //   canChangeSpeed — speed mode buttons (S/N/F/T/⚡). Re-
         //     enabled BETWEEN chunks during an ARQ session so the
@@ -3806,9 +3814,10 @@ void UI_Constructor::guiUpdate() {
         // parked negotiation) — the RX-side lock (arqRxBusy) gates
         // buttons/menus above but leaves the box editable so the
         // operator can compose while receiving.
+        // [2026-07-23 negophase] Second hand-copy deleted — same
+        // reason as the one in guiUpdate's arqBusy.
         bool const arqBoxBusy =
-            (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
-            !m_pendingFilePath.isEmpty() || !m_pendingLinkUrl.isEmpty();
+            m_chunkedArq && m_chunkedArq->hasActiveTxSession();
         if (ui->extFreeTextMsgEdit) {
             if (arqBoxBusy && !ui->extFreeTextMsgEdit->isReadOnly()) {
                 ui->extFreeTextMsgEdit->setReadOnly(true);
@@ -6913,6 +6922,67 @@ void UI_Constructor::on_sendWebLinkAction_triggered() {
     sendWebLink(entered, peer);
 }
 
+// [2026-07-23 negophase] Negotiation phase entry/exit — see the
+// declarations in mainwindow.h and ChunkedArq::beginNegotiation().
+// Each of these moves the parked payload AND the session phase
+// together; that pairing is the whole point.
+void UI_Constructor::beginCapabilityNegotiation(QString const &peer,
+                                                QString const &filePath,
+                                                QString const &linkUrl) {
+    m_pendingFilePath = filePath;
+    m_pendingLinkUrl = linkUrl;
+    m_pendingFilePeer = peer;
+    m_capQueryRetries = 0;
+    if (m_chunkedArq) m_chunkedArq->beginNegotiation(peer);
+    // Locks/banner key off the session phase; refresh them now rather
+    // than waiting for the next guiUpdate tick, so the control surface
+    // is already dead when the operator's hand is still on the mouse.
+    updateButtonDisplay();
+    refreshOutgoingPlaceholder();
+}
+
+bool UI_Constructor::takeCapabilityNegotiation(QString *filePath,
+                                               QString *linkUrl,
+                                               QString *peer,
+                                               bool const keepPhaseOpen) {
+    if (!capabilityNegotiationPending()) return false;
+    if (filePath) *filePath = m_pendingFilePath;
+    if (linkUrl)  *linkUrl  = m_pendingLinkUrl;
+    if (peer)     *peer     = m_pendingFilePeer;
+    m_pendingFilePath.clear();
+    m_pendingLinkUrl.clear();
+    m_pendingFilePeer.clear();
+    ++m_capQueryGen;
+    if (!keepPhaseOpen && m_chunkedArq) m_chunkedArq->endNegotiation();
+    return true;
+}
+
+void UI_Constructor::endCapabilityNegotiationPhase() {
+    if (m_chunkedArq) m_chunkedArq->endNegotiation();
+    updateButtonDisplay();
+    refreshOutgoingPlaceholder();
+}
+
+void UI_Constructor::abortCapabilityNegotiation(char const *why) {
+    if (!capabilityNegotiationPending()) {
+        // Phase may still be open with no payload only if something
+        // cleared the fields directly — belt and braces.
+        if (m_chunkedArq) m_chunkedArq->endNegotiation();
+        return;
+    }
+    qCWarning(chunkedarq_js8)
+        << "[FT-TX] pending file/link transfer aborted:" << why
+        << "(was awaiting capability reply from" << m_pendingFilePeer
+        << ")";
+    m_pendingFilePath.clear();
+    m_pendingLinkUrl.clear();
+    m_pendingFilePeer.clear();
+    ++m_capQueryGen;
+    if (m_chunkedArq) m_chunkedArq->endNegotiation();
+    updateButtonDisplay();
+    refreshOutgoingPlaceholder();
+}
+
 // [BUILD 338] Transfer pipeline from a file path onward — everything
 // "Send file…" did after its file picker.
 void UI_Constructor::startFileTransferViaArq(QString const &filePath,
@@ -6927,9 +6997,7 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
                                     m_peerArqLevel.value(key));
         return;
     }
-    m_pendingFilePath = filePath;
-    m_pendingFilePeer = peer;
-    m_capQueryRetries = 0;
+    beginCapabilityNegotiation(peer, filePath, QString());
     int const gen = ++m_capQueryGen;
     qCWarning(chunkedarq_js8)
         << "[FT-TX] peer capability unknown — auto-querying" << peer
@@ -6997,10 +7065,7 @@ void UI_Constructor::sendWebLink(QString const &url,
         return;
     }
     // Capability unknown — park the LINK on the query state machine.
-    m_pendingLinkUrl = url;
-    m_pendingFilePath.clear();
-    m_pendingFilePeer = peer;
-    m_capQueryRetries = 0;
+    beginCapabilityNegotiation(peer, QString(), url);
     int const gen = ++m_capQueryGen;
     qCWarning(chunkedarq_js8)
         << "[LT-TX] peer capability unknown — auto-querying" << peer
@@ -7048,13 +7113,8 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
         });
         return;
     }
-    QString const path = m_pendingFilePath;
-    QString const link = m_pendingLinkUrl;
-    QString const pr = m_pendingFilePeer;
-    m_pendingFilePath.clear();
-    m_pendingLinkUrl.clear();
-    m_pendingFilePeer.clear();
-    ++m_capQueryGen;
+    QString path, link, pr;
+    takeCapabilityNegotiation(&path, &link, &pr);
     qCWarning(chunkedarq_js8)
         << "[FT-TX] no capability reply from" << pr
         << "— proceeding with V1 (not cached; silence may be QRM)";
@@ -7078,6 +7138,20 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
 
 void UI_Constructor::startFileTransferWithFormat(
     QString const &filePath, QString const &peer, int const peerLevel) {
+    // [2026-07-23] Report the PROVENANCE of peerLevel. These logs used
+    // to print "(cached level=N)" unconditionally, which was a lie on
+    // the timeout path: a peer that never answered QUERY ARQ? is NOT
+    // cached (silence is never cached — see processCommandActivity),
+    // it is merely being sent as V1 for THIS transfer. That produced
+    // contradictory log pairs ("no capability reply … not cached"
+    // immediately followed by "cached level=1") and made it look like
+    // silence was poisoning the cache. Derive the truth from the cache
+    // itself so the two can never disagree again.
+    QString const levelSrc =
+        (m_peerArqLevel.value(peer.toUpper(), -1) == peerLevel)
+            ? QStringLiteral("cached from YES reply")
+            : QStringLiteral("assumed for this transfer only — no "
+                             "reply to QUERY ARQ?, NOT cached");
     QFileInfo const fi(filePath);
     if (!fi.exists() || !fi.isReadable()) {
         JS8MessageBox::warning_message(
@@ -7123,7 +7197,7 @@ void UI_Constructor::startFileTransferWithFormat(
             }
             qCWarning(chunkedarq_js8)
                 << "[FT-TX] wire format V3 NATIVE for peer=" << peer
-                << "(cached level=" << peerLevel
+                << "(level=" << peerLevel << "," << levelSrc
                 << ") envelopeBytes=" << envelope.size()
                 << "chunks=" << needed;
             dispatchArqBodyBinary(envelope, peer);
@@ -7147,7 +7221,8 @@ void UI_Constructor::startFileTransferWithFormat(
                          : FileTransfer::buildSendBody(filePath, header);
     qCWarning(chunkedarq_js8)
         << "[FT-TX] wire format" << (peerLevel >= 2 ? "V2" : "V1")
-        << "for peer=" << peer << "(cached level=" << peerLevel << ")";
+        << "for peer=" << peer << "(level=" << peerLevel << ","
+        << levelSrc << ")";
     // [BUILD 339 TODO #104] Stage-2 qualification: chunk count is a
     // property of the BUILT body (format-dependent — a file can
     // overflow as V1 but fit as V2), and the ceiling is a property
@@ -8106,18 +8181,10 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
             restoreVisibleHailSubmodeIfPending();
         }
         // [BUILD 339 TODO #103] Halt also aborts a file transfer
-        // waiting on the capability query.
-        if (!m_pendingFilePath.isEmpty() ||
-            !m_pendingLinkUrl.isEmpty()) {
-            qCWarning(chunkedarq_js8)
-                << "[FT-TX] pending file/link transfer aborted by "
-                   "Halt (was awaiting capability reply from"
-                << m_pendingFilePeer << ")";
-            m_pendingFilePath.clear();
-            m_pendingLinkUrl.clear();
-            m_pendingFilePeer.clear();
-            ++m_capQueryGen;
-        }
+        // waiting on the capability query. [2026-07-23 negophase]
+        // haltAll() ends the Manager-side phase; this drops the
+        // payload. Both go through the single writer.
+        abortCapabilityNegotiation("Halt");
     }
 }
 
@@ -8881,8 +8948,14 @@ void UI_Constructor::updateTextDisplay() {
         // (hasActiveSession covers both m_sends and m_recv assemblies).
         // Rationale: an AV HAIL fires PTT and a 3-cycle sequence; must
         // not interrupt an in-flight ARQ super-message either direction.
+        // [2026-07-23 negophase] hasActiveSession() is deliberately
+        // NOT negotiation-aware (it drives TX-timing paths — see
+        // ChunkedArq::beginNegotiation), so OR the phase in here: an
+        // AV HAIL fires PTT and a 3-cycle sequence, which would key
+        // straight over an outgoing QUERY ARQ?.
         bool const arqBusy =
-            m_chunkedArq && m_chunkedArq->hasActiveSession();
+            m_chunkedArq && (m_chunkedArq->hasActiveSession() ||
+                             m_chunkedArq->isNegotiating());
         bool const visHailBusy = m_visibleHailActive;
         m_sendVisibleHailAction->setEnabled(
             canTransmit && !isTransmitting && !arqBusy && !visHailBusy);
@@ -9170,7 +9243,14 @@ void UI_Constructor::selectCallsign(QString call, int submode) {
 void UI_Constructor::refreshOutgoingPlaceholder() {
     if (!ui->extFreeTextMsgEdit) return;
     QString text;
-    if (m_arqBoxLocked) {
+    if (m_chunkedArq && m_chunkedArq->isNegotiating()) {
+        // [2026-07-23 negophase] The negotiation phase locks the same
+        // controls as a transfer, so it needs its own wording — during
+        // the QUERY ARQ? window no chunks exist yet and "MULTI-PART
+        // MSG IN PROGRESS" would be a lie the operator can see.
+        text = QStringLiteral("SETTING UP TRANSFER TO %1...")
+                   .arg(m_chunkedArq->negotiatingPeer());
+    } else if (m_arqBoxLocked) {
         text = QStringLiteral("MULTI-PART MSG IN PROGRESS...");
     } else if (QString const call = callsignSelected().trimmed();
                !call.isEmpty()) {
@@ -10396,13 +10476,86 @@ void UI_Constructor::l2DecodeDone() {
     if (delay > 500)
         qCDebug(mainwindow_js8) << "[FT2-L2] signal delivery delay:" << delay << "ms";
     m_l2Decoding = false;
+    m_l2DecodeStartedMs = 0;   // [l2watch] latch released normally
+    m_l2StuckWarned = false;
     // Immediately start next decode — no waiting for timer.
     l2TryDecode("chain");
 }
 
-void UI_Constructor::l2TryDecode(char const *source) {
-    if (!m_l2Enabled || m_l2Decoding || m_transmitting)
+// [TODO #113/#120 2026-07-24 l2watch] Real watchdog for the two decode
+// latches. See the members in mainwindow.h for why this is needed.
+//
+// RECOVERY IS DELIBERATELY CONSERVATIVE. Two distinct failures hide
+// behind "m_l2Decoding is still true":
+//   (a) the task FINISHED but its finished() signal never reached us —
+//       nothing is running, so clearing both latches is safe, and we
+//       do it automatically and log it;
+//   (b) the task is genuinely still running/wedged — clearing the
+//       latches would let a second decode into the Fortran layer
+//       concurrently, which is exactly what fortranLock exists to
+//       prevent. So we do NOT clear; we warn loudly and visibly and
+//       let the operator act.
+// Guessing between the two is what a naive "just reset it" fix would
+// do; isFinished() tells us which it is.
+void UI_Constructor::l2DecodeWatchdogCheck() {
+    if (!m_l2Enabled || !m_l2Decoding) {
+        m_l2StuckWarned = false;
         return;
+    }
+    qint64 const now = QDateTime::currentMSecsSinceEpoch();
+    if (m_l2DecodeStartedMs <= 0) return;
+    qint64 const stuckMs = now - m_l2DecodeStartedMs;
+    if (stuckMs < L2_DECODE_STUCK_MS) return;
+
+    if (m_l2DecodeWatcher.isFinished()) {
+        // (a) Lost completion — safe to recover, and self-healing.
+        qWarning() << "[FT2-L2] WATCHDOG: decode latch stuck for"
+                   << stuckMs << "ms but the task IS finished — the "
+                      "finished() signal was lost. Clearing "
+                      "m_l2Decoding + fortranLock and resuming decode.";
+        m_l2Decoding = false;
+        m_l2DecodeStartedMs = 0;
+        JS8::DecodeFT2::fortranLock.store(false);
+        m_l2StuckWarned = false;
+        return;
+    }
+    // (b) Still running after the stuck threshold. Do NOT force-clear.
+    if (!m_l2StuckWarned) {
+        m_l2StuckWarned = true;
+        qWarning() << "[FT2-L2] WATCHDOG: decode task STILL RUNNING"
+                   << stuckMs << "ms after start (normal is ~1-2 s). "
+                      "The receiver is deaf while this persists — "
+                      "audio keeps flowing and the waterfall keeps "
+                      "painting, but nothing will decode. NOT "
+                      "force-clearing: a second decode would enter the "
+                      "Fortran layer concurrently. Restart audio "
+                      "devices or the application to recover.";
+        showStatusMessage(
+            tr("Decoder stalled — no decodes until audio is restarted"));
+    }
+}
+
+void UI_Constructor::l2TryDecode(char const *source) {
+    // [TODO #113/#120 l2watch] Say WHICH gate blocked, rate-limited to
+    // one line per 10 s. Every previous investigation of "it stopped
+    // decoding" had to guess between these three, because a silent
+    // early return looks identical to a quiet band.
+    if (!m_l2Enabled || m_l2Decoding || m_transmitting) {
+        qint64 const now = QDateTime::currentMSecsSinceEpoch();
+        if (now - m_l2LastGateLogMs > 10000) {
+            m_l2LastGateLogMs = now;
+            qCWarning(mainwindow_js8)
+                << "[FT2-L2] decode gate closed: source=" << source
+                << "enabled=" << m_l2Enabled
+                << "decoding=" << m_l2Decoding
+                << (m_l2Decoding && m_l2DecodeStartedMs > 0
+                        ? QStringLiteral("(for %1 ms)")
+                              .arg(now - m_l2DecodeStartedMs)
+                        : QString())
+                << "transmitting=" << m_transmitting;
+        }
+        return;
+    }
 
     std::int64_t pos = m_l2RingPos.load(std::memory_order_acquire);
     if (pos < FT2_NMAX)
@@ -10410,8 +10563,19 @@ void UI_Constructor::l2TryDecode(char const *source) {
 
     // Acquire Fortran lock via CAS
     bool expected = false;
-    if (!JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true))
+    if (!JS8::DecodeFT2::fortranLock.compare_exchange_strong(expected, true)) {
+        // [TODO #113/#120 l2watch] The other latch. Same rate limit —
+        // a permanently-held fortranLock is the second way the decoder
+        // dies silently, and it used to leave no trace at all.
+        qint64 const nowLk = QDateTime::currentMSecsSinceEpoch();
+        if (nowLk - m_l2LastGateLogMs > 10000) {
+            m_l2LastGateLogMs = nowLk;
+            qCWarning(mainwindow_js8)
+                << "[FT2-L2] decode gate closed: fortranLock held; "
+                   "source=" << source;
+        }
         return;  // standard FT2 has the lock — will retry on next trigger
+    }
 
     // Linearize the ring buffer into a contiguous array. pos is a
     // monotonic 64-bit sample counter, so (pos - validSamples) is the
@@ -10449,6 +10613,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
     // across decode passes for the same physical frame.
     std::int64_t const snapBasePos = pos - validSamples;
     m_l2Decoding = true;
+    m_l2DecodeStartedMs = QDateTime::currentMSecsSinceEpoch();  // [l2watch]
     m_l2DecodeWatcher.setFuture(QtConcurrent::run(
         [buf, nfqso, nfa, nfb, utc, knownSnap, nknownSnap, snapBasePos, this]() {
         auto t0 = QDateTime::currentMSecsSinceEpoch();
@@ -10484,15 +10649,30 @@ void UI_Constructor::l2TryDecode(char const *source) {
                             &syncBest, &syncFreq, &syncIbest, &syncIdf);
             auto syncMs = QDateTime::currentMSecsSinceEpoch() - tSync;
 
-            // [RX-PROBE 2026-06-09] bumped to qWarning to diagnose
-            // missed-frame events under chunked-ARQ on wired-loopback
-            // audio at +3 dB SNR. Need to see every sync-scan pass'
-            // best score to determine if the decoder even SAW the
-            // frame's Costas tones, or if sync detection failed.
-            qCDebug(mainwindow_js8) << "[RX-PROBE] L2 sync scan:" << syncMs << "ms"
-                       << "nfreqs=" << nScanFreqs
-                       << "sync=" << syncBest << "freq=" << syncFreq
-                       << "ibest=" << syncIbest << "idf=" << syncIdf;
+            // [RX-PROBE 2026-06-09 / #120pt2 2026-07-24] Actually
+            // visible now (was qCDebug, suppressed at the default
+            // Warning level despite the "bumped to qWarning" comment —
+            // that reversion is why every missed-ACK hunt was blind).
+            // Gated on syncBest >= SYNC_NOISE_FLOOR so dead air stays
+            // silent: a line appears only when the scan saw
+            // above-noise Costas structure. In a listen window this
+            // tells us directly whether the incoming ACK's Costas was
+            // (a) not present (<floor, no line), (b) marginal
+            // (floor..3.0, seen-but-rejected), or (c) strong (>=3.0,
+            // full decode attempted — see the decode-result line for
+            // whether it actually yielded the ACK or locked own-TX
+            // residual at the same offset). ~1-2 s cadence, not the
+            // per-sample readData path.
+            constexpr float SYNC_NOISE_FLOOR = 2.60f;
+            if (syncBest >= SYNC_NOISE_FLOOR) {
+                qCWarning(mainwindow_js8)
+                    << "[RX-PROBE] L2 sync scan:" << syncMs << "ms"
+                    << "nfreqs=" << nScanFreqs
+                    << "sync=" << syncBest << "freq=" << syncFreq
+                    << "ibest=" << syncIbest << "idf=" << syncIdf
+                    << (syncBest >= 3.00f ? "[>=3.0 will decode]"
+                                          : "[<3.0 REJECTED]");
+            }
 
             if (syncBest >= 3.00f) {
                 // Strong sync well above noise floor (~2.6) — skip getcandidates2
@@ -10551,14 +10731,27 @@ void UI_Constructor::l2TryDecode(char const *source) {
             useNfqsoOnly, &decodedFreq,
             syncBest);
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
-        // [RX-PROBE 2026-06-09] bumped to qWarning — paired with sync
-        // scan probe above so we can see which decode passes found
-        // a frame vs which missed. Critical: ndecoded=0 with high
-        // syncBest means sync detected the frame but LDPC failed.
-        qCDebug(mainwindow_js8) << "[RX-PROBE] L2 decode took" << elapsed << "ms"
-                   << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
-                   << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
-                   << "sync=" << syncBest;
+        // [RX-PROBE 2026-06-09 / #120pt2 2026-07-24] Visible now, and
+        // this is the decisive line for the missed-ACK question. It
+        // fires whenever a full decode was ATTEMPTED (useNfqsoOnly:
+        // sync crossed 3.0) or anything decoded. The pattern that
+        // proves own-TX pollution: SYNC-HIT with ndecoded=0 (or a
+        // decode of a frame that is NOT the ACK) during a listen
+        // window — sync locked a strong candidate but it was not the
+        // ACK. The pattern that proves marginal-signal: no SYNC-HIT at
+        // all in the window (sync never reached 3.0). Silent when
+        // nothing was attempted, so no flood.
+        if (useNfqsoOnly || nNewDecoded > 0) {
+            qCWarning(mainwindow_js8)
+                << "[RX-PROBE] L2 decode took" << elapsed << "ms"
+                << "ndecoded=" << nNewDecoded << "nknown=" << nknownSnap
+                << (useNfqsoOnly ? "SYNC-HIT" : "FULL-SCAN")
+                << "sync=" << syncBest
+                << (useNfqsoOnly && nNewDecoded == 0
+                        ? "[locked sync but 0 frames — own-TX residual "
+                          "or LDPC fail]"
+                        : "");
+        }
         m_l2DecodeFinishedMs = QDateTime::currentMSecsSinceEpoch();
         if (elapsed > 3000) {
             qWarning() << "[FT2-L2] WARNING: decode cycle approaching buffer limit (7500ms)";

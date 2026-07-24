@@ -1012,6 +1012,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(&m_l2DecodeWatcher, &QFutureWatcher<void>::finished,
             this, &UI_Constructor::l2DecodeDone);
     connect(&m_l2DecodeTimer, &QTimer::timeout, this, [this]() {
+        // [TODO #113/#120 2026-07-24 l2watch] This timer was called a
+        // watchdog but only re-invoked the SAME gated function, so a
+        // stuck latch made it a no-op forever. Check the latches first
+        // — that is what makes it an actual watchdog.
+        l2DecodeWatchdogCheck();
         l2TryDecode("watchdog");
     });
     // [FT2-L2 ASYNC TOGGLE 2026-06-16] Define JS8_DISABLE_L2_ASYNC

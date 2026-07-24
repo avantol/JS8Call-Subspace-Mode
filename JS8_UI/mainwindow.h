@@ -773,6 +773,35 @@ class UI_Constructor : public QMainWindow {
     // state (observed 2026-07-17: aborted attempt #1's 20 s timer
     // fired a bogus 1.7 s "retry" against attempt #2).
     int m_capQueryGen{0};
+    // [2026-07-23 negophase] SINGLE WRITERS for the fields above. The
+    // parked payload (UI's business — what to send) and the session
+    // phase (the Manager's business — are we busy) were split across
+    // two objects and drifted: the Manager never learned about
+    // negotiation at all, so no lock, banner or busy flag fired for it.
+    // These three are now the ONLY places the pending fields change,
+    // and each one moves BOTH halves together. Do not clear the
+    // m_pending* fields directly.
+    //   begin — park the payload + open the session's negotiation phase
+    //   take  — hand the payload back and close the phase (resume path)
+    //   abort — drop the payload and close the phase (Halt / callsign)
+    void beginCapabilityNegotiation(QString const &peer,
+                                    QString const &filePath,
+                                    QString const &linkUrl);
+    // keepPhaseOpen: the resume path defers 1.5 s before it starts the
+    // transfer. Closing the phase at take() time would drop every lock
+    // for exactly that gap — the same hole this fix closes, in
+    // miniature — so the resume path holds the phase open across the
+    // defer and closes it with endCapabilityNegotiationPhase() once
+    // the transfer owns the lock (m_sends non-empty) or has failed to
+    // start. Callers that start synchronously pass false.
+    bool takeCapabilityNegotiation(QString *filePath, QString *linkUrl,
+                                   QString *peer,
+                                   bool keepPhaseOpen = false);
+    void endCapabilityNegotiationPhase();
+    void abortCapabilityNegotiation(char const *why);
+    bool capabilityNegotiationPending() const {
+        return !m_pendingFilePath.isEmpty() || !m_pendingLinkUrl.isEmpty();
+    }
     void onCapQueryTimeout(int gen);
     void startFileTransferWithFormat(QString const &filePath,
                                      QString const &peer,
@@ -1341,6 +1370,25 @@ class UI_Constructor : public QMainWindow {
     bool m_l2Decoding = false;                  // decode in progress
     bool m_l2Enabled = false;                   // L2 decode active
     qint64 m_l2DecodeFinishedMs = 0;            // timestamp when decode thread finished
+    // [TODO #113/#120 2026-07-24 l2watch] The decoder is gated behind
+    // two latches (m_l2Decoding, DecodeFT2::fortranLock) that are
+    // released ONLY on the async task's success path. If that task
+    // never completes — or its finished() signal is lost — both stay
+    // set and l2TryDecode returns early FOREVER: decoder dead, capture
+    // still warm, waterfall still painting, not one log line. Proven
+    // in the field 2026-07-24 (sender log 020026Z: zero decodes from
+    // 02:12:05 to session end while transmitting normally; only an app
+    // restart recovered it). The 2 s timer was called a watchdog but
+    // merely re-invoked the same gated function, so it could never
+    // detect or clear either latch. These give it something to watch.
+    // Normal decode is ~1-2 s; 30 s is far outside any legitimate run
+    // (the whole L2 ring is only 7.5 s of audio) yet short enough that
+    // the operator is told within one over.
+    static constexpr qint64 L2_DECODE_STUCK_MS = 30000;
+    qint64 m_l2DecodeStartedMs = 0;             // when m_l2Decoding was set
+    qint64 m_l2LastGateLogMs   = 0;             // rate-limit for gate diagnostics
+    bool   m_l2StuckWarned     = false;         // one warning per stuck episode
+    void   l2DecodeWatchdogCheck();             // detect + recover stuck latches
     void l2DecodeDone();                        // called when async decode finishes
     void l2TryDecode(char const *source);       // attempt to start an L2 decode
 

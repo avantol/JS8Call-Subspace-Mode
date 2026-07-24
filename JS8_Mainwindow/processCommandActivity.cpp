@@ -661,24 +661,34 @@ void UI_Constructor::processCommandActivity() {
                     d.text.toUpper().simplified());
                 lm.hasMatch()) {
                 int const level = lm.captured(1).toInt();
+                // [2026-07-23] INVARIANT: this is the ONE and ONLY
+                // place a peer's ARQ level is ever cached, and it is
+                // reached ONLY by an actual "YES <digits>" reply.
+                // SILENCE MUST NEVER CACHE ANYTHING. QUERY ARQ? is
+                // YES-or-silence by design — nobody ever answers
+                // "NO" — so a missing reply carries NO information
+                // about the peer: the query or the reply is easily
+                // stepped on (half-duplex collision, QRM). Caching a
+                // level-1 assumption from silence would permanently
+                // demote a capable peer for the whole session. The
+                // timeout path therefore falls back to V1 for THAT
+                // TRANSFER ONLY and writes nothing, so the next
+                // transfer re-queries. Do not "optimise" that away.
                 m_peerArqLevel[d.from.toUpper()] = level;
-                qWarning() << "[ARQ] peer capability cached:"
+                qWarning() << "[ARQ] peer capability cached (from an"
+                              " actual YES reply):"
                            << d.from << "level=" << level;
                 // [BUILD 339 TODO #103] A file transfer may be
                 // parked waiting on exactly this reply — resume it
                 // with the just-learned format. Deferred 1.5 s so RX
                 // processing settles before we key up.
-                if ((!m_pendingFilePath.isEmpty() ||
-                     !m_pendingLinkUrl.isEmpty()) &&
+                if (capabilityNegotiationPending() &&
                     d.from.compare(m_pendingFilePeer,
                                    Qt::CaseInsensitive) == 0) {
-                    QString const path = m_pendingFilePath;
-                    QString const link = m_pendingLinkUrl;
-                    QString const pr = m_pendingFilePeer;
-                    m_pendingFilePath.clear();
-                    m_pendingLinkUrl.clear();
-                    m_pendingFilePeer.clear();
-                    ++m_capQueryGen;
+                    QString path, link, pr;
+                    // Hold the phase open across the 1.5 s defer below
+                    // — see takeCapabilityNegotiation()'s declaration.
+                    takeCapabilityNegotiation(&path, &link, &pr, true);
                     qWarning() << "[FT-TX] capability received — "
                                   "resuming pending transfer to"
                                << pr << "level=" << level
@@ -695,6 +705,9 @@ void UI_Constructor::processCommandActivity() {
                                 self->startFileTransferWithFormat(
                                     path, pr, level);
                             }
+                            // Transfer now owns the lock via m_sends
+                            // (or failed to start) — close the phase.
+                            self->endCapabilityNegotiationPhase();
                         });
                 }
             } else if ((!m_pendingFilePath.isEmpty() ||

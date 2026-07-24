@@ -175,6 +175,28 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     quint8 rem = 0;
                     quint64 const value = Varicode::unpack72bits(
                         QString::fromStdString(ev.data), &rem);
+                    // [TODO #119 2026-07-24 v3ackhold] Turnaround hold
+                    // for any ACK/NACK this frame triggers — the same
+                    // computation the V1/V2 text path does in
+                    // processCommandActivity: time from now until this
+                    // frame's air ends, capped at one frame, plus the
+                    // tail (250 ms post-roll + 1500 ms margin). Marker
+                    // and data frames share it: either can complete a
+                    // chunk (a marker completes one by draining
+                    // orphans) and so key our reply straight into the
+                    // sender's TX->RX turnaround. absPos==0 => tail.
+                    int frameHoldMs = ChunkedArq::TURNAROUND_TAIL_MS;
+                    if (ev.absPos > 0) {
+                        qint64 remain =
+                            (ev.absPos +
+                             ChunkedArq::TURNAROUND_FRAME_SAMPLES) -
+                            m_l2RingPos.load();
+                        remain = qBound<qint64>(
+                            0, remain,
+                            ChunkedArq::TURNAROUND_FRAME_SAMPLES);
+                        frameHoldMs +=
+                            static_cast<int>(remain * 1000 / 12000);
+                    }
                     // [BUILD 344 binMarker] SEQ=15 = binary marker
                     // frame; everything else is a data frame.
                     NativeBinary::MarkerFrame mf;
@@ -183,7 +205,8 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                                         &mf)) {
                         bool const accepted =
                             m_chunkedArq->onNativeMarkerFrameReceived(
-                                mf, static_cast<int>(ev.frequency));
+                                mf, static_cast<int>(ev.frequency),
+                                frameHoldMs);
                         if (accepted &&
                             m_nSubMode != Varicode::JS8CallFT2) {
                             if (m_arqPreSwitchSubmode == -1) {
@@ -214,7 +237,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             m_chunkedArq->onNativeFrameReceived(
                                 seq, chk4, p8,
                                 static_cast<int>(ev.frequency),
-                                ev.absPos);
+                                ev.absPos, frameHoldMs);
                         // [BUILD 342.6] Re-latch the auto-mode switch
                         // on every frame OUR window accepts — V3's
                         // counterpart of the per-chunk re-latch V2

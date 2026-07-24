@@ -164,15 +164,34 @@ inline int ackTimeoutMsForSubmode(int submode) {
     }
 }
 
-// [BUILD 341 capTimeout] QUERY ARQ? negotiation window per submode.
+// [BUILD 341 capTimeout] QUERY ARQ? negotiation window per submode —
+// i.e. how long we wait before RE-ASKING (and, after one retry, before
+// falling back to V1 for that transfer).
+//
 // Was a flat 20 s — sized for Subspace only (operator 2026-07-17:
 // "too short for most speeds. we can even operate at Slow"). The
 // negotiation is two ACK-shaped exchanges: our 2-frame query out,
 // the peer's 2-frame "YES <level>" back (at OUR submode since
-// arqSpeed). Window = 2 × the field-proven ACK budget MINUS one
-// period (operator 2026-07-17: that makes it the same as the
-// file-transfer sub-msg timeout):
-//   Subspace 20.25 s, Turbo 26 s, Fast 40 s, Normal 57 s, Slow 102 s.
+// arqSpeed).
+//
+// [2026-07-23] Shortened by one period: 2 × ACK budget − TWO periods
+// (was − one). Operator: the retry delay "is 4 periods, can be 3" —
+// which this makes exact for the legacy speeds. Resulting windows,
+// with the retry delay expressed in periods:
+//   Subspace 24.50 s (6.5 P)   Turbo 20.00 s (3.3 P)
+//   Fast     30.00 s (3.0 P)   Normal 42.00 s (2.8 P)
+//   Slow     72.00 s (2.4 P)
+// NOTE the earlier comment claimed "Subspace 20.25 s" — stale since
+// the Subspace ACK budget went 12 s → 16 s (build 342.6), which had
+// silently pushed this window to 28.25 s.
+//
+// FLOOR: the window can NOT simply be "3 periods" for Subspace. The
+// exchange needs our 2-frame query (7.5 s) + peer turnaround + the
+// peer's 2-frame reply (7.5 s) + decode lag ≈ 20 s minimum; 3 periods
+// (11.25 s) would expire mid-negotiation and force a bogus V1
+// fallback every time. 24.5 s keeps ~4.5 s of margin. Subspace reads
+// "long" in periods only because its ACK budget is deliberately
+// generous relative to its very short 3.75 s period.
 inline int capQueryTimeoutMsForSubmode(int submode) {
     int const periodMs = [submode]() {
         switch (submode) {
@@ -184,7 +203,7 @@ inline int capQueryTimeoutMsForSubmode(int submode) {
             default: return 15000; // Unknown — Normal
         }
     }();
-    return 2 * ackTimeoutMsForSubmode(submode) - periodMs;
+    return 2 * ackTimeoutMsForSubmode(submode) - 2 * periodMs;
 }
 
 // TX-idle poll: how often the manager re-checks "has JS8Call finished
@@ -604,7 +623,63 @@ class Manager : public QObject {
      *        hasActiveSession(), so the ACKs we send during RX still
      *        get the async-timing treatment.)
      */
-    bool hasActiveTxSession() const { return !m_sends.isEmpty(); }
+    bool hasActiveTxSession() const {
+        return !m_sends.isEmpty() || m_negotiating;
+    }
+
+    /**
+     * @brief [2026-07-23 negophase] Capability negotiation is the
+     *        OPENING PHASE OF A TX SESSION, not something that happens
+     *        before one.
+     *
+     * From the operator's point of view the session begins at the Send
+     * click: we are transmitting on their behalf (QUERY ARQ? goes out
+     * over the air) from that moment until the transfer completes or
+     * aborts. m_sends only fills once the format is known and the first
+     * chunk exists, so for the 20-130 s negotiation window the Manager
+     * used to report "no TX session" — and EVERY UI lock, banner and
+     * busy-API flag asks the Manager. Result: the whole control surface
+     * stayed live during negotiation, and an operator who pressed a
+     * macro button keyed over the QUERY ARQ? and killed the transfer
+     * (field report 2026-07-23).
+     *
+     * Two sites (guiUpdate's arqBusy, the compose-box lock) had the
+     * pending-transfer condition HAND-COPIED in from the UI layer to
+     * paper over this; those copies are deleted now that the predicate
+     * itself is right. Everything else — Speed/Mode lock, the CQ..Saved
+     * macro row, Send-file, AV HAIL, TX_QUEUE_DEPTH / BUSY /
+     * ARQ_TX_ACTIVE — inherits the lock with no call-site change.
+     *
+     * COVERS: every consumer of hasActiveTxSession(), plus AV HAIL
+     *   (which reads hasActiveSession() and is OR'd explicitly).
+     * DOES NOT COVER (deliberate): hasActiveSession(). Two of its
+     *   consumers are TX-TIMING paths — arqFullRelax in guiUpdate and
+     *   arqFullRelaxStopTx in stopTx — which switch PTT between
+     *   period-aligned and async. QUERY ARQ? is an ordinary directed
+     *   message on the normal enqueue path and must keep the ordinary
+     *   period-aligned timing; folding negotiation in there would
+     *   silently change TX timing, which is not what this fixes. Its
+     *   other consumers (inbound chime + BELL suppression) key on
+     *   inbound chunk traffic, which negotiation has none of.
+     *
+     * INVARIANT: outside the negotiation window m_negotiating is false,
+     * so every predicate above returns exactly what it returned before
+     * this change. The behavioural delta is confined to the window.
+     *
+     * Terminals mirror a session's exactly: reply→resume (sendComplete),
+     * timeout→V1 fallback (sendFailed), Halt (haltAll), callsign change
+     * (abort). endNegotiation() is idempotent.
+     */
+    void beginNegotiation(QString const &peer) {
+        m_negotiating = true;
+        m_negotiatingPeer = peer.toUpper();
+    }
+    void endNegotiation() {
+        m_negotiating = false;
+        m_negotiatingPeer.clear();
+    }
+    bool isNegotiating() const { return m_negotiating; }
+    QString negotiatingPeer() const { return m_negotiatingPeer; }
 
     /**
      * @brief [BUILD 343.3 rxLock] True while a V3 native RECEIVE is
@@ -703,8 +778,12 @@ class Manager : public QObject {
      *        form always carries TOTAL+KB, so mid-join works too).
      * @return true iff resolved + handled (caller re-latches submode).
      */
+    // holdMs: keyup delay for any ACK this marker triggers (it can
+    // complete a chunk by draining orphans) — see
+    // onNativeFrameReceived's frameHoldMs. [TODO #119]
     bool onNativeMarkerFrameReceived(NativeBinary::MarkerFrame const &m,
-                                     int freq);
+                                     int freq,
+                                     int holdMs = ACK_TX_DELAY_MS);
 
     /**
      * @brief [BUILD 344 binMarker] Make `peer` resolvable by the
@@ -786,9 +865,23 @@ class Manager : public QObject {
      *         third-party listeners hearing someone else's transfer
      *         never mode-switch (native frames carry no addressing).
      */
+    /**
+     * @param frameHoldMs [TODO #119 2026-07-24 v3ackhold] Keyup delay
+     *        for any ACK/NACK this frame triggers, computed by the
+     *        caller from the frame's absPos exactly as the V1/V2 text
+     *        path does (see processCommandActivity's ackHoldMs). The
+     *        three ACK/NACK sites reachable from here fire the instant
+     *        the sender's LAST burst frame decodes, i.e. inside its
+     *        TX->RX turnaround; at the old flat 250 ms the reply's
+     *        leading Costas aired in the sender's dead zone and was
+     *        missed (operator 2026-07-24: "partial ACK or NACK" seen
+     *        at the sender). Default preserves the pre-fix timing for
+     *        the FSM harness.
+     */
     bool onNativeFrameReceived(int seq, int chk4,
                                QByteArray const &payload8,
-                               int freq, qint64 absPos);
+                               int freq, qint64 absPos,
+                               int frameHoldMs = ACK_TX_DELAY_MS);
 
     /**
      * @brief Notify the manager that we received an ACK for chunk `seq`
@@ -1084,24 +1177,35 @@ class Manager : public QObject {
     // [TODO #107] Native-binary (V3) receive helpers.
     // Marker chunk arrived (already text-CRC-verified): open/refresh
     // the collect window, or re-ACK an already-collected chunk.
+    // holdMs: [TODO #119] keyup delay for an ACK this marker path may
+    // send by completing a chunk from drained orphans.
     void handleNativeMarker(QString const &peer, RxState &rx,
                             ParsedChunk const &chunk,
-                            NativeBinary::MarkerInfo const &mi);
+                            NativeBinary::MarkerInfo const &mi,
+                            int holdMs = ACK_TX_DELAY_MS);
     // Open the window for chunk `chunkId` (marker- or auto-advance-
     // driven), drain matching orphans, arm the collect timer. May
     // complete immediately if orphans already fill the chunk.
     void openNativeChunkWindow(QString const &peer, RxState &rx,
                                int msgId, int chunkId, int total,
-                               quint16 pcrc, bool pcrcValid);
+                               quint16 pcrc, bool pcrcValid,
+                               int holdMs = ACK_TX_DELAY_MS);
     // Collector complete: PCRC verdict → store+ACK+advance/deliver,
     // or NACK+reset.
-    void finishNativeChunk(QString const &peer, RxState &rx);
+    // holdMs: keyup delay for the ACK (crc OK) or NACK (crc bad) this
+    // completion sends — see onNativeFrameReceived's frameHoldMs.
+    void finishNativeChunk(QString const &peer, RxState &rx,
+                           int holdMs);
     // Drop all V3 state for one peer (halt/evict/deliver cleanup).
     void clearNativeState(RxState &rx);
 
     QString                     m_myCall;
     int                         m_nextMsgId{MSG_ID_MIN};
     QHash<QString, SendState>   m_sends;
+    // [2026-07-23 negophase] Opening phase of a TX session — see
+    // beginNegotiation(). Folded into hasActiveTxSession().
+    bool                        m_negotiating{false};
+    QString                     m_negotiatingPeer;
     QHash<QString, RxState>     m_recv;
 
     // [TODO #107] Binary frames that arrived with no open collect
