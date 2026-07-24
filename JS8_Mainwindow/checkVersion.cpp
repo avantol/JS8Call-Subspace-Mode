@@ -24,6 +24,7 @@
 
 #include "JS8_UI/mainwindow.h"
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
@@ -72,31 +73,112 @@ constexpr char kStoreUrl[] = "https://apps.microsoft.com/detail/9nhk74bnkxkc";
 constexpr char kReleasesUrl[] =
     "https://github.com/avantol/Subspace-Edition/releases";
 
+// [2026-07-24 appxStoreCheck] When running as the MSIX/Store build, the
+// update check must consult the STORE's version, not GitHub, and must
+// never mention GitHub — the Store is that channel's sole authority.
+// This is the same public REST source `winget --source msstore` uses;
+// GET .../packageManifests/<ProductId> returns
+//   { "Data": { "Versions": [ { "PackageVersion": "4.1.0.<build>.0" }, ... ] } }
+// We take the max PackageVersion. Best-effort: if this endpoint ever
+// changes shape or fails, the appx path degrades to "open the Store"
+// (see the failure handling) — it NEVER falls back to GitHub.
+// NOTE: for the comparison to be correct the MSIX package version must
+// track version() = "4.1.0.<build>" (MSIX pads a 4th revision digit,
+// e.g. "4.1.0.<build>.0" — QVersionNumber treats the trailing 0 as
+// equal, so that is fine).
+constexpr char kStoreProductId[] = "9NHK74BNKXKC";
+constexpr char kStoreManifestUrl[] =
+    "https://storeedgefd.dsx.mp.microsoft.com/v9.0/packageManifests/"
+    "9NHK74BNKXKC?market=US&locale=en-US";
+
 }  // namespace
 
+// [2026-07-24 appxStoreCheck] Parse the newest version out of the Store
+// (winget msstore) packageManifests JSON: Data.Versions[].PackageVersion,
+// take the max. Returns empty on any shape mismatch (=> graceful Store
+// fallback, never GitHub).
+static QString parseStoreLatest(QByteArray const &body) {
+    auto const versions = QJsonDocument::fromJson(body)
+                              .object()
+                              .value(QStringLiteral("Data"))
+                              .toObject()
+                              .value(QStringLiteral("Versions"))
+                              .toArray();
+    QVersionNumber best;
+    QString bestStr;
+    for (auto const &v : versions) {
+        QString const s = v.toObject()
+                              .value(QStringLiteral("PackageVersion"))
+                              .toString()
+                              .trimmed();
+        auto const vn = QVersionNumber::fromString(s);
+        if (!vn.isNull() && best < vn) {
+            best = vn;
+            bestStr = s;
+        }
+    }
+    return bestStr;
+}
+
 void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
+    // [2026-07-24 appxStoreCheck] Channel decides EVERYTHING: which
+    // version source we query and which store/site (if any) we point at.
+    // The MSIX/Store build checks the STORE version and never mentions
+    // GitHub; the plain build checks GitHub. Resolved once here.
+    bool const appx = runningAsAppx();
+
     auto *m = new QNetworkAccessManager(this);
     connect(
         m, &QNetworkAccessManager::finished, this,
-        [this, alertOnUpToDate](QNetworkReply *reply) {
+        [this, alertOnUpToDate, appx](QNetworkReply *reply) {
             reply->manager()->deleteLater();
             reply->deleteLater();
 
-            if (reply->error()) {
+            // Parse the latest version per channel; htmlUrl is GitHub-only.
+            QString latestStr;
+            QString htmlUrl;
+            if (!reply->error()) {
+                if (appx) {
+                    latestStr = parseStoreLatest(reply->readAll());
+                } else {
+                    auto const obj =
+                        QJsonDocument::fromJson(reply->readAll()).object();
+                    QString tag =
+                        obj.value(QStringLiteral("tag_name")).toString().trimmed();
+                    bool const isDraft = obj.value(QStringLiteral("draft")).toBool();
+                    bool const isPre =
+                        obj.value(QStringLiteral("prerelease")).toBool();
+                    htmlUrl = obj.value(QStringLiteral("html_url")).toString();
+                    if (!tag.isEmpty() && !isDraft && !isPre) {
+                        if (tag.startsWith('v') || tag.startsWith('V'))
+                            tag = tag.mid(1);
+                        latestStr = tag;
+                    }
+                }
+            }
+
+            // Failure = network error OR unparseable/no usable version.
+            if (latestStr.isEmpty()) {
                 // VISIBLE, not qCDebug — a silent failure here is what hid
                 // the old breakage for the life of the fork.
-                qWarning()
-                    << "[UPDATE-CHECK] failed:" << reply->errorString()
-                    << "http="
-                    << reply
-                           ->attribute(
-                               QNetworkRequest::HttpStatusCodeAttribute)
-                           .toInt();
+                qWarning() << "[UPDATE-CHECK]"
+                           << (appx ? "store" : "github")
+                           << "check failed:" << reply->errorString() << "http="
+                           << reply
+                                  ->attribute(
+                                      QNetworkRequest::HttpStatusCodeAttribute)
+                                  .toInt();
                 if (alertOnUpToDate) {
+                    // appx: offer the Store (never GitHub); plain: generic.
+                    QString const msg =
+                        appx ? tr("Could not check the Microsoft Store right "
+                                  "now. <a href=\"%1\">Open the Microsoft "
+                                  "Store</a> to check for updates.")
+                                   .arg(QString::fromLatin1(kStoreUrl))
+                             : tr("Could not check for a new version right "
+                                  "now. Please try again later.");
                     (new SelfDestructMessageBox(
-                         30, tr("Update Check Failed"),
-                         tr("Could not check for a new version right now. "
-                            "Please try again later."),
+                         30, tr("Update Check Failed"), msg,
                          QMessageBox::Warning, QMessageBox::Ok,
                          QMessageBox::Ok, false, this))
                         ->show();
@@ -104,41 +186,16 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
                 return;
             }
 
-            auto const obj = QJsonDocument::fromJson(reply->readAll()).object();
-            QString tag = obj.value("tag_name").toString().trimmed();
-            bool const isDraft = obj.value("draft").toBool();
-            bool const isPre = obj.value("prerelease").toBool();
-            QString const htmlUrl = obj.value("html_url").toString();
-
-            if (tag.isEmpty() || isDraft || isPre) {
-                qWarning() << "[UPDATE-CHECK] no usable stable release:"
-                           << "tag=" << tag << "draft=" << isDraft
-                           << "prerelease=" << isPre;
-                if (alertOnUpToDate) {
-                    (new SelfDestructMessageBox(
-                         30, tr("Update Check Failed"),
-                         tr("Could not read the latest version. Please try "
-                            "again later."),
-                         QMessageBox::Warning, QMessageBox::Ok,
-                         QMessageBox::Ok, false, this))
-                        ->show();
-                }
-                return;
-            }
-
-            // tag is "v4.1.0.<build>"; QVersionNumber wants digits first.
-            if (tag.startsWith('v') || tag.startsWith('V')) {
-                tag = tag.mid(1);
-            }
             auto const currentVersion = QVersionNumber::fromString(version());
-            auto const latestVersion = QVersionNumber::fromString(tag);
+            auto const latestVersion = QVersionNumber::fromString(latestStr);
 
-            qWarning() << "[UPDATE-CHECK] current=" << currentVersion
+            qWarning() << "[UPDATE-CHECK]" << (appx ? "store" : "github")
+                       << "current=" << currentVersion
                        << "latest=" << latestVersion
                        << "newer=" << (currentVersion < latestVersion);
 
             if (currentVersion < latestVersion) {
-                QString const latestStr = latestVersion.toString();
+                QString const normStr = latestVersion.toString();
 
                 // Once per new version — but only for the automatic
                 // (startup) check; the Help-menu check always reports.
@@ -147,18 +204,19 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
                     if (settings
                             .value(QStringLiteral(
                                 "Common/LastUpdateNotifiedVersion"))
-                            .toString() == latestStr) {
+                            .toString() == normStr) {
                         qWarning() << "[UPDATE-CHECK] already notified for"
-                                   << latestStr << "— suppressing";
+                                   << normStr << "— suppressing";
                         return;
                     }
                     settings.setValue(
                         QStringLiteral("Common/LastUpdateNotifiedVersion"),
-                        latestStr);
+                        normStr);
                 }
 
                 QString link, linkText;
-                if (runningAsAppx()) {
+                if (appx) {
+                    // STORE ONLY — no GitHub link ever on this channel.
                     link = QString::fromLatin1(kStoreUrl);
                     linkText = tr("Update now.");
                 } else {
@@ -187,15 +245,22 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
             }
         });
 
-    qWarning() << "[UPDATE-CHECK] querying GitHub releases API"
-               << "(appx=" << runningAsAppx() << ")";
-    QNetworkRequest r(
-        QUrl("https://api.github.com/repos/avantol/Subspace-Edition/"
-             "releases/latest"));
-    // GitHub's API rejects requests with NO User-Agent (HTTP 403) — the
-    // exact class of silent failure this rewrite is meant to kill.
+    QNetworkRequest r;
+    if (appx) {
+        qWarning() << "[UPDATE-CHECK] querying Microsoft Store manifest for"
+                   << kStoreProductId;
+        r.setUrl(QUrl(QString::fromLatin1(kStoreManifestUrl)));
+    } else {
+        qWarning() << "[UPDATE-CHECK] querying GitHub releases API";
+        r.setUrl(QUrl(QStringLiteral("https://api.github.com/repos/avantol/"
+                                     "Subspace-Edition/releases/latest")));
+        // GitHub rejects requests with NO Accept header on some paths.
+        r.setRawHeader("Accept", "application/vnd.github+json");
+    }
+    // A User-Agent is required by GitHub (403 without it) and is polite to
+    // the Store endpoint — set it for both. Its absence is exactly the
+    // silent-failure class this code exists to avoid.
     r.setHeader(QNetworkRequest::UserAgentHeader,
                 QStringLiteral("Subspace-Edition/%1").arg(version()));
-    r.setRawHeader("Accept", "application/vnd.github+json");
     m->get(r);
 }

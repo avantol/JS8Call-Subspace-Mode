@@ -599,27 +599,12 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         ui->menuFile->insertSeparator(ui->actionSettings);
     }
 
-    // [TODO #107 / BUILD 342.19] V3 debug TX rigs, gated on the
-    // diagnostic-logging setting (operator decision 2026-07-20 —
-    // KEEP fielded, was "remove before push"): the rigs are useless
-    // without a diag log, and a support session wants both together.
-    // Same startup-time semantics as the old JS8_V3_DEBUG env var —
-    // DiagnosticLogging is read once in main() (log file) and once
-    // here (menu); toggling the checkbox takes effect next launch.
-    // Both actions carry their own guards (Subspace-mode required,
-    // TX-busy bail), so a curious fleet operator can't key garbage.
-    if (m_config.diagnostic_logging() ||
-        qEnvironmentVariableIsSet("JS8_V3_DEBUG")) {
-        auto *v3Debug =
-            ui->menuHelp->addAction(QStringLiteral("TX native test chunk"));
-        connect(v3Debug, &QAction::triggered, this,
-                &UI_Constructor::debugSendNativeTestChunk);
-        auto *v3Burst = ui->menuHelp->addAction(
-            QStringLiteral("TX native burst chunk (experiment)"));
-        connect(v3Burst, &QAction::triggered, this,
-                &UI_Constructor::debugSendNativeBurstChunk);
-        qWarning() << "[V3-TX] debug menu actions enabled (JS8_V3_DEBUG)";
-    }
+    // [2026-07-24] Removed the two V3 debug Help-menu entries ("TX
+    // native test chunk" / "TX native burst chunk (experiment)") per
+    // operator request. The underlying debugSendNativeTestChunk /
+    // debugSendNativeBurstChunk member functions are retained (no
+    // longer exposed in the UI); re-add the menu wiring here if the
+    // rigs are needed again for a support session.
 
     // Reopen the Spots Map at startup if it was open at last exit
     // (one-time — NOT in a menu aboutToShow handler).
