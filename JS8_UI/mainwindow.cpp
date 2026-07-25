@@ -414,16 +414,38 @@ UI_Constructor::~UI_Constructor() {
     remove_child_from_event_filter(this);
 
     if (!netJoined || !audioJoined || !notifyJoined) {
-        qWarning() << "[SHUTDOWN] a worker thread did not exit within"
-                   << SHUTDOWN_JOIN_MS
-                   << "ms (net=" << netJoined << "audio=" << audioJoined
+        // Name the actual stuck thread(s) — don't assume audio. The
+        // audio case (audio=false) is miniaudio's PulseAudio worker
+        // wedged in pa_mainloop_poll after a device/route change; a
+        // stuck net/notify thread has a different cause.
+        QStringList stuck;
+        if (!netJoined) stuck << QStringLiteral("network");
+        if (!audioJoined) stuck << QStringLiteral("audio(miniaudio/pulse)");
+        if (!notifyJoined) stuck << QStringLiteral("notify-audio");
+        qWarning() << "[SHUTDOWN] worker thread(s) did not exit within"
+                   << SHUTDOWN_JOIN_MS << "ms — stuck:" << stuck.join(", ")
+                   << "(net=" << netJoined << "audio=" << audioJoined
                    << "notify=" << notifyJoined
-                   << ") — almost certainly miniaudio's PulseAudio worker "
-                      "stuck in pa_mainloop_poll after a device/route "
-                      "change. Forcing exit so the instance lock is "
-                      "released and JS8Call can be restarted.";
+                   << "). Forcing exit.";
         if (m_settings) {
             m_settings->sync();
+        }
+        // [2026-07-24 lockclean] _Exit bypasses the QLockFile destructor,
+        // so main()'s JS8Call.lock is NOT removed — and it is created
+        // with setStaleLockTime(0), so the NEXT launch never treats the
+        // orphaned lock as stale: it blocks on "Another instance may be
+        // running" BEFORE diag logging starts, which looks exactly like
+        // the app "didn't come back" after a config-switch/exit that hit
+        // this force-exit (operator-observed 2026-07-24, Default→IC-7300
+        // switch). Remove the lock ourselves so the force-exit is
+        // actually recoverable — the whole point of forcing it. Path
+        // mirrors main.cpp (TempLocation + "JS8Call.lock").
+        QString const lockPath =
+            QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
+            QStringLiteral("/JS8Call.lock");
+        if (QFile::remove(lockPath)) {
+            qWarning() << "[SHUTDOWN] removed stale lock" << lockPath
+                       << "so relaunch comes up clean";
         }
         std::_Exit(0);
     }

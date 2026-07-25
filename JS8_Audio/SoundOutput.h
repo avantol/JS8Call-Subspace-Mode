@@ -9,6 +9,8 @@
 #include <QObject>
 #include <QString>
 
+#include <atomic>
+
 class QIODevice;
 
 // Streams audio samples from a QIODevice source (the Modulator) to the
@@ -16,10 +18,15 @@ class QIODevice;
 //
 // Build 141 swapped this from QAudioSink (Qt6Multimedia) to miniaudio's
 // ma_device. Same rationale as SoundInput (Build 140): Qt 6.9.x WASAPI
-// teardown races caused a long crash family. ma_device_uninit() is
-// synchronous; the busywait, deferred-delete drain, m_tearingDown gate,
-// platform-specific stop-vs-recreate logic, and Build 138 first-only
-// warmup are all gone.
+// teardown races caused a long crash family. The busywait,
+// deferred-delete drain, m_tearingDown gate, platform-specific
+// stop-vs-recreate logic, and Build 138 first-only warmup are all gone.
+//
+// [audioreap 2026-07-24] Teardown is NOT synchronous: the heap-owned
+// ma_device goes to a detached reaper (AudioDeviceReaper.h) because
+// ma_device_uninit's worker join can wedge forever on a PulseAudio
+// device re-enumeration. teardown() drains in-flight callbacks
+// (m_callbackDepth) before m_source may be reassigned.
 class SoundOutput : public QObject {
     Q_OBJECT;
 
@@ -75,8 +82,18 @@ class SoundOutput : public QObject {
     unsigned        m_msBuffered = 0u;
     qreal           m_volume     = 1.0;
     QIODevice *     m_source     = nullptr;
-    ma_device       m_device_ma  {};
+    // Heap-owned so a wedged ma_device_uninit can be handed to the detached
+    // reaper (JS8_Audio/AudioDeviceReaper.h) and outlive this object without
+    // a use-after-free. null when no device is open.
+    ma_device *     m_dev        = nullptr;
     bool            m_deviceInitialized = false;
+    // [reapguard 2026-07-25] Callbacks in flight on miniaudio's worker.
+    // With teardown now async (reaper), teardown() drains this (bounded,
+    // µs in practice) after retiring the device and before m_source is
+    // reassigned — otherwise an in-flight callback of the OLD device
+    // could read the NEW source and steal its first samples. See the
+    // matching member in SoundInput.h.
+    std::atomic<int> m_callbackDepth{0};
     // [AUDIO-PRIORITY 2026-06-16 build 286] miniaudio puts thread
     // priority on the context, not the device — so we own a context.
     // Init'd once per buildAndStart and torn down with the device.

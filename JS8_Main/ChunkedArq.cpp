@@ -668,10 +668,18 @@ void Manager::armAckTimer(QString const &peer, SendState &state) {
         connect(state.ackTimer, &QTimer::timeout,
                 this, &Manager::onAckTimerExpired);
     }
-    // [BUILD 331-arqTimeoutLock] Pass the chunk's TX-time submode
-    // (locked at sendChunked) so the timeout is correct for the mode
-    // the chunk actually went out in, regardless of any operator
-    // mode-switch between sendChunked and now.
+    // [#121 2026-07-24 acktrack] Re-capture the CURRENT submode here —
+    // armAckTimer runs post-TX-done, so this is the speed the chunk
+    // just went out in (and the speed the receiver will reply at, via
+    // arqSpeed). Sizing from this, not the transfer's first-chunk
+    // seed, makes the ACK wait track the LAST sub-msg after a mid-
+    // transfer speed change. No provider (FSM harness) => keep the
+    // seeded state.txSubmode, so harness behaviour is unchanged.
+    if (m_currentSubmodeFn) {
+        state.txSubmode = m_currentSubmodeFn();
+    }
+    // [BUILD 331-arqTimeoutLock] Size from the chunk's TX-time submode
+    // so the timeout matches the mode the chunk actually went out in.
     int const timeoutMs = m_ackTimeoutFn ? m_ackTimeoutFn(state.txSubmode)
                                          : DEFAULT_ACK_TIMEOUT_MS;
     state.ackTimer->start(timeoutMs);

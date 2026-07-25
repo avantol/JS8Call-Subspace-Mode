@@ -4,12 +4,16 @@
  */
 #include "SoundOutput.h"
 
+#include "JS8_Audio/AudioDeviceReaper.h"
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QIODevice>
 #include <QLoggingCategory>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <thread>
 
 #include "moc_SoundOutput.cpp"
 
@@ -78,6 +82,11 @@ SoundOutput::s_dataCallback(ma_device * device,
 void
 SoundOutput::onPlayback(void * pOutput, ma_uint32 frameCount)
 {
+    // [reapguard] Mark ourselves in flight for teardown()'s drain — see
+    // m_callbackDepth in the header. This function has no early returns,
+    // so the matching release is at the end.
+    m_callbackDepth.fetch_add(1, std::memory_order_acquire);
+
     // [AUDIO-CB-PROBE 2026-06-16 build 288] Measure inter-callback
     // interval to detect audio-thread preemption. miniaudio doesn't
     // expose whether the OS actually granted the realtime priority we
@@ -131,19 +140,42 @@ SoundOutput::onPlayback(void * pOutput, ma_uint32 frameCount)
             samples[i] = static_cast<qint16>(samples[i] * volume);
         }
     }
+
+    m_callbackDepth.fetch_sub(1, std::memory_order_release);
 }
 
 void
 SoundOutput::teardown()
 {
     if (m_deviceInitialized) {
-        ma_device_uninit(&m_device_ma);
+        // Hand off to the reaper: uninit runs on a detached thread so this
+        // never blocks even when miniaudio's PulseAudio worker is wedged in
+        // ppoll after a device re-enumeration (AudioDeviceReaper.h). That is
+        // what lets the audio QThread finish at shutdown/config-switch
+        // instead of hanging until the watchdog force-exits.
+        retireAudioDevice(m_dev, m_tag);
+        m_dev = nullptr;
         m_deviceInitialized = false;
+        // [reapguard] Drain any in-flight callback of the retired device
+        // before clearing m_source below — otherwise it could observe the
+        // NEW source that buildAndStart assigns right after this returns
+        // and steal its first samples. New callbacks can't enter (retire
+        // cleared pUserData); the WEDGED worker is stuck in ppoll, not in
+        // our callback, so depth is 0 there. Bound: 50 ms.
+        for (int i = 0;
+             m_callbackDepth.load(std::memory_order_acquire) > 0 && i < 1000;
+             ++i) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+        m_source = nullptr;
     }
     // [AUDIO-PRIORITY 2026-06-16 build 286] Context uninit MUST come
     // after device uninit — the device's callback thread is owned by
     // the context, and uninit'ing the context first would yank the
-    // thread out from under a still-running callback.
+    // thread out from under a still-running callback. The device uninit is
+    // now async (reaper), but the context is only ever init'd in the
+    // reverted build-286 path (m_contextInitialized stays false today), so
+    // there is no live device/context ordering to honor here.
     if (m_contextInitialized) {
         ma_context_uninit(&m_context_ma);
         m_contextInitialized = false;
@@ -185,14 +217,20 @@ SoundOutput::buildAndStart(QIODevice * source)
     cfg.dataCallback = &SoundOutput::s_dataCallback;
     cfg.pUserData    = this;
 
-    if (ma_device_init(nullptr, &cfg, &m_device_ma) != MA_SUCCESS) {
+    // teardown() above retired any prior device and nulled m_dev; allocate
+    // fresh storage for this open.
+    if (!m_dev) m_dev = new ma_device{};
+
+    if (ma_device_init(nullptr, &cfg, m_dev) != MA_SUCCESS) {
         Q_EMIT error(tr("Failed to initialize audio output device."));
+        delete m_dev;  // never init'd — free directly, do NOT uninit
+        m_dev = nullptr;
         return false;
     }
     m_deviceInitialized = true;
     m_source = source;
 
-    if (ma_device_start(&m_device_ma) != MA_SUCCESS) {
+    if (ma_device_start(m_dev) != MA_SUCCESS) {
         Q_EMIT error(tr("Failed to start audio output device."));
         teardown();
         m_source = nullptr;
@@ -202,18 +240,18 @@ SoundOutput::buildAndStart(QIODevice * source)
     // [TODO #113 2026-07-23] Report what we ACTUALLY opened (see the
     // matching block in SoundInput::start).
     QString const openedName =
-        QString::fromUtf8(m_device_ma.playback.name);
+        QString::fromUtf8(m_dev->playback.name);
     qWarning() << "[AUDIO-OUT] device started:"
                << "requested=" << (m_device.isNull()
                                        ? QStringLiteral("(default)")
                                        : m_device.description)
                << "opened=" << openedName
-               << "| callback:" << m_device_ma.sampleRate << "Hz"
-               << m_device_ma.playback.channels << "ch"
-               << ma_get_format_name(m_device_ma.playback.format)
-               << "| hardware:" << m_device_ma.playback.internalSampleRate
-               << "Hz" << m_device_ma.playback.internalChannels << "ch"
-               << ma_get_format_name(m_device_ma.playback.internalFormat);
+               << "| callback:" << m_dev->sampleRate << "Hz"
+               << m_dev->playback.channels << "ch"
+               << ma_get_format_name(m_dev->playback.format)
+               << "| hardware:" << m_dev->playback.internalSampleRate
+               << "Hz" << m_dev->playback.internalChannels << "ch"
+               << ma_get_format_name(m_dev->playback.internalFormat);
 
     if (!m_device.isNull() && !haveDevice) {
         qWarning() << "[AUDIO-OUT] CONFIGURED DEVICE NOT FOUND — fell back "
@@ -289,7 +327,7 @@ SoundOutput::restart(QIODevice * source)
     // audio thread queue. Same intent as the prior QAudioSink code.
     if (m_deviceInitialized
         && m_source == source
-        && ma_device_is_started(&m_device_ma)) {
+        && ma_device_is_started(m_dev)) {
         return;
     }
     buildAndStart(source);
@@ -298,8 +336,8 @@ SoundOutput::restart(QIODevice * source)
 void
 SoundOutput::suspend()
 {
-    if (m_deviceInitialized && ma_device_is_started(&m_device_ma)) {
-        ma_device_stop(&m_device_ma);
+    if (m_deviceInitialized && ma_device_is_started(m_dev)) {
+        ma_device_stop(m_dev);
         Q_EMIT status(tr("Suspended"));
     }
 }
@@ -307,8 +345,8 @@ SoundOutput::suspend()
 void
 SoundOutput::resume()
 {
-    if (m_deviceInitialized && !ma_device_is_started(&m_device_ma)) {
-        if (ma_device_start(&m_device_ma) != MA_SUCCESS) {
+    if (m_deviceInitialized && !ma_device_is_started(m_dev)) {
+        if (ma_device_start(m_dev) != MA_SUCCESS) {
             Q_EMIT error(tr("Failed to resume audio output device."));
         } else {
             Q_EMIT status(tr("Sending"));
@@ -324,8 +362,8 @@ SoundOutput::resume()
 void
 SoundOutput::reset()
 {
-    if (m_deviceInitialized && ma_device_is_started(&m_device_ma)) {
-        ma_device_stop(&m_device_ma);
+    if (m_deviceInitialized && ma_device_is_started(m_dev)) {
+        ma_device_stop(m_dev);
     }
 }
 
@@ -346,7 +384,7 @@ SoundOutput::attenuation() const
 bool
 SoundOutput::isStreaming() const
 {
-    return m_deviceInitialized && ma_device_is_started(&m_device_ma);
+    return m_deviceInitialized && ma_device_is_started(m_dev);
 }
 
 void
@@ -363,9 +401,10 @@ SoundOutput::resetAttenuation()
 }
 
 /**
- * @brief Destructor. ma_device_uninit is synchronous (joins the
- * worker), so no closingDown() leak path is needed — Builds 128's
- * "intentionally leak QAudioSink at process exit" workaround is gone.
+ * @brief Destructor. Just tears down; the device (if any) goes to the
+ * detached reaper, which outlives this object and frees it whenever
+ * ma_device_uninit returns — a wedged uninit can never become a
+ * use-after-free here.
  */
 SoundOutput::~SoundOutput()
 {

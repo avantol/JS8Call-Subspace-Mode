@@ -224,17 +224,24 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // budget tracks cycle length (Subspace 3.75 s → 12 s, Normal 15 s
     // → 36 s, etc.). Evaluated at arm time, so mid-QSO mode switches
     // take effect on the next chunk's timer.
-    // [BUILD 331-arqTimeoutLock] Lambda now takes the submode the
-    // chunk's audio was actually encoded in (captured by ChunkedArq
-    // at sendChunked time, stored on SendState.txSubmode, passed back
-    // here at arm time). The Manager passes that captured value — NOT
-    // the current m_nSubMode — so an operator mode-switch between
-    // sendChunked and arm can never make this timer use the wrong
-    // mode. Mid-QSO mode switches still take effect on the NEXT
-    // chunk (which captures its own txSubmode at its own sendChunked).
+    // [BUILD 331-arqTimeoutLock] Maps a submode to its ACK-wait budget.
+    // The Manager passes SendState.txSubmode — the mode the chunk
+    // actually went out in — not a live read, so an operator mode-
+    // switch between capture and arm can't give the timer the wrong
+    // mode.
     m_chunkedArq->setAckTimeoutFn([](int submode) {
         return ChunkedArq::ackTimeoutMsForSubmode(submode);
     });
+    // [#121 2026-07-24 acktrack] Live-submode provider. armAckTimer
+    // (post-TX-done) calls this to RE-CAPTURE txSubmode per chunk, so
+    // each sub-msg's ACK wait tracks the speed that sub-msg went out in
+    // — correcting the case where the operator changes speed mid-V1/V2
+    // transfer and later chunks (+ their ACKs) run faster/slower than
+    // the first. Covers F/V1, F/V2, L/V1 uniformly (shared Manager
+    // path). Corrects the old assumption that "the next chunk captures
+    // its own txSubmode at its own sendChunked" — sendChunked runs once
+    // per super-message, not per chunk.
+    m_chunkedArq->setCurrentSubmodeFn([this]() { return m_nSubMode; });
     // [DYNAMIC CAP 2026-06-12 build 262] TX-idle safety cap scales with
     // submode cycle length (90 s floor; legacy Normal/Slow chunks need
     // ~105 / ~210 s to drain). Operator-observed in 2026-06-12 Normal-
@@ -243,6 +250,22 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     m_chunkedArq->setTxIdleCapFn([this]() {
         return ChunkedArq::txIdleMaxWaitMsForSubmode(m_nSubMode);
     });
+
+    // [2026-07-24 updlink] The "Check for updates" label (linkCheckUpdates)
+    // used to be a QLabel with a HARDCODED github releases URL and
+    // openExternalLinks=true — so clicking it opened GitHub directly,
+    // bypassing the channel-aware checkVersion() entirely. That is why
+    // the MSIX/Store build still sent users to GitHub. The .ui now has
+    // openExternalLinks=false and a neutral href; route the click
+    // through checkVersion(true) so it queries the RIGHT source (Store
+    // for appx, GitHub for the plain build) and shows the up-to-date /
+    // new-version dialog with the correct link. alertOnUpToDate=true so
+    // a manual check always reports (unlike the silent startup check).
+    if (ui->linkCheckUpdates) {
+        ui->linkCheckUpdates->setOpenExternalLinks(false);  // belt + braces
+        connect(ui->linkCheckUpdates, &QLabel::linkActivated, this,
+                [this](QString const &) { checkVersion(true); });
+    }
     connect(m_chunkedArq, &ChunkedArq::Manager::wantToTransmit,
             this, &UI_Constructor::onChunkedWantToTransmit);
     // [TODO.md #57 build 268] RX-side ACK / NACK transmissions route

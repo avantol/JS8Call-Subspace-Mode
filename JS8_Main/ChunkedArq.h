@@ -390,13 +390,16 @@ struct SendState {
     QString        msgAddressee;   // populated only for "MSG TO: <addr>"
     QString        originalBody;   // pre-chunked body, needed for inbox deposit
 
-    // [BUILD 331-arqTimeoutLock] Submode captured at sendChunked() time
-    // — the mode the chunk's audio actually goes out in. Used by
-    // armAckTimer to compute the per-chunk ACK timeout (passed to
-    // AckTimeoutFn). Locking the mode at TX-commit time eliminates the
-    // race where the operator changes mode between the timer-arm read
-    // and the actual TX (which would have given the chunk a timer for
-    // the WRONG mode — too short on slower→faster switches, etc.).
+    // [BUILD 331-arqTimeoutLock] Submode for the ACK-timeout sizing.
+    // SEEDED at sendChunked() (the first chunk's mode) and — [#121
+    // 2026-07-24 acktrack] — RE-CAPTURED per chunk in armAckTimer from
+    // the live-submode provider (post-TX-done), so each sub-msg's ACK
+    // wait is sized from the speed THAT sub-msg went out in, not the
+    // transfer's first chunk. Without the re-capture, a mid-transfer
+    // speed change (V1/V2 allow it) left every later chunk waiting the
+    // first chunk's timeout — too long on faster switches, defeating
+    // the speed-up (operator-observed). The seed remains the fallback
+    // when no live provider is wired (FSM harness).
     int            txSubmode{0};
 };
 
@@ -544,6 +547,23 @@ class Manager : public QObject {
      */
     using AckTimeoutFn = std::function<int(int submode)>;
     void setAckTimeoutFn(AckTimeoutFn fn) { m_ackTimeoutFn = std::move(fn); }
+
+    /**
+     * @brief [#121 2026-07-24 acktrack] Live current-submode provider.
+     *        Returns m_nSubMode. armAckTimer calls this (post-TX-done)
+     *        to size EACH sub-msg's ACK wait from the speed that
+     *        sub-msg actually went out in, not the transfer's first
+     *        chunk. Needed because the operator may change speed mid-
+     *        V1/V2 transfer (allowed; V3 locks speed), later chunks go
+     *        out at the new speed, and the receiver replies at that
+     *        speed (arqSpeed) — so the sender's wait must track the
+     *        LAST sub-msg, not the first. Unset (e.g. FSM harness) =>
+     *        fall back to the seeded state.txSubmode, so behaviour is
+     *        unchanged when no live speed exists.
+     */
+    void setCurrentSubmodeFn(std::function<int()> fn) {
+        m_currentSubmodeFn = std::move(fn);
+    }
 
     /**
      * @brief Callback returning the TX-idle safety-cap timeout in ms,
@@ -1222,6 +1242,7 @@ class Manager : public QObject {
 
     IdleCheckFn                 m_txIdleCheck;
     AckTimeoutFn                m_ackTimeoutFn;
+    std::function<int()>        m_currentSubmodeFn;  // [#121] live submode
     // V3 frame-slot duration (ms). One Subspace T/R period; the
     // watchdog budgets and post-burst re-ACK delay derive from it.
     // Overridable via setNativeFrameMs() for the offline harness.

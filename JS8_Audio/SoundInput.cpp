@@ -4,9 +4,13 @@
  */
 #include "SoundInput.h"
 
+#include "JS8_Audio/AudioDeviceReaper.h"
+
 #include <QCoreApplication>
 #include <QLoggingCategory>
+#include <chrono>
 #include <cstring>
+#include <thread>
 
 #include "moc_SoundInput.cpp"
 
@@ -79,13 +83,20 @@ SoundInput::s_dataCallback(ma_device * device,
 void
 SoundInput::onCapture(void const * pInput, ma_uint32 frameCount)
 {
+    // [reapguard] Mark ourselves in flight for stop()'s drain — see
+    // m_callbackDepth in the header. Single-exit so the release below
+    // always runs.
+    m_callbackDepth.fetch_add(1, std::memory_order_acquire);
+
     // [TODO #108 keep-warm] Monitor-off discards samples here; the
     // device itself keeps running (see m_discarding in the header).
-    if (m_discarding.load(std::memory_order_relaxed)) return;
-    if (!m_sink || frameCount == 0) return;
+    if (!m_discarding.load(std::memory_order_relaxed)
+        && m_sink && frameCount != 0) {
+        qint64 const bytes = static_cast<qint64>(frameCount) * m_sink->bytesPerFrame();
+        m_sink->write(static_cast<char const *>(pInput), bytes);
+    }
 
-    qint64 const bytes = static_cast<qint64>(frameCount) * m_sink->bytesPerFrame();
-    m_sink->write(static_cast<char const *>(pInput), bytes);
+    m_callbackDepth.fetch_sub(1, std::memory_order_release);
 }
 
 /**
@@ -108,7 +119,7 @@ SoundInput::start(AudioDeviceInfo const & device,
         && m_lastDevice == device
         && m_lastChannel == channel
         && m_lastFramesPerBuffer == framesPerBuffer
-        && ma_device_is_started(&m_device)) {
+        && ma_device_is_started(m_dev)) {
         return;
     }
 
@@ -136,15 +147,23 @@ SoundInput::start(AudioDeviceInfo const & device,
     cfg.dataCallback      = &SoundInput::s_dataCallback;
     cfg.pUserData         = this;
 
-    if (ma_device_init(nullptr, &cfg, &m_device) != MA_SUCCESS) {
+    // stop() may have handed a previous (possibly wedged) device off to the
+    // reaper and nulled m_dev; allocate fresh storage for this open.
+    if (!m_dev) m_dev = new ma_device{};
+
+    if (ma_device_init(nullptr, &cfg, m_dev) != MA_SUCCESS) {
         Q_EMIT error(tr("Failed to initialize audio input device."));
+        delete m_dev;  // never init'd — free directly, do NOT uninit
+        m_dev = nullptr;
         return;
     }
     m_deviceInitialized = true;
 
-    if (ma_device_start(&m_device) != MA_SUCCESS) {
+    if (ma_device_start(m_dev) != MA_SUCCESS) {
         Q_EMIT error(tr("Failed to start audio input device."));
-        ma_device_uninit(&m_device);
+        // init'd but not started — uninit safely
+        retireAudioDevice(m_dev, QStringLiteral("[AUDIO-IN]"));
+        m_dev = nullptr;
         m_deviceInitialized = false;
         return;
     }
@@ -152,18 +171,18 @@ SoundInput::start(AudioDeviceInfo const & device,
     // [TODO #113 2026-07-23] Report what we ACTUALLY opened. Until now
     // nothing recorded the negotiated device/format, so a silent switch
     // to the wrong input was undetectable from the logs.
-    QString const openedName = QString::fromUtf8(m_device.capture.name);
+    QString const openedName = QString::fromUtf8(m_dev->capture.name);
     qWarning() << "[AUDIO-IN] device started:"
                << "requested=" << (device.isNull()
                                        ? QStringLiteral("(default)")
                                        : device.description)
                << "opened=" << openedName
-               << "| callback:" << m_device.sampleRate << "Hz"
-               << m_device.capture.channels << "ch"
-               << ma_get_format_name(m_device.capture.format)
-               << "| hardware:" << m_device.capture.internalSampleRate << "Hz"
-               << m_device.capture.internalChannels << "ch"
-               << ma_get_format_name(m_device.capture.internalFormat);
+               << "| callback:" << m_dev->sampleRate << "Hz"
+               << m_dev->capture.channels << "ch"
+               << ma_get_format_name(m_dev->capture.format)
+               << "| hardware:" << m_dev->capture.internalSampleRate << "Hz"
+               << m_dev->capture.internalChannels << "ch"
+               << ma_get_format_name(m_dev->capture.internalFormat);
 
     // A configured device that could not be resolved means miniaudio was
     // given a null id and picked the SYSTEM DEFAULT — we are now
@@ -182,12 +201,12 @@ SoundInput::start(AudioDeviceInfo const & device,
                "re-plugged, or renumbered. Reselect the device in "
                "Settings, or restart it there, once it is back.")
                 .arg(device.description, openedName));
-    } else if (m_device.sampleRate != 48000u) {
+    } else if (m_dev->sampleRate != 48000u) {
         // Informational only: miniaudio resamples to our requested rate,
         // so this should never differ. If it ever does, decode timing is
         // wrong and the log will say so.
         qWarning() << "[AUDIO-IN] UNEXPECTED callback sample rate"
-                   << m_device.sampleRate << "(expected 48000) — decode "
+                   << m_dev->sampleRate << "(expected 48000) — decode "
                       "timing will be wrong";
     }
 
@@ -217,8 +236,8 @@ SoundInput::resume()
 
     m_discarding.store(false, std::memory_order_relaxed);
     // Safety: if some path left the device stopped, restart it.
-    if (m_deviceInitialized && !ma_device_is_started(&m_device)) {
-        if (ma_device_start(&m_device) != MA_SUCCESS) {
+    if (m_deviceInitialized && !ma_device_is_started(m_dev)) {
+        if (ma_device_start(m_dev) != MA_SUCCESS) {
             Q_EMIT error(tr("Failed to resume audio input device."));
             return;
         }
@@ -227,25 +246,41 @@ SoundInput::resume()
 }
 
 /**
- * @brief Stops audio input and releases the device. ma_device_uninit
- * is synchronous: it stops the device, joins the worker thread, and
- * frees backend resources before returning. No busywait or
- * deferred-delete drain is needed.
+ * @brief Stops audio input and releases the device. The device is handed
+ * to the reaper (AudioDeviceReaper.h) which uninits it on a detached
+ * thread, so this NEVER blocks even when miniaudio's PulseAudio worker is
+ * wedged in ppoll after a device re-enumeration. That non-blocking
+ * teardown is what lets the audio QThread finish at shutdown/config-switch
+ * instead of hanging until the watchdog force-exits (which killed the
+ * in-place config restart). Idempotent: safe to call twice (m_dev nulled).
  */
 void
 SoundInput::stop()
 {
     if (m_deviceInitialized) {
-        ma_device_uninit(&m_device);
+        // Takes ownership; frees when uninit ends.
+        retireAudioDevice(m_dev, QStringLiteral("[AUDIO-IN]"));
+        m_dev = nullptr;
         m_deviceInitialized = false;
+        // [reapguard] Drain any in-flight callback before closing the
+        // sink below. New callbacks can't enter (retire cleared
+        // pUserData); one already past that check finishes in µs. The
+        // WEDGED worker is stuck in ppoll, not in our callback, so
+        // depth is 0 there and this doesn't wait. Bound: 50 ms.
+        for (int i = 0;
+             m_callbackDepth.load(std::memory_order_acquire) > 0 && i < 1000;
+             ++i) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
     }
     if (m_sink) m_sink->close();
 }
 
 /**
- * @brief Destructs the SoundInput object. Just stops; ma_device_uninit
- * gives us a clean teardown without the closingDown() leak path that
- * Build 128 needed to bypass Qt6Multimedia's destructor cascade.
+ * @brief Destructs the SoundInput object. Just stops; the device (if
+ * any) is handed to the detached reaper, which outlives this object
+ * and frees it whenever ma_device_uninit returns — so a wedged uninit
+ * can never turn into a use-after-free here.
  */
 SoundInput::~SoundInput()
 {

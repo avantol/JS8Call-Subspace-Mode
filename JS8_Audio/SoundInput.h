@@ -20,10 +20,14 @@
 // miniaudio's ma_device. Reasons documented in the migration plan
 // at ~/.claude/plans/functional-swimming-avalanche.md. Short version:
 // Qt 6.9.x WASAPI teardown races caused a long crash family
-// (Qt6Multimedia.dll+0x5c7f2 etc.). ma_device_uninit() is synchronous
-// and joins miniaudio's worker before returning, so the busywait,
-// deferred-delete drain, and m_tearingDown gate from Builds 127-133
-// are no longer needed.
+// (Qt6Multimedia.dll+0x5c7f2 etc.), so the busywait, deferred-delete
+// drain, and m_tearingDown gate from Builds 127-133 are gone.
+//
+// [audioreap 2026-07-24] Teardown is NOT synchronous anymore: the
+// heap-owned ma_device is handed to a detached reaper
+// (AudioDeviceReaper.h) because ma_device_uninit's worker join can
+// wedge forever on a PulseAudio device re-enumeration. stop() drains
+// in-flight callbacks (m_callbackDepth) before touching the sink.
 class SoundInput : public QObject {
     Q_OBJECT;
 
@@ -62,7 +66,11 @@ class SoundInput : public QObject {
                                ma_uint32 frameCount);
     void onCapture(void const * pInput, ma_uint32 frameCount);
 
-    ma_device m_device {};
+    // Heap-owned so a wedged ma_device_uninit (miniaudio/PulseAudio worker
+    // stuck in ppoll after a device re-enumeration) can be handed off to a
+    // detached reaper and outlive this object without a use-after-free.
+    // See JS8_Audio/AudioDeviceReaper.h. null when no device is open.
+    ma_device * m_dev = nullptr;
     bool m_deviceInitialized = false;
     // [TODO #108 keep-warm 2026-07-21] suspend()/resume() gate SAMPLE
     // DELIVERY, not the device: the capture stream runs full-time so
@@ -70,6 +78,15 @@ class SoundInput : public QObject {
     // ma_device_stop here was the reversion). Written on the audio
     // QThread, read on miniaudio's worker.
     std::atomic<bool> m_discarding{false};
+    // [reapguard 2026-07-25] Callbacks in flight on miniaudio's worker.
+    // With teardown now async (AudioDeviceReaper), stop() no longer
+    // implies "no callback running" on return — so it drains this
+    // (bounded, µs in practice) after retiring the device and before
+    // closing the sink, closing the write()-vs-close() overlap the old
+    // synchronous uninit used to prevent. NOT the same job as
+    // m_discarding: that is the monitor-off state and must survive a
+    // device rebuild untouched.
+    std::atomic<int> m_callbackDepth{0};
     QPointer<AudioDevice> m_sink;
     AudioDeviceInfo m_lastDevice;
     AudioDevice::Channel m_lastChannel{AudioDevice::Mono};
