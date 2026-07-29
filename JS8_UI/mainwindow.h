@@ -803,6 +803,16 @@ class UI_Constructor : public QMainWindow {
         return !m_pendingFilePath.isEmpty() || !m_pendingLinkUrl.isEmpty();
     }
     void onCapQueryTimeout(int gen);
+    // [BUILD 352 capUnify] Arm the QUERY ARQ? reply window the same
+    // way the ARQ ACK timer is armed: at TX-done (via the Manager's
+    // TX-idle poller), sized by the ONE unified reply budget
+    // (ChunkedArq::replyTimeoutMsForSubmode) at the submode in effect
+    // when our query actually finished airing. Replaces three
+    // enqueue-anchored QTimer::singleShot sites whose budget formula
+    // was a compensator for the wrong anchor (see the deleted
+    // capQueryTimeoutMsForSubmode's replacement comment in
+    // ChunkedArq.h).
+    void armCapQueryTimeout(int gen);
     void startFileTransferWithFormat(QString const &filePath,
                                      QString const &peer,
                                      int peerLevel);

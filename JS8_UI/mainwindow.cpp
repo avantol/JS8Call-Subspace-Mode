@@ -7024,21 +7024,14 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
     qCWarning(chunkedarq_js8)
         << "[FT-TX] peer capability unknown — auto-querying" << peer
         << "gen=" << gen;
-    // [BUILD 341 capTimeout] Window scales with the active submode
-    // (flat 20 s starved every speed but Subspace). No status-line
-    // message — not an established UI pattern here (Andy 2026-07-17);
-    // the negotiation is visible in the box lock + the query TX.
-    int const capMs = ChunkedArq::capQueryTimeoutMsForSubmode(m_nSubMode);
     // Standard auto-reply enqueue path — NOT the ARQ direct-TX hook,
     // which rode leftover TX-button state and got killed by its
     // completion logic 120 ms after parking (observed 2026-07-17).
     enqueueMessage(PriorityHigh,
                    QStringLiteral("%1 QUERY ARQ?").arg(peer), -1,
                    nullptr);
-    QPointer<UI_Constructor> const self(this);
-    QTimer::singleShot(capMs, this, [self, gen]() {
-        if (self) self->onCapQueryTimeout(gen);
-    });
+    // [BUILD 352 capUnify] Reply window arms at TX-done, not here.
+    armCapQueryTimeout(gen);
 }
 
 // [BUILD 340] Web-link send with the same capability negotiation as
@@ -7092,16 +7085,42 @@ void UI_Constructor::sendWebLink(QString const &url,
     qCWarning(chunkedarq_js8)
         << "[LT-TX] peer capability unknown — auto-querying" << peer
         << "gen=" << gen;
-    // [BUILD 341 capTimeout] Same submode-scaled window as the file
-    // path above; no status-line message (see there).
-    int const capMs = ChunkedArq::capQueryTimeoutMsForSubmode(m_nSubMode);
     enqueueMessage(PriorityHigh,
                    QStringLiteral("%1 QUERY ARQ?").arg(peer), -1,
                    nullptr);
+    // [BUILD 352 capUnify] Reply window arms at TX-done, not here.
+    armCapQueryTimeout(gen);
+}
+
+// [BUILD 352 capUnify] Arm the QUERY ARQ? reply window at TX-done —
+// see the declaration comment in mainwindow.h. The submode is sampled
+// INSIDE the deferred callback (i.e., at the moment our query finished
+// airing), mirroring armAckTimer's #121 acktrack behaviour, so a speed
+// change between enqueue and TX-done sizes the window from the speed
+// the query actually went out in. A stale fire (negotiation already
+// resumed or aborted while we waited for TX-idle) is harmless: the
+// armed timer lands in onCapQueryTimeout's generation guard.
+void UI_Constructor::armCapQueryTimeout(int const gen) {
     QPointer<UI_Constructor> const self(this);
-    QTimer::singleShot(capMs, this, [self, gen]() {
-        if (self) self->onCapQueryTimeout(gen);
-    });
+    auto const arm = [self, gen]() {
+        if (!self) return;
+        int const capMs = ChunkedArq::replyTimeoutMsForSubmode(
+            self->m_nSubMode, ChunkedArq::CAP_QUERY_REPLY_FRAMES);
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] capability reply window armed post-TX-done:"
+            << "gen=" << gen << "capMs=" << capMs;
+        QTimer::singleShot(capMs, self, [self, gen]() {
+            if (self) self->onCapQueryTimeout(gen);
+        });
+    };
+    if (m_chunkedArq) {
+        m_chunkedArq->runAfterTxIdle(arm);
+    } else {
+        // No manager (shouldn't happen on any negotiation path) —
+        // degrade to the old enqueue-anchored arm rather than hanging
+        // the negotiation with no timeout at all.
+        arm();
+    }
 }
 
 // [BUILD 339 TODO #103] Query-state timeout: one retry, then V1
@@ -7127,12 +7146,8 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
                        QStringLiteral("%1 QUERY ARQ?")
                            .arg(m_pendingFilePeer), -1,
                        nullptr);
-        int const capMs =
-            ChunkedArq::capQueryTimeoutMsForSubmode(m_nSubMode);
-        QPointer<UI_Constructor> const self(this);
-        QTimer::singleShot(capMs, this, [self, newGen]() {
-            if (self) self->onCapQueryTimeout(newGen);
-        });
+        // [BUILD 352 capUnify] Reply window arms at TX-done, not here.
+        armCapQueryTimeout(newGen);
         return;
     }
     QString path, link, pr;

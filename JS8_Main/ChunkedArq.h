@@ -164,47 +164,52 @@ inline int ackTimeoutMsForSubmode(int submode) {
     }
 }
 
-// [BUILD 341 capTimeout] QUERY ARQ? negotiation window per submode —
-// i.e. how long we wait before RE-ASKING (and, after one retry, before
-// falling back to V1 for that transfer).
-//
-// Was a flat 20 s — sized for Subspace only (operator 2026-07-17:
-// "too short for most speeds. we can even operate at Slow"). The
-// negotiation is two ACK-shaped exchanges: our 2-frame query out,
-// the peer's 2-frame "YES <level>" back (at OUR submode since
-// arqSpeed).
-//
-// [2026-07-23] Shortened by one period: 2 × ACK budget − TWO periods
-// (was − one). Operator: the retry delay "is 4 periods, can be 3" —
-// which this makes exact for the legacy speeds. Resulting windows,
-// with the retry delay expressed in periods:
-//   Subspace 24.50 s (6.5 P)   Turbo 20.00 s (3.3 P)
-//   Fast     30.00 s (3.0 P)   Normal 42.00 s (2.8 P)
-//   Slow     72.00 s (2.4 P)
-// NOTE the earlier comment claimed "Subspace 20.25 s" — stale since
-// the Subspace ACK budget went 12 s → 16 s (build 342.6), which had
-// silently pushed this window to 28.25 s.
-//
-// FLOOR: the window can NOT simply be "3 periods" for Subspace. The
-// exchange needs our 2-frame query (7.5 s) + peer turnaround + the
-// peer's 2-frame reply (7.5 s) + decode lag ≈ 20 s minimum; 3 periods
-// (11.25 s) would expire mid-negotiation and force a bogus V1
-// fallback every time. 24.5 s keeps ~4.5 s of margin. Subspace reads
-// "long" in periods only because its ACK budget is deliberately
-// generous relative to its very short 3.75 s period.
-inline int capQueryTimeoutMsForSubmode(int submode) {
-    int const periodMs = [submode]() {
-        switch (submode) {
-            case 0:  return 15000; // JS8CallNormal
-            case 1:  return 10000; // JS8CallFast
-            case 2:  return 6000;  // JS8CallTurbo
-            case 4:  return 30000; // JS8CallSlow
-            case 16: return 3750;  // JS8CallFT2 / Subspace
-            default: return 15000; // Unknown — Normal
-        }
-    }();
-    return 2 * ackTimeoutMsForSubmode(submode) - 2 * periodMs;
+// Period (T/R cycle) length per submode. Submode IDs from Varicode.h
+// (NOT contiguous — 0,1,2,4,16).
+inline int periodMsForSubmode(int submode) {
+    switch (submode) {
+        case 0:  return 15000; // JS8CallNormal
+        case 1:  return 10000; // JS8CallFast
+        case 2:  return 6000;  // JS8CallTurbo
+        case 4:  return 30000; // JS8CallSlow
+        case 16: return 3750;  // JS8CallFT2 / Subspace
+        default: return 15000; // Unknown — Normal
+    }
 }
+
+// [BUILD 352 capUnify] THE unified reply-wait budget, anchored at
+// TX-DONE. Every "we transmitted, now wait for the peer's reply"
+// timer sizes from this one function: the ACK budget above covers a
+// ONE-frame reply (peer decode lag + peer cycle-align + one reply
+// frame + our decode lag); a reply spanning N frames needs N−1 more
+// periods of airtime on top. Nothing else — the anchor (armed only
+// after our own TX has drained, via the Manager's TX-idle poller)
+// means our own alignment wait and airtime never eat the budget.
+//
+// This replaces capQueryTimeoutMsForSubmode (BUILD 341→2026-07-23),
+// whose "2 × ACK budget − k × periods" shape was a compensator for
+// the WRONG ANCHOR: its QTimer::singleShot fired at ENQUEUE time, so
+// the formula doubled the budget to guess at our own alignment +
+// query airtime, then subtracted periods to trim the overshoot.
+// Enqueue→TX-done is variable (queue phase, speed in effect, queue
+// depth), so no constant k could be right. Proven live 2026-07-28
+// against KL7UT (Normal mode): the enqueue-anchored window expired
+// ~12 s after our query actually finished airing, and every
+// auto-retry keyed over the peer's in-flight 2-frame "YES <level>"
+// reply, garbling it to "YES ~~~~~"; the one clean "YES 3" got
+// through only because the operator cancelled the retry by hand.
+inline int replyTimeoutMsForSubmode(int submode, int replyFrames) {
+    return ackTimeoutMsForSubmode(submode)
+         + (replyFrames - 1) * periodMsForSubmode(submode);
+}
+
+// The QUERY ARQ? capability exchange: peer's "YES <level>" reply is
+// TWO frames (proven on-air 2026-07-28 — stepped-on replies decode
+// with frame 2 missing, "YES ~~~~~"; our own cancelled query logged
+// frame 1 only, "... QUERY"). Resulting post-TX-done windows:
+//   Subspace 19.75 s   Turbo 22.00 s   Fast 35.00 s
+//   Normal   51.00 s   Slow  96.00 s
+constexpr int CAP_QUERY_REPLY_FRAMES = 2;
 
 // TX-idle poll: how often the manager re-checks "has JS8Call finished
 // my TX yet?" while a chunk is in flight. 1 s is fine — finer than
@@ -580,6 +585,20 @@ class Manager : public QObject {
      */
     using TxIdleCapFn = std::function<int()>;
     void setTxIdleCapFn(TxIdleCapFn fn) { m_txIdleCapFn = std::move(fn); }
+
+    /**
+     * @brief [BUILD 352 capUnify] Run `cb` once JS8Call's TX path goes
+     *        idle (or the TX-idle safety cap trips) — the SAME
+     *        m_txIdleCheck / m_txIdleCapFn / poll-tick machinery that
+     *        arms the per-peer ACK timer, generalized for waits with
+     *        no chunked-send SendState to attach to. Introduced for
+     *        the QUERY ARQ? negotiation window
+     *        (UI_Constructor::armCapQueryTimeout): its timer must
+     *        anchor at TX-done exactly like the ACK timer, so both
+     *        reply-waits share one anchor and one budget
+     *        (replyTimeoutMsForSubmode).
+     */
+    void runAfterTxIdle(std::function<void()> cb);
 
     /**
      * @brief True if we've recently exchanged ARQ traffic with this
@@ -1249,6 +1268,14 @@ class Manager : public QObject {
     int                         m_nativeFrameMs{3750};
     TxIdleCapFn                 m_txIdleCapFn;
     QTimer                     *m_txIdlePollTimer{nullptr};
+    // [BUILD 352 capUnify] Generic post-TX-done callbacks awaiting the
+    // idle predicate (see runAfterTxIdle). Same safety cap as the
+    // per-peer awaitingTxDone states.
+    struct PendingIdleCallback {
+        qint64                sinceMs{0};
+        std::function<void()> cb;
+    };
+    QList<PendingIdleCallback>  m_txIdleCallbacks;
     bool                        m_arqEnabled{false};
 };
 

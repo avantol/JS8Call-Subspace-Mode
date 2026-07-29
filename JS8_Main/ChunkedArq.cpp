@@ -660,6 +660,16 @@ void Manager::ensureTxIdlePolling() {
     }
 }
 
+// [BUILD 352 capUnify] See header. Queues `cb` for the next poll tick
+// where the TX path reports idle (or the safety cap trips) — the same
+// anchor the per-peer ACK timers use.
+void Manager::runAfterTxIdle(std::function<void()> cb) {
+    if (!cb) return;
+    m_txIdleCallbacks.append(
+        {QDateTime::currentMSecsSinceEpoch(), std::move(cb)});
+    ensureTxIdlePolling();
+}
+
 void Manager::armAckTimer(QString const &peer, SendState &state) {
     if (!state.ackTimer) {
         state.ackTimer = new QTimer(this);
@@ -723,6 +733,36 @@ void Manager::onTxIdlePollTick() {
             st.awaitingTxDone = false;
             armAckTimer(it.key(), st);
         } else {
+            anyStillAwaiting = true;
+        }
+    }
+
+    // [BUILD 352 capUnify] Generic post-TX-done callbacks (currently
+    // the QUERY ARQ? negotiation window) ride the same idle predicate
+    // and safety cap as the ACK-timer arming above. Take ready entries
+    // out of the list BEFORE invoking, so a callback that re-enters
+    // runAfterTxIdle can't be visited twice in this tick.
+    if (!m_txIdleCallbacks.isEmpty()) {
+        QList<PendingIdleCallback> ready;
+        for (int i = m_txIdleCallbacks.size() - 1; i >= 0; --i) {
+            bool const capHit =
+                (nowMs - m_txIdleCallbacks[i].sinceMs) >= dynamicCapMs;
+            if (idleNow || capHit) {
+                if (capHit && !idleNow) {
+                    qCWarning(chunkedarq_js8)
+                        << "[ARQ-TX] TX-idle safety cap hit for queued"
+                        << "callback: ms="
+                        << (nowMs - m_txIdleCallbacks[i].sinceMs)
+                        << "capMs=" << dynamicCapMs
+                        << "— running anyway";
+                }
+                ready.append(m_txIdleCallbacks.takeAt(i));
+            }
+        }
+        for (auto const &p : ready) {
+            if (p.cb) p.cb();
+        }
+        if (!m_txIdleCallbacks.isEmpty()) {
             anyStillAwaiting = true;
         }
     }
