@@ -766,6 +766,17 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                 decodedtext.submode(), inMyGroup,
                                 destIsSubspaceGroup, annotateIsUpgrade);
                         }
+                        // [BUILD 354 pairearly, TODO #133] The
+                        // from/to pair event: earliest identifiable
+                        // artifact of an inbound directed message.
+                        // Direct call downward (owner → Manager),
+                        // matching onChunkReceived/onAckReceived —
+                        // promote to a signal only if a second
+                        // consumer ever appears.
+                        if (m_chunkedArq) {
+                            m_chunkedArq->onDirectedPairSeen(
+                                annotateFrom, annotateTo);
+                        }
                     }
                     cmd.to = parts.at(1);
                     cmd.cmd = parts.at(2);

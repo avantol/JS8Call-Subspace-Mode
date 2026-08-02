@@ -277,6 +277,11 @@ void Manager::haltAll() {
     // abortCapabilityNegotiation.)
     endNegotiation();
 
+    // [BUILD 354 rxsession] Operator halt ends every receive session.
+    for (auto it = m_recv.begin(); it != m_recv.end(); ++it) {
+        rxSessionEnd(it.key(), it.value(), "halted");
+    }
+
     for (auto it = m_sends.begin(); it != m_sends.end(); ++it) {
         if (it.value().ackTimer) {
             it.value().ackTimer->stop();
@@ -286,7 +291,9 @@ void Manager::haltAll() {
                         it.value().chunks.size(),
                         it.value().totalRetries,
                         QStringLiteral("halted"));
-        // [TODO #51 2026-06-10 build 235] restore original body
+        // [TODO #51 2026-06-10 build 235] restore original body.
+        // [BUILD 354 norestore] Emitted for ALL bodies — the UI hook
+        // decides: text restores, file/link wire bodies CLEAR the box.
         if (!it.value().originalBody.isEmpty()) {
             emit sendRestoreRequested(it.value().originalBody,
                                       QStringLiteral("halted"));
@@ -663,6 +670,39 @@ void Manager::ensureTxIdlePolling() {
 // [BUILD 352 capUnify] See header. Queues `cb` for the next poll tick
 // where the TX path reports idle (or the safety cap trips) — the same
 // anchor the per-peer ACK timers use.
+// [BUILD 354 pairearly] See header. Full-callsign compare per
+// feedback_full_callsign_compare; case-insensitive like the rest of
+// the peer keying.
+void Manager::onDirectedPairSeen(QString const &from, QString const &to) {
+    if (to.compare(m_myCall, Qt::CaseInsensitive) != 0) return;
+    auto it = m_recv.find(from.toUpper());
+    if (it == m_recv.end()) {
+        it = m_recv.find(from);
+        if (it == m_recv.end()) return;
+    }
+    RxState &rx = it.value();
+    // [BUILD 354 pairgate, operator catch 2026-08-02] Only a LIVE
+    // Receiving window may be extended by a bare from/to pair — there
+    // it confirms the sub-msg we are already expecting. A STALLED
+    // session must NOT be resurrected by one: after a failed
+    // transfer, the peer's next header could be anything (chat, SNR,
+    // a NEW transfer) and re-raising the old banner with the old
+    // count off a mere pair is premature. Stalled → Receiving
+    // requires real ARQ artifacts (marker / binding frame / chunk),
+    // whose own activity paths carry the correct new counts.
+    if (rx.rxPhase != RxPhase::Receiving) return;
+    qCWarning(chunkedarq_js8)
+        << "[RX-SESSION] from/to pair seen — sub-msg inbound: peer="
+        << from;
+    int const burstFrames =
+        (rx.nativeWin.active && rx.nativeWin.collector.frameCount() > 0)
+            ? rx.nativeWin.collector.frameCount() + 2
+            : TYPICAL_TEXT_CHUNK_FRAMES;
+    rxSessionActivity(it.key(), rx, -1, -1,
+                      /*countChange=*/false,
+                      burstFrames + RX_STALL_GRACE_FRAMES);
+}
+
 void Manager::runAfterTxIdle(std::function<void()> cb) {
     if (!cb) return;
     m_txIdleCallbacks.append(
@@ -890,6 +930,7 @@ void Manager::onNackReceived(QString const &fromCall, int seq,
                         QStringLiteral("nack_exhausted"));
         emit progressEnd();
         // [TODO #51 2026-06-10 build 235] restore on nack_exhausted
+        // ([BUILD 354 norestore] hook decides restore-vs-clear).
         if (!state.originalBody.isEmpty()) {
             emit sendRestoreRequested(state.originalBody,
                                       QStringLiteral("nack_exhausted"));
@@ -925,6 +966,7 @@ void Manager::onAckTimerExpired() {
                         state.totalRetries,
                         QStringLiteral("timeout_exhausted"));
         // [TODO #51 2026-06-10 build 235] restore on timeout_exhausted
+        // ([BUILD 354 norestore] hook decides restore-vs-clear).
         if (!state.originalBody.isEmpty()) {
             emit sendRestoreRequested(state.originalBody,
                                       QStringLiteral("timeout_exhausted"));
@@ -1006,6 +1048,19 @@ void Manager::onChunkReceived(QString const &fromCall,
         handleNativeMarker(fromCall, rx, chunk, mi, ackHoldMs);
         return;
     }
+
+    // [BUILD 354 textorder, operator catch 2026-08-02] The chunk-
+    // count activity fires BEFORE the ACK so the ACK's short pair-
+    // expectation window is the LAST arm — mirror of the V3 pairfix.
+    // (Previously sendAck ran first and the chunk-collected 14-frame
+    // budget clobbered the 6-frame window a moment later: field log
+    // showed 83.5 s to Stalled at Turbo instead of 36 s.) Text chunks
+    // each carry a full "FROM: TO" header, so the next chunk's own
+    // pair satisfies the short window naturally on a healthy link.
+    rxSessionActivity(fromCall, rx, chunk.chunkId, chunk.total,
+                      /*countChange=*/true,
+                      TYPICAL_TEXT_CHUNK_FRAMES +
+                          RX_STALL_ACK_FRAMES + RX_STALL_GRACE_FRAMES);
 
     // ACK the chunk (always — duplicates need re-ACK or sender retries forever).
     // [TURNHOLD-ACK] ackHoldMs keys the ACK after the sender's turnaround.
@@ -1134,6 +1189,8 @@ void Manager::onChunkReceived(QString const &fromCall,
 
     // UI: progressive display of this chunk.
     emit chunkAdded(fromCall, chunk.body, chunk.chunkId, chunk.total);
+    // [BUILD 354 textorder] Chunk-count activity moved ABOVE the
+    // sendAck call — see there.
 
     // Complete? Concatenate in chunk-id order, deliver, evict.
     if (asm_.size() == chunk.total) {
@@ -1144,6 +1201,8 @@ void Manager::onChunkReceived(QString const &fromCall,
         QString const assembled = parts.join(QLatin1Char(' '));
 
         rx.deliveredMsgs.insert(chunk.msgId);
+        // [BUILD 354 rxsession] Delivery is a session terminal.
+        rxSessionEnd(fromCall, rx, "delivered");
         // Cap dedup set to bound memory (arbitrary FIFO — fine for
         // dup suppression).
         if (rx.deliveredMsgs.size() > (MSG_ID_MAX - MSG_ID_MIN + 1)) {
@@ -1221,6 +1280,13 @@ void Manager::onChunkReceived(QString const &fromCall,
 }
 
 void Manager::tryNack(QString const &peer, int seq, int const holdMs) {
+    // [BUILD 354 rxsession] Same as sendAck: reply keyup = activity.
+    if (auto it = m_recv.find(peer); it != m_recv.end()) {
+        rxSessionActivity(peer, it.value(), -1, -1,
+                          /*countChange=*/false,
+                          RX_STALL_ACK_FRAMES + RX_PAIR_FRAMES +
+                              RX_STALL_GRACE_FRAMES);
+    }
     auto &rx = getOrCreateRx(peer);
     qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
     if (nowMs - rx.lastNackMonoMs < MIN_NACK_INTERVAL_MS) {
@@ -1252,6 +1318,14 @@ void Manager::tryNack(QString const &peer, int seq, int const holdMs) {
 }
 
 void Manager::sendAck(QString const &peer, int seq, int const holdMs) {
+    // [BUILD 354 rxsession] Our own reply keyup = activity; the ACK
+    // exchange is the event itself (includeAck=false).
+    if (auto it = m_recv.find(peer); it != m_recv.end()) {
+        rxSessionActivity(peer, it.value(), -1, -1,
+                          /*countChange=*/false,
+                          RX_STALL_ACK_FRAMES + RX_PAIR_FRAMES +
+                              RX_STALL_GRACE_FRAMES);
+    }
     // [BUILD 339 TODO #104] Absolute seq → modulo-31 wire seq.
     QString const text = QStringLiteral("%1 ACK %2")
                              .arg(peer).arg(ackWireSeq(seq));
@@ -1273,6 +1347,99 @@ void Manager::sendAck(QString const &peer, int seq, int const holdMs) {
         // [RESPONSE-TX SIGNAL 2026-06-14 build 268] see sendNack above.
         emit wantsResponseTx(text);
     });
+}
+
+// [BUILD 354 rxsession] See header. One machine, all transitions.
+void Manager::rxSessionActivity(QString const &peer, RxState &rx,
+                                int const chunkId, int const totalChunks,
+                                bool const countChange,
+                                int const budgetFrames) {
+    if (countChange && totalChunks > 0) {
+        rx.rxLastChunkId = chunkId;
+        rx.rxTotalChunks = totalChunks;
+    }
+    // Multi-part sessions only — single-frame traffic never raises
+    // the banner or engages the machine.
+    if (rx.rxTotalChunks <= 1) return;
+
+    // [BUILD 354 rembudget, operator catch 2026-08-02] Every event
+    // anchors the stall timer with its own REMAINING expectation —
+    // never a full cycle re-anchored mid-cycle (a frame binding at
+    // k of N must extend only to "N-k frames + grace", else the
+    // deadline drifts later than the model with every event). The
+    // CALL SITES compute the exact remaining budget in frames; this
+    // function only supplies the correct period units:
+    // [v3period] V3 frames are ALWAYS 3.75 s natives regardless of
+    // UI speed; text sessions use the current submode's period.
+    int const periodMs = rx.nativeWin.active
+                             ? m_nativeFrameMs
+                             : periodMsForSubmode(
+                                   m_currentSubmodeFn
+                                       ? m_currentSubmodeFn() : 16);
+    int const stallMs = budgetFrames * periodMs;
+
+    if (!rx.rxStallTimer) {
+        rx.rxStallTimer = new QTimer(this);
+        rx.rxStallTimer->setSingleShot(true);
+        rx.rxStallTimer->setProperty("peer", peer);
+        connect(rx.rxStallTimer, &QTimer::timeout, this, [this, peer]() {
+            auto it = m_recv.find(peer);
+            if (it == m_recv.end()) return;
+            RxState &rxs = it.value();
+            if (rxs.rxPhase != RxPhase::Receiving) return;
+            rxs.rxPhase = RxPhase::Stalled;
+            qCWarning(chunkedarq_js8)
+                << "[RX-SESSION] Receiving -> Stalled (cosmetic; "
+                   "session stays live): peer=" << peer
+                << "at" << rxs.rxLastChunkId << "/" << rxs.rxTotalChunks;
+            emit rxSessionChanged(peer,
+                                  static_cast<int>(RxPhase::Stalled),
+                                  rxs.rxLastChunkId, rxs.rxTotalChunks);
+        });
+    }
+    bool const phaseChange = (rx.rxPhase != RxPhase::Receiving);
+    rx.rxPhase = RxPhase::Receiving;
+    // [BUILD 354 armclamp] Same-cascade arms never lengthen: within
+    // RX_ARM_COALESCE_MS of the previous arm, the deadline may only
+    // shorten — statement order inside a handler can no longer
+    // clobber a short window with a coarser budget.
+    qint64 const nowMono = QDateTime::currentMSecsSinceEpoch();
+    int armMs = stallMs;
+    if (rx.rxStallTimer->isActive() &&
+        nowMono - rx.rxLastArmMono < RX_ARM_COALESCE_MS) {
+        int const remaining = rx.rxStallTimer->remainingTime();
+        if (remaining > 0 && remaining < armMs) {
+            qCWarning(chunkedarq_js8)
+                << "[RX-SESSION] arm clamped (same cascade):"
+                << "requested=" << armMs << "kept=" << remaining;
+            armMs = remaining;
+        }
+    }
+    rx.rxLastArmMono = nowMono;
+    rx.rxStallTimer->start(armMs);
+    qCWarning(chunkedarq_js8)
+        << "[RX-SESSION]" << (phaseChange ? "-> Receiving" : "activity")
+        << "peer=" << peer << rx.rxLastChunkId << "/" << rx.rxTotalChunks
+        << "stallMs=" << stallMs << "budgetFrames=" << budgetFrames;
+    emit rxSessionChanged(peer, static_cast<int>(RxPhase::Receiving),
+                          rx.rxLastChunkId, rx.rxTotalChunks);
+}
+
+void Manager::rxSessionEnd(QString const &peer, RxState &rx,
+                           char const *reason) {
+    if (rx.rxStallTimer) {
+        rx.rxStallTimer->stop();
+    }
+    if (rx.rxPhase == RxPhase::Idle && rx.rxTotalChunks == 0) {
+        return;  // never engaged — nothing to end or emit
+    }
+    qCWarning(chunkedarq_js8)
+        << "[RX-SESSION] -> Idle (" << reason << "): peer=" << peer
+        << "was" << rx.rxLastChunkId << "/" << rx.rxTotalChunks;
+    rx.rxPhase       = RxPhase::Idle;
+    rx.rxLastChunkId = 0;
+    rx.rxTotalChunks = 0;
+    emit rxSessionChanged(peer, static_cast<int>(RxPhase::Idle), 0, 0);
 }
 
 void Manager::markSessionActive(QString const &peer) {
@@ -1308,6 +1475,9 @@ void Manager::onAssemblyEvictTimerExpired() {
     auto rxIt = m_recv.find(peer);
     if (rxIt == m_recv.end()) return;
     RxState &rx = rxIt.value();
+    // [BUILD 354 rxsession] Evict = the session's garbage-collection
+    // terminal (5 min stale).
+    rxSessionEnd(peer, rx, "evicted");
     if (rx.assemblies.contains(msgId)) {
         qCWarning(chunkedarq_js8)
             << "[ARQ-RX] stale assembly evicted peer=" << peer
@@ -1509,6 +1679,15 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
     openNativeChunkWindow(peer, rx, chunk.msgId, chunk.chunkId,
                           chunk.total, mi.pcrc, /*pcrcValid=*/true,
                           holdMs);
+    // [BUILD 354 pairfix] MARKER-driven open = genuine peer evidence:
+    // session activity with the collected-so-far count. (The
+    // auto-advance open in finishNativeChunk deliberately does NOT
+    // fire activity — see openNativeChunkWindow.)
+    rxSessionActivity(peer, rx,
+                      chunk.chunkId > 0 ? chunk.chunkId - 1 : 0,
+                      chunk.total, /*countChange=*/true,
+                      rx.nativeWin.collector.frameCount() +
+                          RX_STALL_GRACE_FRAMES);
 }
 
 bool Manager::onNativeMarkerFrameReceived(
@@ -1575,6 +1754,13 @@ void Manager::openNativeChunkWindow(QString const &peer, RxState &rx,
     }
     rx.nativeWin.active = true;
     rx.nativeWin.msgId = msgId;
+    // [BUILD 354 pairfix] NO rxSessionActivity here: window-open has
+    // two causes with opposite meanings. Marker-driven opens are peer
+    // evidence (the caller fires activity); the AUTO-ADVANCE open
+    // after our own chunk-complete/ACK is pure bookkeeping — firing
+    // activity from it re-armed the FULL stall budget 1 ms after the
+    // ACK armed the short pair-expectation window, defeating
+    // pairearly entirely (field log 2026-08-02 19:38:38.769-.770).
     rx.nativeWin.chunkId = chunkId;
     rx.nativeWin.total = total;
     rx.nativeWin.noProgressNacks = 0;
@@ -1705,6 +1891,14 @@ bool Manager::onNativeFrameReceived(int const seq, int const chk4,
             return false;
         }
         markSessionActive(it.key());
+        // [BUILD 354 rembudget] Bound frame = activity; budget =
+        // REMAINING frames of this chunk + grace (never a full
+        // cycle — the burst is partly done).
+        rxSessionActivity(
+            it.key(), rx, -1, -1, /*countChange=*/false,
+            static_cast<int>(
+                rx.nativeWin.collector.missingSeqs().size()) +
+                RX_STALL_GRACE_FRAMES);
         // Progress — reset the give-up count and restart the collect
         // budget (symmetric to the sender deferring its ACK timer
         // until TX-done). A one-shot armed only at window-open expires
@@ -1775,6 +1969,12 @@ void Manager::finishNativeChunk(QString const &peer, RxState &rx,
         << "msgId=" << win.msgId << "chunk=" << win.chunkId
         << "/" << win.total
         << "bytes=" << win.collector.bytes().size();
+
+    // [BUILD 354 rxsession] Collected V3 chunk = activity + count.
+    rxSessionActivity(peer, rx, rx.nativeWin.chunkId,
+                      rx.nativeWin.total, /*countChange=*/true,
+                      rx.nativeWin.collector.frameCount() + 2 +
+                          RX_STALL_ACK_FRAMES + RX_STALL_GRACE_FRAMES);
     sendAck(peer, win.chunkId, holdMs);
     emit nativeChunkCollected(peer, win.chunkId, win.total);
 
@@ -1788,6 +1988,8 @@ void Manager::finishNativeChunk(QString const &peer, RxState &rx,
         int const msgId = win.msgId;
 
         rx.deliveredMsgs.insert(msgId);
+        // [BUILD 354 rxsession] V3 delivery terminal.
+        rxSessionEnd(peer, rx, "delivered");
         if (rx.deliveredMsgs.size() > (MSG_ID_MAX - MSG_ID_MIN + 1)) {
             for (int i = 0; i < (MSG_ID_MAX - MSG_ID_MIN + 1) / 2; ++i) {
                 auto first = rx.deliveredMsgs.begin();
@@ -1844,74 +2046,34 @@ bool Manager::nativeCollectTimeout(QString const &peer) {
     if (!rx.nativeWin.active || rx.nativeWin.collector.complete()) {
         return false;
     }
-    // [BUILD 353 nacksilence 2026-08-02, operator decision] NACK on
-    // EVIDENCE, never on SILENCE. A window with ZERO collected frames
-    // cannot distinguish "chunk lost in flight" from "sender never
-    // sent it" (e.g. our ACK died and the sender is mid-retry-burst
-    // of the PREVIOUS chunk — transmitting, deaf, and about to be
-    // keyed over by our NACK). In every zero-frame world the sender's
-    // own ACK timeout already drives recovery; a timer-fired NACK
-    // adds no information and repeatedly caused harm — the mechanism
-    // (Build 343) accumulated FOUR limiters in two weeks (giveup cap,
-    // turnaround holds, re-ACK re-anchor, a proposed grace round),
-    // every field incident a silence-fired NACK. Deleted, not tuned.
-    // The window stays passively open: any future frame or marker
-    // re-arms the collect budget through the existing accept/marker
-    // paths. NACKs below now fire ONLY on PARTIAL receipt — the one
-    // case where the receiver knows something the sender doesn't
-    // ("your burst aired and pieces died").
-    if (static_cast<int>(rx.nativeWin.collector.missingSeqs().size()) ==
-        rx.nativeWin.collector.frameCount()) {
-        qCWarning(chunkedarq_js8)
-            << "[V3-RX] collect timeout with ZERO frames — staying"
-            << "silent (sender's own timeout drives retry): peer="
-            << peer << "msgId=" << rx.nativeWin.msgId
-            << "chunk=" << rx.nativeWin.chunkId;
-        if (rx.nativeWin.collectTimer) {
-            rx.nativeWin.collectTimer->stop();
-        }
-        return false;
-    }
-    if (rx.nativeWin.noProgressNacks >= NATIVE_NACK_GIVEUP) {
-        // Sender answered N straight NACKs with silence — mirror its
-        // DEFAULT_MAX_RETRIES give-up. Window stays passively open
-        // (late frames still bind); the assembly-evict timer cleans
-        // up. Without this bound the re-NACK loop kept keying for
-        // 4.5 min after a sender halt, garbling the peer's NEXT
-        // transfer's marker (bench 2026-07-19).
-        qCWarning(chunkedarq_js8)
-            << "[V3-RX] collect watchdog giving up after"
-            << rx.nativeWin.noProgressNacks
-            << "no-progress NACKs: peer=" << peer
-            << "msgId=" << rx.nativeWin.msgId
-            << "chunk=" << rx.nativeWin.chunkId;
-        if (rx.nativeWin.collectTimer) {
-            rx.nativeWin.collectTimer->stop();
-        }
-        return false;
-    }
-    ++rx.nativeWin.noProgressNacks;
+    // [BUILD 354 nonack 2026-08-02, operator decision — supersedes
+    // the Build 353 nacksilence partial-receipt exception] NO NACKs
+    // without a FULL/COMPLETE sub-msg, ever. The watchdog only fires
+    // on INCOMPLETE windows, so it never NACKs at all now — zero
+    // frames or partial alike, the collect timeout goes silent: stop
+    // the timer, leave the window passively open (any late frame or
+    // marker re-arms it through the accept/marker paths), and let the
+    // sender's own ACK timeout drive every retransmission. History:
+    // the timer-fired NACK mechanism (Build 343) caused every one of
+    // its field incidents and collected four limiters in two weeks;
+    // Build 353 deleted the zero-frame case; the partial case bought
+    // only reaction speed at Level 3 (the sender resends the whole
+    // chunk regardless — no selective repeat until Level 4) and still
+    // wasted three keyups against stalled senders (field 2026-08-02).
+    // The NACKs that REMAIN in the protocol fire off actual decodes
+    // of a COMPLETE-but-corrupt sub-msg (text CRC fail; V3 PCRC fail
+    // in finishNativeChunk) — full receipt, failed check, genuine
+    // "resend this one" evidence.
     qCWarning(chunkedarq_js8)
-        << "[V3-RX] collect timeout: peer=" << peer
+        << "[V3-RX] collect timeout — staying silent (no NACK without"
+        << "a complete sub-msg; sender timeout drives): peer=" << peer
         << "msgId=" << rx.nativeWin.msgId
         << "chunk=" << rx.nativeWin.chunkId
-        << "missing=" << rx.nativeWin.collector.missingSeqs()
-        << "noProgress=" << rx.nativeWin.noProgressNacks;
-    // [TODO #119] NOT given a turnaround hold, deliberately: this NACK
-    // fires from the collect WATCHDOG, not off a frame decode. The
-    // budget has already expired, so the sender stopped transmitting
-    // seconds ago and is listening — there is no turnaround to clear,
-    // and no frame anchor to measure one from. 250 ms is correct here.
-    tryNack(peer, rx.nativeWin.chunkId);
-    // Window stays open; the sender's ACK timeout drives the
-    // retransmit. Re-arm so persistent gaps keep re-NACKing (the
-    // per-peer NACK rate limit bounds the airtime cost; any accepted
-    // frame resets noProgressNacks).
+        << "missing=" << rx.nativeWin.collector.missingSeqs();
     if (rx.nativeWin.collectTimer) {
-        rx.nativeWin.collectTimer->start(
-            (rx.nativeWin.collector.frameCount() + 2) * m_nativeFrameMs);
+        rx.nativeWin.collectTimer->stop();
     }
-    return true;
+    return false;
 }
 
 void Manager::clearNativeState(RxState &rx) {

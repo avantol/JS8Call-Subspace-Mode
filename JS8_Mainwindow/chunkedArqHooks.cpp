@@ -32,6 +32,7 @@
 #include "JS8_Main/ChunkedArq.h"
 #include "JS8_Main/DriftingDateTime.h"
 #include "JS8_Main/FileTransfer.h"
+#include "JS8_Main/NativeBinary.h"
 
 #include <QDir>
 #include <QFile>
@@ -123,9 +124,9 @@ void UI_Constructor::onChunkedWantsResponseTx(QString const &text) {
     // [BUILD 353 rxbanner] Banner now covers ALL multi-part ARQ
     // receives (text / V1 / V2 via onChunkedChunkAdded, V3 via the
     // native signals), so this refresh serves every path.
-    if (!m_arqPlaceholderOrig.isNull()) {
-        refreshArqPlaceholder();
-    }
+    // [BUILD 354 rxsession] Banner refresh on our reply keyups now
+    // originates in the Manager (sendAck/tryNack → rxSessionActivity)
+    // — the machine owns it; nothing to do here.
     // Delegate to the existing chunk-emit path. addMessageText(/*clear=*/true)
     // inside that slot replaces the widget contents with the response
     // wire text; the restore later in stopTx swaps the operator's
@@ -158,19 +159,14 @@ void UI_Constructor::onChunkedChunkAdded(QString const &fromCall,
     // speed-derived stall timeout in refreshArqPlaceholder — which
     // reverts the BANNER only and cancels NOTHING; a late chunk
     // still assembles and simply re-raises the banner here.
-    if (total > 1) {
-        refreshArqPlaceholder(chunkId, total);
-    }
+    // [BUILD 354 rxsession] Banner/progress now driven by the
+    // Manager's rxSessionChanged — no direct UI writes here.
 }
 
 void UI_Constructor::onChunkedMessageDelivered(QString const &fromCall,
                                                QString const &toCall,
                                                QString const &assembledBody,
                                                int            msgId) {
-    // [BUILD 353 rxbanner] Delivery clears the in-progress banner
-    // immediately (mirrors the V3 delivered path).
-    restoreArqPlaceholder();
-
     // Multi-chunk message fully assembled. The per-chunk (CC/TT)
     // lines already show the operator what arrived; we still write
     // ONE final " assembled-body ♦" line so the complete message
@@ -483,10 +479,23 @@ void UI_Constructor::onChunkedSendRestoreRequested(QString const &body,
     // before composing their next message. Halt / timeout / fail /
     // complete all route through this slot; for files we drop all
     // four restore paths uniformly.
-    if (body.startsWith(QString::fromLatin1(FileTransfer::PREFIX_V1))) {
+    // [BUILD 354 norestore 2026-08-02, operator request] File/link
+    // WIRE bodies ("F/Vn ...", "L/V1 BASE32 ...") are machine-built —
+    // not re-sendable text — so restoring them is misleading. And the
+    // box may hold leftover wire text from the TX path, so merely
+    // suppressing the restore (the old PREFIX_V1-only check did that,
+    // missing V2/V3/links entirely) leaves gibberish behind: CLEAR
+    // the box instead. Plain text falls through to the restore below,
+    // unchanged — it can be re-sent as-is.
+    static QRegularExpression const kWireBodyRe{
+        QStringLiteral(R"(^[FL]/V\d+(\s|$))")};
+    if (kWireBodyRe.match(body.trimmed()).hasMatch()) {
         qCWarning(chunkedarq_js8)
-            << "[FT-TX] suppressing outgoing-text restore for file "
-               "transfer (reason=" << reason << ")";
+            << "[FT-TX] clearing outgoing text (file/link wire body,"
+            << "not re-sendable) reason=" << reason;
+        ui->extFreeTextMsgEdit->blockSignals(true);
+        ui->extFreeTextMsgEdit->clear();
+        ui->extFreeTextMsgEdit->blockSignals(false);
         return;
     }
     qCWarning(chunkedarq_js8)
@@ -1107,11 +1116,7 @@ void UI_Constructor::onNativeChunkWantToTransmit(
 void UI_Constructor::onNativeChunkCollected(QString const &peer,
                                             int const chunkId,
                                             int const totalChunks) {
-    // Chunk progress refreshes the in-progress banner too (chunks
-    // land every ~33 s, so the 16-period restore timer stays ahead of
-    // a healthy transfer and drops soon after a real stall).
-    // [rxbanner3] Passes (N/T) so the banner first line shows count.
-    refreshArqPlaceholder(chunkId, totalChunks);
+    // [BUILD 354 rxsession] Banner driven by rxSessionChanged.
     displayTextForFreq(
         QStringLiteral("%1: %2 [Submsg %3 of %4] %5")
             .arg(peer, m_config.my_callsign().trimmed())
@@ -1123,76 +1128,62 @@ void UI_Constructor::onNativeChunkCollected(QString const &peer,
         m_nSubMode);
 }
 
-// [TODO #107 / BUILD 353 rxbanner] RX feedback for ALL multi-part
-// ARQ receives (operator requests 2026-07-19 + 2026-08-02): while a
-// multi-part transfer is inbound — plain text, V1 file, V2, or V3
-// native — the outgoing box's placeholder (visible only while the
-// box is empty) shows the in-progress banner. Refreshed by every
-// progress event: V3 markers + collected chunks via the native
-// signals, text/V1/V2 chunks via onChunkedChunkAdded, and our own
-// ACK/NACK keyups (bannerNack). The restore timer is a COSMETIC
-// stall timeout only — expiry reverts the banner to the default
-// placeholder and cancels NOTHING; the receive stays live and any
-// late chunk re-raises the banner. Delivery and operator Halt/Esc
-// restore immediately. Duration derives from the speed in effect at
-// the last refresh: 16 periods — the span of one chunk cycle plus a
-// retry's grace, and exactly the old bench-validated 60 s at
-// Subspace (16 × 3.75 s), now correct at every speed instead of
-// only that one.
-
 void UI_Constructor::onNativeMarkerSeen(QString const &peer,
                                         int const chunkId,
                                         int const totalChunks) {
+    // [BUILD 354 rxsession] Marker handling feeds the Manager's
+    // receive-session machine directly; nothing to render here.
     Q_UNUSED(peer);
     Q_UNUSED(chunkId);
     Q_UNUSED(totalChunks);
-    refreshArqPlaceholder();
 }
 
-void UI_Constructor::refreshArqPlaceholder(int const chunkId,
-                                           int const totalChunks) {
+// [BUILD 354 rxsession] The UI is now a PURE RENDERER of the
+// Manager's receive-session machine: phase == Receiving → banner up
+// (with live (N/T) when known); any other phase → default
+// placeholder. All timing, progress, and lifecycle live in the
+// Manager (rxSessionActivity / rxSessionEnd / the per-peer stall
+// timer). The Build 352-354 flag pile this replaces —
+// m_arqPlaceholderTimer, m_arqBannerProgress, m_arqBannerCycleFrames
+// and four scattered refresh call-sites — is DELETED (operator,
+// 2026-08-02: "are we operating outside of the control of a state
+// machine, with flags/patches/hacks?" — we were).
+void UI_Constructor::onRxSessionChanged(QString const &peer,
+                                        int const phase,
+                                        int const chunkId,
+                                        int const totalChunks) {
+    Q_UNUSED(peer);  // single-operator: latest session renders
     if (!ui->extFreeTextMsgEdit) return;
-    // [BUILD 353 rxbanner3] Received-chunk events carry (N/T) and
-    // update the remembered progress; no-arg refreshes keep it.
-    if (chunkId > 0 && totalChunks > 0) {
-        m_arqBannerProgress =
-            tr(" (%1/%2)").arg(chunkId).arg(totalChunks);
-    }
-    QString const banner =
-        tr("MULTI-PART MSG IN PROGRESS%1...\n"
-           "TYPE AN OUTGOING MESSAGE HERE,\n"
-           "WAIT TO SEND ('HALT' TO CANCEL).")
-            .arg(m_arqBannerProgress);
-    if (ui->extFreeTextMsgEdit->placeholderText() != banner) {
-        // Save the DEFAULT placeholder only on first raise — banner
-        // text varies with progress now, so guard on banner-not-up
-        // (orig null), not on text inequality.
-        if (m_arqPlaceholderOrig.isNull()) {
-            m_arqPlaceholderOrig =
-                ui->extFreeTextMsgEdit->placeholderText();
+    if (phase == static_cast<int>(ChunkedArq::RxPhase::Receiving)) {
+        QString const progress =
+            (chunkId > 0 && totalChunks > 0)
+                ? tr(" (%1/%2)").arg(chunkId).arg(totalChunks)
+                : QString();
+        QString const banner =
+            tr("MULTI-PART MSG IN PROGRESS%1...\n"
+               "TYPE AN OUTGOING MESSAGE HERE,\n"
+               "WAIT TO SEND ('HALT' TO CANCEL).")
+                .arg(progress);
+        if (ui->extFreeTextMsgEdit->placeholderText() != banner) {
+            if (m_arqPlaceholderOrig.isNull()) {
+                m_arqPlaceholderOrig =
+                    ui->extFreeTextMsgEdit->placeholderText();
+            }
+            ui->extFreeTextMsgEdit->setPlaceholderText(banner);
         }
-        ui->extFreeTextMsgEdit->setPlaceholderText(banner);
+        return;
     }
-    if (!m_arqPlaceholderTimer) {
-        m_arqPlaceholderTimer = new QTimer(this);
-        m_arqPlaceholderTimer->setSingleShot(true);
-        connect(m_arqPlaceholderTimer, &QTimer::timeout,
-                this, &UI_Constructor::restoreArqPlaceholder);
-    }
-    m_arqPlaceholderTimer->start(
-        16 * ChunkedArq::periodMsForSubmode(m_nSubMode));
+    restoreArqPlaceholder();
 }
 
 void UI_Constructor::restoreArqPlaceholder() {
-    if (m_arqPlaceholderTimer) {
-        m_arqPlaceholderTimer->stop();
-    }
     if (!ui->extFreeTextMsgEdit || m_arqPlaceholderOrig.isNull()) {
-        return;
+        return;  // banner not up — nothing to restore
     }
+    qCWarning(chunkedarq_js8)
+        << "[RX-BANNER] default placeholder restored";
     ui->extFreeTextMsgEdit->setPlaceholderText(m_arqPlaceholderOrig);
     m_arqPlaceholderOrig.clear();
-    m_arqBannerProgress.clear();  // [rxbanner3] fresh count next time
 }
 
 // [TODO #107] V3 RX hook: transfer fully collected — parse the raw
@@ -1201,9 +1192,6 @@ void UI_Constructor::restoreArqPlaceholder() {
 void UI_Constructor::onNativeBinaryMessageReceived(
     QString const &fromCall, QByteArray const &envelope,
     int const msgId) {
-    // Transfer over — the "MULTI-PART MSG IN PROGRESS..." banner
-    // comes down immediately, not at timer expiry.
-    restoreArqPlaceholder();
     FileTransfer::FileHeader header;
     QByteArray payloadBytes;
     if (!FileTransfer::splitWireBodyV3(envelope, header,

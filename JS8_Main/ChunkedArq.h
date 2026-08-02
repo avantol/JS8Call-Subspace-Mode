@@ -99,6 +99,21 @@ enum class TextClass {
 };
 TextClass classifyOutgoingText(QString const &boxText);
 
+// [BUILD 354 rxsession] THE receive-session state machine's phases —
+// operator asked (2026-08-02, after the banner drifted against the
+// button locks): "are we operating outside of the control of a state
+// machine, with flags/patches/hacks?" — we were. One phase per peer,
+// owned by the Manager (which sees every transition event); the UI is
+// a pure renderer of rxSessionChanged. Idle→Receiving on multi-part
+// activity; Receiving⇄Stalled on stall-timer expiry / late activity
+// (Stalled is COSMETIC — the session and its assemblies stay live);
+// →Idle on delivery, operator halt, or assembly evict.
+enum class RxPhase : int {
+    Idle      = 0,
+    Receiving = 1,
+    Stalled   = 2,
+};
+
 // [BUILD 341 peerResolve] The INDIVIDUAL-callsign addressee named by
 // the text itself (leading token after normalization + FROM-prefix
 // strip), or empty. The effective ARQ peer is: selected callsign IF
@@ -130,6 +145,31 @@ constexpr int    MAX_CHUNK_BODY_CHARS    = 60;    // body per chunk; tune for fa
 constexpr qint64 TURNAROUND_FRAME_SAMPLES = 30240;
 constexpr int    TURNAROUND_TAIL_MS       = 1750;  // 250 post-roll + 1500 margin
 constexpr int    CHUNKED_MARKER_LEN      = 14;    // len("#NN.CC/TT.HHHH")
+
+// [BUILD 354 rxsession] Typical frames per text/V1/V2 sub-msg (60-char
+// body + addressing/marker ≈ 8-10 frames on air, field logs); V3 uses
+// the live collector geometry instead. Feeds the RX-session stall
+// timer: (frames + grace + ack-exchange) × period.
+constexpr int    TYPICAL_TEXT_CHUNK_FRAMES = 10;
+constexpr int    RX_STALL_GRACE_FRAMES     = 2;
+constexpr int    RX_STALL_ACK_FRAMES       = 2;
+// [BUILD 354 pairearly, TODO #133 first slice] Frames for the peer's
+// next sub-msg HEADER (the "FROM: TO" directed pair): ONE frame for
+// standard callsigns, TWO when either call is compound — we allow 2.
+// After our own ACK, the header is deterministically expected within
+// (our ACK air + pair + grace) periods; if the pair-detected event
+// doesn't arrive, the banner stalls EARLY instead of waiting out a
+// full sub-msg budget.
+constexpr int    RX_PAIR_FRAMES            = 2;
+// [BUILD 354 armclamp] Arms landing within one event cascade (same
+// handler / queued-signal burst) may SHORTEN the pending stall
+// deadline but never LENGTHEN it — the shortest live expectation
+// wins regardless of statement order inside a transition site. Both
+// clobber bugs (V3 auto-advance open, text ACK-vs-count order) were
+// a coarser arm executing last in the same instant. 500 ms spans any
+// cascade while staying far below the shortest period (3.75 s), so
+// genuinely later evidence (frames seconds later) may still extend.
+constexpr int    RX_ARM_COALESCE_MS        = 500;
 
 constexpr int    DEFAULT_MAX_RETRIES     = 3;
 // Receiver-side mirror of DEFAULT_MAX_RETRIES for the V3 collect
@@ -520,6 +560,15 @@ struct RxState {
     QTimer                         *quietTimer{nullptr};
     bool                            sessionActive{false};
 
+    // [BUILD 354 rxsession] Receive-session phase + display state +
+    // the stall timer (moved here from the UI's private banner timer
+    // so ONE machine owns "is a receive in progress").
+    RxPhase  rxPhase{RxPhase::Idle};
+    int      rxLastChunkId{0};
+    int      rxTotalChunks{0};
+    QTimer  *rxStallTimer{nullptr};
+    qint64   rxLastArmMono{0};  // [armclamp] last stall-arm instant
+
     // [TODO #107] Native-binary (V3) receive state. ONE collect window
     // per peer (stop-and-wait ⇒ at most one chunk in flight). The
     // window AUTO-ADVANCES on each completed chunk — markers after
@@ -676,6 +725,16 @@ class Manager : public QObject {
      *        (replyTimeoutMsForSubmode).
      */
     void runAfterTxIdle(std::function<void()> cb);
+
+    /**
+     * @brief [BUILD 354 pairearly] The from/to-pair-detected event
+     *        (TODO #133): the UI's directed-decode site calls this
+     *        the moment a "FROM: TO" header frame decodes. If it's
+     *        our session peer addressing US, the receive session gets
+     *        a full-budget Receiving restart — a sub-msg is provably
+     *        inbound. Everything else is ignored here.
+     */
+    void onDirectedPairSeen(QString const &from, QString const &to);
 
     /**
      * @brief True if we've recently exchanged ARQ traffic with this
@@ -1092,6 +1151,16 @@ class Manager : public QObject {
                     int            total);
 
     /**
+     * @brief [BUILD 354 rxsession] THE receive-session phase signal —
+     *        the UI renders the in-progress banner (and nothing else)
+     *        from this: phase == Receiving → banner up with (N/T);
+     *        any other phase → default placeholder. Emitted on every
+     *        phase change AND on progress updates within Receiving.
+     */
+    void rxSessionChanged(QString const &peer, int phase,
+                          int chunkId, int totalChunks);
+
+    /**
      * @brief A complete message finished assembling from `fromCall`.
      *        UI should write the full `assembledBody` to the
      *        conversation panel followed by the diamond marker as the
@@ -1281,6 +1350,26 @@ class Manager : public QObject {
                  int holdMs = ACK_TX_DELAY_MS);
     // Touch the session-active flag and (re-)arm the quiet timer.
     void markSessionActive(QString const &peer);
+    // [BUILD 354 rxsession] The receive-session machine's two
+    // transition entry points. activity(): any evidence the session
+    // is alive — accepted chunk (countChange=true, updates N/T),
+    // marker, dup-burst frame, or our own ACK/NACK keyup
+    // (includeAck=false: the ACK exchange is the event itself).
+    // Phase → Receiving, stall timer restarted with the derived
+    // budget ((frames + grace [+ ack]) × current period; V3 uses live
+    // collector geometry, text uses TYPICAL_TEXT_CHUNK_FRAMES).
+    // end(): terminal — delivered / halted / evicted → Idle.
+    // Stall expiry → Stalled (cosmetic; session state untouched).
+    // budgetFrames: the REMAINING expectation from THIS event, in
+    // frames of the session's wire period — call sites compute it
+    // exactly (remaining burst frames, next-cycle total, or the
+    // post-ACK pair window); the machine never re-anchors a full
+    // cycle mid-cycle ([BUILD 354 rembudget], operator correction).
+    void rxSessionActivity(QString const &peer, RxState &rx,
+                           int chunkId, int totalChunks,
+                           bool countChange, int budgetFrames);
+    void rxSessionEnd(QString const &peer, RxState &rx,
+                      char const *reason);
     // Ensure the TX-idle poll timer is running (lazy-init + start).
     void ensureTxIdlePolling();
     // Arm `state.ackTimer` using whatever timeout the AckTimeoutFn

@@ -22,8 +22,10 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QMouseEvent>
+#include <QApplication>
 #include <QSettings>
 #include <QLabel>
+#include <QToolButton>
 #include <QToolTip>
 
 #include <algorithm>
@@ -39,6 +41,10 @@ constexpr int MARGIN_PX = 18;
 constexpr int DOT_RADIUS_PX = 3;
 constexpr float DEFAULT_SCALE_KM = 5000.0f;
 constexpr float FLOOR_SCALE_KM = 500.0f;
+// Manual-zoom range: floor shared with auto-scale; ceiling just past
+// the antipode (~20000 km) so one more "−" from any auto scale always
+// shows the whole reachable Earth.
+constexpr float MAX_SCALE_KM = 20000.0f;
 
 QString const kMqttHost = QStringLiteral("mqtt.pskreporter.info");
 constexpr quint16 kMqttPort = 1883;
@@ -79,6 +85,46 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     // Station (and therefore topics + start) is seeded by the main
     // window via setStation() right after construction — the client
     // runs from app launch, independent of window visibility.
+
+    // Zoom controls: small vertical stack in the upper-left, below
+    // the title strip. Plain child widgets (no layout — the chart is
+    // one custom-painted surface), fixed positions.
+    auto const makeZoomButton = [this](QString const &text) {
+        auto *b = new QToolButton(this);
+        b->setText(text);
+        b->setFixedSize(36, 20);
+        QFont f = b->font();
+        f.setPointSize(8);
+        b->setFont(f);
+        b->setStyleSheet(QStringLiteral(
+            "QToolButton { background-color: rgba(40,40,55,200);"
+            " color: rgb(210,210,225); border: 1px solid rgb(70,70,90);"
+            " border-radius: 3px; }"
+            "QToolButton:hover { background-color: rgba(60,60,80,220); }"
+            "QToolButton:disabled { color: rgb(120,120,140); }"));
+        return b;
+    };
+    m_zoomInBtn = makeZoomButton(QStringLiteral("+"));
+    m_zoomAutoBtn = makeZoomButton(tr("Auto"));
+    m_zoomOutBtn = makeZoomButton(QStringLiteral("−")); // minus sign
+    int const zx = 6;
+    int y = TITLE_STRIP_PX + 6;
+    for (QToolButton *b : {m_zoomInBtn, m_zoomAutoBtn, m_zoomOutBtn}) {
+        b->move(zx, y);
+        y += 22;
+    }
+    m_zoomInBtn->setToolTip(tr("Zoom in"));
+    m_zoomAutoBtn->setToolTip(tr("Auto zoom (fit all spots)"));
+    m_zoomOutBtn->setToolTip(tr("Zoom out"));
+    // Auto is the startup state; the disabled Auto button doubles as
+    // the mode indicator (disabled = auto active).
+    m_zoomAutoBtn->setEnabled(false);
+    connect(m_zoomInBtn, &QToolButton::clicked,
+            this, &SpotMapWindow::zoomIn);
+    connect(m_zoomAutoBtn, &QToolButton::clicked,
+            this, &SpotMapWindow::zoomAuto);
+    connect(m_zoomOutBtn, &QToolButton::clicked,
+            this, &SpotMapWindow::zoomOut);
 }
 
 SpotMapWindow::~SpotMapWindow() = default;
@@ -348,16 +394,16 @@ bool gridInUS(QString const &grid) {
 }
 } // namespace
 
-void SpotMapWindow::rebuildMapCache(QPointF const &center, float const R,
-                                    float const scaleKm) {
+void SpotMapWindow::rebuildMapCache(float const R, float const scaleKm,
+                                    float const cutKm) {
     if (m_mapCacheGrid == m_myGrid && m_mapCacheScale == scaleKm &&
-        m_mapCacheR == R && m_mapCacheCenter == center)
+        m_mapCacheR == R && m_mapCacheCut == cutKm)
         return;
     m_mapCache.clear();
     m_mapCacheGrid = m_myGrid;
     m_mapCacheScale = scaleKm;
     m_mapCacheR = R;
-    m_mapCacheCenter = center;
+    m_mapCacheCut = cutKm;
 
     double lat0 = 0.0, lon0 = 0.0;
     if (!gridToLatLon(m_myGrid, lat0, lon0))
@@ -366,10 +412,10 @@ void SpotMapWindow::rebuildMapCache(QPointF const &center, float const R,
     double const l1 = lon0 * DEG2RAD;
     double const sinP1 = std::sin(p1), cosP1 = std::cos(p1);
 
-    // Segments whose endpoints are beyond the visible scale (with a
-    // little headroom) are dropped — this also sidesteps the
-    // antipodal blow-up inherent to the azimuthal projection.
-    float const cutKm = scaleKm * 1.15f;
+    // Segments whose endpoints are beyond the visible extent are
+    // dropped — the caller derives cutKm from the panned viewport;
+    // the cap in redraw() sidesteps the antipodal blow-up inherent
+    // to the azimuthal projection.
 
     for (int i = 0; i < kGeoPolylineCount; ++i) {
         QPolygonF run;
@@ -393,8 +439,7 @@ void SpotMapWindow::rebuildMapCache(QPointF const &center, float const R,
                 std::sin(dl) * std::cos(p2),
                 cosP1 * std::sin(p2) - sinP1 * std::cos(p2) * std::cos(dl));
             double const r = R * distKm / scaleKm;
-            run.append(center +
-                       QPointF{std::sin(az) * r, -std::cos(az) * r});
+            run.append(QPointF{std::sin(az) * r, -std::cos(az) * r});
         }
         if (run.size() > 1)
             m_mapCache.append(run);
@@ -437,6 +482,54 @@ float SpotMapWindow::niceCeil(float const value) {
     return mag * 10.0f;
 }
 
+float SpotMapWindow::stepScale(float const scale, int const dir) {
+    // One step up (+1) or down (−1) the same ladder niceCeil uses, so
+    // manual zoom lands on the same scale values auto-zoom produces.
+    static constexpr float mults[] = {1.0f, 1.25f, 1.5f, 2.0f, 2.5f,
+                                      3.0f, 4.0f,  5.0f, 6.0f, 8.0f};
+    constexpr int n = static_cast<int>(std::size(mults));
+    float mag = std::pow(10.0f, std::floor(std::log10(scale)));
+    float const ratio = scale / mag; // [1, 10)
+    int idx = 0;
+    float bestErr = 1e9f;
+    for (int i = 0; i < n; ++i) {
+        if (float const e = std::fabs(mults[i] - ratio); e < bestErr) {
+            bestErr = e;
+            idx = i;
+        }
+    }
+    idx += dir;
+    if (idx < 0) {
+        idx = n - 1;
+        mag /= 10.0f;
+    } else if (idx >= n) {
+        idx = 0;
+        mag *= 10.0f;
+    }
+    return std::clamp(mults[idx] * mag, FLOOR_SCALE_KM, MAX_SCALE_KM);
+}
+
+void SpotMapWindow::zoomIn() {
+    m_manualScaleKm = stepScale(
+        m_lastScaleKm > 0.0f ? m_lastScaleKm : DEFAULT_SCALE_KM, -1);
+    m_zoomAutoBtn->setEnabled(true);
+    requestReplot();
+}
+
+void SpotMapWindow::zoomOut() {
+    m_manualScaleKm = stepScale(
+        m_lastScaleKm > 0.0f ? m_lastScaleKm : DEFAULT_SCALE_KM, +1);
+    m_zoomAutoBtn->setEnabled(true);
+    requestReplot();
+}
+
+void SpotMapWindow::zoomAuto() {
+    m_manualScaleKm = 0.0f;
+    m_panPx = QPointF{}; // recenter — Auto = fit all, centered
+    m_zoomAutoBtn->setEnabled(false);
+    requestReplot();
+}
+
 void SpotMapWindow::redraw() {
     QSize const sz = size() * devicePixelRatio();
     if (sz.isEmpty())
@@ -451,9 +544,11 @@ void SpotMapWindow::redraw() {
 
     int const w = width();
     int const h = height();
-    QPointF const center{w / 2.0,
-                         TITLE_STRIP_PX +
-                             (h - TITLE_STRIP_PX - LEGEND_STRIP_PX) / 2.0};
+    QPointF const center =
+        QPointF{w / 2.0,
+                TITLE_STRIP_PX +
+                    (h - TITLE_STRIP_PX - LEGEND_STRIP_PX) / 2.0} +
+        m_panPx;
     float const R =
         std::min(w / 2.0, (h - TITLE_STRIP_PX - LEGEND_STRIP_PX) / 2.0) -
         MARGIN_PX;
@@ -469,24 +564,44 @@ void SpotMapWindow::redraw() {
 
     // Auto-scale: outer ring just past the farthest live spot (nice
     // 1/2/5 value), floored so a lone close-in spot isn't degenerate.
+    // Manual zoom (m_manualScaleKm > 0, +/Auto/− buttons) overrides;
+    // spots beyond a manual scale clamp to the outer ring below.
     float maxDist = 0.0f;
     for (Spot const &s : spots)
         maxDist = std::max(maxDist, s.distance);
-    float const scaleKm =
+    float const autoScaleKm =
         spots.isEmpty() ? DEFAULT_SCALE_KM
                         : std::max(niceCeil(maxDist), FLOOR_SCALE_KM);
+    float const scaleKm =
+        m_manualScaleKm > 0.0f ? m_manualScaleKm : autoScaleKm;
+    m_lastScaleKm = scaleKm;
 
     QFont small = p.font();
     small.setPointSize(8);
     p.setFont(small);
 
-    // Geographic background: country/coast outlines, clipped to the
-    // chart circle. Cached; rebuilt only on center/scale changes.
-    rebuildMapCache(center, R, scaleKm);
+    // Geographic background: country/coast outlines across the whole
+    // visible viewport (pan can carry any part of the chart into
+    // view, so the old clip-to-circle is gone — the boundary ring
+    // overlays as the scale reference). The cut extends to the
+    // farthest visible corner, quantized to the nice ladder so drags
+    // only rebuild the cache when crossing a step; capped short of
+    // the antipode where the projection blows up.
+    double maxCornerPx = 0.0;
+    for (QPointF const &corner :
+         {QPointF{0, 0}, QPointF{static_cast<qreal>(w), 0},
+          QPointF{0, static_cast<qreal>(h)},
+          QPointF{static_cast<qreal>(w), static_cast<qreal>(h)}}) {
+        maxCornerPx = std::max(maxCornerPx,
+                               std::hypot(corner.x() - center.x(),
+                                          corner.y() - center.y()));
+    }
+    float const cutKm = std::min(
+        niceCeil(scaleKm * static_cast<float>(maxCornerPx) / R * 1.05f),
+        19000.0f);
+    rebuildMapCache(R, scaleKm, cutKm);
     p.save();
-    QPainterPath clip;
-    clip.addEllipse(center, R, R);
-    p.setClipPath(clip);
+    p.translate(center);
     p.setPen(QPen{QColor(70, 100, 80), 1}); // muted land outline
     for (QPolygonF const &poly : m_mapCache)
         p.drawPolyline(poly);
@@ -557,7 +672,12 @@ void SpotMapWindow::redraw() {
             std::clamp(static_cast<float>(s.when.secsTo(now)) / WINDOW_SECS,
                        0.0f, 1.0f);
         float const alpha = 1.0f - 0.5f * age;
-        float const r = R * std::min(s.distance / scaleKm, 1.0f);
+        // TRUE radial position — no outer-ring clamp (pan model:
+        // zoomed-in views push far spots off-window, and dragging
+        // reaches them at full radial resolution). Painter clips
+        // off-pixmap dots; auto scale still covers every spot, so
+        // nothing is beyond the ring in Auto anyway.
+        float const r = R * (s.distance / scaleKm);
         double const rad = s.azimuth * DEG2RAD;
         QPointF const pos =
             center + QPointF{std::sin(rad), -std::cos(rad)} * r;
@@ -588,7 +708,10 @@ void SpotMapWindow::redraw() {
         }
     }
 
-    // Title strip.
+    // Title strip (backfilled — pan can slide outlines under it).
+    p.fillRect(QRectF{0, 0, static_cast<qreal>(w),
+                      static_cast<qreal>(TITLE_STRIP_PX)},
+               QColor(16, 16, 24));
     p.setPen(QColor(220, 220, 235));
     QFont title = p.font();
     title.setPointSize(9);
@@ -604,16 +727,22 @@ void SpotMapWindow::redraw() {
 
     if (spots.isEmpty()) {
         p.setPen(QColor(150, 150, 170));
-        // One line height below center — dead-center overlapped the
-        // own-station marker graphic.
+        // One line height below the WINDOW center (not the panned
+        // chart center) — dead-center overlapped the own-station
+        // marker graphic.
         qreal const drop = p.fontMetrics().height();
-        p.drawText(QRectF{0, center.y() - 30 + drop,
+        p.drawText(QRectF{0, (center.y() - m_panPx.y()) - 30 + drop,
                           static_cast<qreal>(w), 60},
                    Qt::AlignCenter, tr("No new spots yet"));
     }
 
-    // Legend: SNR gradient bar.
+    // Legend: SNR gradient bar (strip backfilled, same reason as the
+    // title strip).
     {
+        p.fillRect(QRectF{0, static_cast<qreal>(h - LEGEND_STRIP_PX),
+                          static_cast<qreal>(w),
+                          static_cast<qreal>(LEGEND_STRIP_PX)},
+                   QColor(16, 16, 24));
         qreal const barW = std::min(280.0, w * 0.6);
         QRectF bar{(w - barW) / 2.0,
                    static_cast<qreal>(h - LEGEND_STRIP_PX + 8), barW, 10};
@@ -660,6 +789,24 @@ SpotMapWindow::hitTest(QPointF const &pos) const {
 }
 
 void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
+    // Drag-to-pan: once the press moves past the drag threshold it's
+    // a pan, not a click. Direct redraw() (not the debounced
+    // requestReplot) so the chart tracks the cursor smoothly; the
+    // outline cache is center-relative so panning never re-projects.
+    if (m_maybeDrag && (event->buttons() & Qt::LeftButton)) {
+        QPointF const d = event->position() - m_pressPos;
+        if (!m_dragging &&
+            d.manhattanLength() >= QApplication::startDragDistance()) {
+            m_dragging = true;
+            setCursor(Qt::ClosedHandCursor);
+        }
+        if (m_dragging) {
+            m_panPx = m_panAtPress + d;
+            m_zoomAutoBtn->setEnabled(true); // Auto now recenters too
+            redraw();
+            return;
+        }
+    }
     // Hover identity: nearest spot within a comfortable radius.
     if (ScreenSpot const *best = hitTest(event->position())) {
         bool const miles = gridInUS(m_myGrid);
@@ -737,14 +884,33 @@ void SpotMapWindow::showToast(QString const &text) {
 }
 
 void SpotMapWindow::mousePressEvent(QMouseEvent *event) {
-    // [BUILD 336 TODO #96 first slice] Left-click a spot dot → emit
-    // its callsign. Same nearest-within-radius hit-test as hover.
+    // Arm a potential drag; the click action moved to release so a
+    // pan gesture doesn't also fire spotClicked.
     if (event->button() == Qt::LeftButton) {
-        if (ScreenSpot const *best = hitTest(event->position())) {
-            Q_EMIT spotClicked(best->spot.receiverCall);
-        }
+        m_maybeDrag = true;
+        m_dragging = false;
+        m_pressPos = event->position();
+        m_panAtPress = m_panPx;
     }
     QWidget::mousePressEvent(event);
+}
+
+void SpotMapWindow::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton) {
+        if (m_dragging) {
+            m_dragging = false;
+            unsetCursor();
+        } else if (m_maybeDrag) {
+            // [BUILD 336 TODO #96 first slice] Left-click a spot dot
+            // → emit its callsign. Same nearest-within-radius
+            // hit-test as hover. (Release-time since mapzoom drag.)
+            if (ScreenSpot const *best = hitTest(event->position())) {
+                Q_EMIT spotClicked(best->spot.receiverCall);
+            }
+        }
+        m_maybeDrag = false;
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 
 void SpotMapWindow::changeEvent(QEvent *event) {
@@ -752,12 +918,18 @@ void SpotMapWindow::changeEvent(QEvent *event) {
     // 2026-07-16) — teaches the click-to-copy affordance in place.
     if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
         showToast(tr("Click on a call sign to create an outgoing "
-                     "message. Double-click to QSY."));
+                     "message. Double-click to QSY. Drag to pan."));
     }
     QWidget::changeEvent(event);
 }
 
-void SpotMapWindow::showEvent(QShowEvent *) { requestReplot(); }
+void SpotMapWindow::showEvent(QShowEvent *) {
+    // Every (re)open starts in Auto — manual zoom/pan are gestures
+    // for the current viewing session only (operator directive
+    // 2026-08-02); a closed-then-reopened map fits all spots again.
+    zoomAuto();
+    requestReplot();
+}
 
 void SpotMapWindow::closeEvent(QCloseEvent *event) {
     // Hide only — the MQTT client and caches keep running so the map

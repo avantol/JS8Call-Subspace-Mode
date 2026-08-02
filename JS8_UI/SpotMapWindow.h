@@ -76,6 +76,7 @@ class SpotMapWindow final : public QWidget {
     void showEvent(QShowEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
+    void mouseReleaseEvent(QMouseEvent *) override;
     void mouseDoubleClickEvent(QMouseEvent *) override;
     void changeEvent(QEvent *) override; // activation → hint toast
 
@@ -84,6 +85,9 @@ class SpotMapWindow final : public QWidget {
     void onMqttState(QString const &state);
     void onPruneTick();
     void redraw();
+    void zoomIn();
+    void zoomOut();
+    void zoomAuto();
 
   private:
     struct Spot {
@@ -104,8 +108,12 @@ class SpotMapWindow final : public QWidget {
     void rebuildTopics();
     void requestReplot();
     void pruneBand(QString const &band);
-    void rebuildMapCache(QPointF const &center, float R, float scaleKm);
+    // Outline cache is built CENTER-RELATIVE (origin = chart center)
+    // and translated at draw time, so panning never rebuilds it; only
+    // grid/R/scale/cut changes do.
+    void rebuildMapCache(float R, float scaleKm, float cutKm);
     static float niceCeil(float value); // next 1/2/5 x 10^n
+    static float stepScale(float scale, int dir); // ±1 step on the ladder
     static QColor snrColor(int snr, float alphaScale);
 
     QSettings *m_settings;
@@ -140,6 +148,25 @@ class SpotMapWindow final : public QWidget {
     class QLabel *m_toast = nullptr;
     QTimer m_toastTimer;
 
+    // Zoom controls (upper-left, vertical: + / Auto / −). Manual scale
+    // is SESSION-ONLY state, never persisted — every launch starts in
+    // Auto (operator directive 2026-08-02). 0 = auto-scale.
+    class QToolButton *m_zoomInBtn = nullptr;
+    class QToolButton *m_zoomAutoBtn = nullptr;
+    class QToolButton *m_zoomOutBtn = nullptr;
+    float m_manualScaleKm = 0.0f;
+    float m_lastScaleKm = 0.0f; // effective scale of the last redraw
+
+    // Drag-to-pan (session-only, like manual zoom; Auto recenters).
+    // m_panPx = chart-center offset from the geometric center, in
+    // logical px. Spots draw at TRUE radial position (no outer-ring
+    // clamp) so a zoomed-in view can pan out to distant clusters.
+    QPointF m_panPx;
+    bool m_maybeDrag = false;
+    bool m_dragging = false;
+    QPointF m_pressPos;
+    QPointF m_panAtPress;
+
     // On-map display options (defaults per operator, 2026-07-14;
     // on-map toggle UI to follow — details TBD).
     bool m_showRings = false;
@@ -152,7 +179,7 @@ class SpotMapWindow final : public QWidget {
     QString m_mapCacheGrid;
     float m_mapCacheScale = -1.0f;
     float m_mapCacheR = -1.0f;
-    QPointF m_mapCacheCenter;
+    float m_mapCacheCut = -1.0f;
 
     // Screen positions of the current band's spots as of the last
     // redraw, for hover lookup.

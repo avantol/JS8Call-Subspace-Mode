@@ -95,7 +95,23 @@ void UI_Constructor::processBufferedActivity() {
                     isDup = true;
                     break;
                 }
-                if (part.absPos == 0 && kept.text == part.text) {
+                // [BUILD 354 asmdedup, field bug 2026-08-02] The
+                // build-293 fallback was TEXT EQUALITY ALONE — which
+                // silently collapsed LEGITIMATE repeated content
+                // inside one message (msg #12: a repeated 12-char
+                // group; the identical mid-message frame was dropped
+                // on all four transmissions, the splice read
+                // naturally, and only the ARQ chunk CRC caught it —
+                // NACK loop to retry exhaustion). Genuine standard-
+                // decoder double-decodes of the SAME transmission
+                // carry (near-)identical timestamps; DISTINCT
+                // transmissions are a full period apart. Require BOTH
+                // same text AND timestamps within half a period.
+                if (part.absPos == 0 && kept.absPos == 0 &&
+                    kept.text == part.text &&
+                    qAbs(kept.utcTimestamp.msecsTo(part.utcTimestamp)) <
+                        static_cast<qint64>(
+                            JS8::Submode::periodMS(part.submode)) / 2) {
                     isDup = true;
                     break;
                 }

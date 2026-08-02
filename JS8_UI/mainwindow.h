@@ -850,11 +850,12 @@ class UI_Constructor : public QMainWindow {
                                 int totalChunks);
     void onNativeMarkerSeen(QString const &peer, int chunkId,
                             int totalChunks);
-    // [BUILD 353 rxbanner3] Optional progress: received-chunk events
-    // pass (chunkId, totalChunks) and the banner's first line shows
-    // "(N/T)"; no-arg refreshes (markers, our own reply keyups) keep
-    // the last shown progress and just re-arm the stall timer.
-    void refreshArqPlaceholder(int chunkId = -1, int totalChunks = -1);
+    // [BUILD 354 rxsession] Pure renderer of the Manager's receive-
+    // session machine (rxSessionChanged): Receiving → banner up with
+    // (N/T); any other phase → default placeholder. Replaces the
+    // refreshArqPlaceholder flag/timer machinery.
+    void onRxSessionChanged(QString const &peer, int phase,
+                            int chunkId, int totalChunks);
     void restoreArqPlaceholder();
     void onNativeBinaryMessageReceived(QString const &fromCall,
                                        QByteArray const &envelope,
@@ -1179,11 +1180,9 @@ class UI_Constructor : public QMainWindow {
     // [TODO #107] RX-side V3 feedback: outgoing-box placeholder swap
     // while a multi-part native transfer is inbound (restored by
     // timer when the next marker fails to appear, or on delivery).
-    QTimer *m_arqPlaceholderTimer{nullptr};
+
     QString m_arqPlaceholderOrig;
-    // [BUILD 353 rxbanner3] Last "(N/T)" progress shown in the banner
-    // first line; cleared with the banner in restoreArqPlaceholder.
-    QString m_arqBannerProgress;
+
     // [TODO #107 Phase 2 DEBUG — remove before push] Burst-experiment
     // composite, staged into the Modulator's full-frame override by
     // guiUpdate's FT2 block (same flag pattern as Visible Hail).

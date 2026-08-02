@@ -307,6 +307,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // decodes the base32 payload, verifies SHA-256, writes the file.
     connect(m_chunkedArq, &ChunkedArq::Manager::fileMessageReceived,
             this, &UI_Constructor::onChunkedFileMessageReceived);
+    // [BUILD 354 rxsession] The receive-session machine's one signal;
+    // the UI renders the in-progress banner from it and nothing else.
+    connect(m_chunkedArq, &ChunkedArq::Manager::rxSessionChanged,
+            this, &UI_Constructor::onRxSessionChanged);
     // [TODO #107] V3 native-binary transfer hooks: per-chunk TX
     // (marker + injected raw frames) and completed-transfer RX.
     connect(m_chunkedArq,

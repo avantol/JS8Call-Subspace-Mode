@@ -8209,17 +8209,10 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx — OPERATOR halt
     // is already empty when Manager fires its sendFailed("halted")
     // for each pending send.
     if (m_chunkedArq) {
+        // [BUILD 354 rxsession] haltAll drives the receive-session
+        // machine to Idle, whose rxSessionChanged signal drops the
+        // banner — no direct UI write here (single writer).
         m_chunkedArq->haltAll();
-        // [TODO #109 2026-07-21] haltAll() stops the RX collect
-        // watchdog (clearNativeState), but the operator-visible
-        // "MULTI-PART MSG IN PROGRESS... WAIT TO SEND" banner is only
-        // dropped on delivery or the 60 s restore timer — and every
-        // watchdog NACK keyup re-arms that timer, so on a failed/
-        // halted RECEIVE it lingers. restoreArqPlaceholder() is the
-        // banner's existing counterpart (called on delivery at
-        // onNativeBinaryMessageReceived); Halt is another terminal —
-        // drop the banner now instead of waiting the timer out.
-        restoreArqPlaceholder();
     }
 
     {
