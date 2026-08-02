@@ -364,6 +364,131 @@ void UI_Constructor::processCommandActivity() {
             continue;
         }
 
+        // [BUILD 339 TODO #103 / BUILD 353 yesflag] Passive capture of
+        // ARQ capability replies. A peer answering QUERY ARQ? sends
+        // "<asker> YES <level>" — YES is a directed-command token, so
+        // it arrives as cmd=" YES" with the bare level digits in
+        // d.text (VERIFIED in sender log 2026-07-17: cmd=" YES"
+        // text="2"). Cache the level (full callsign, session-long) so
+        // file transfers pick the right wire format AND the waterfall
+        // labels can flag Subspace-app stations (TODO #131).
+        // [BUILD 353 yesflag] Sits ABOVE the addressed-to-us gate on
+        // purpose: an OVERHEARD reply to someone else's query proves
+        // the sender's capability just as well as one addressed to us
+        // (Andy 2026-07-30: "and Overheard replies too"). The resume
+        // and missing-digits branches below stay toMe-gated — an
+        // overheard reply must never key up OUR parked transfer into
+        // the peer's QSO with a third party, nor burn our one retry.
+        // Exact-digits match so "YES MSG ID n" (text="MSG ID n") and
+        // "YES +08 (15S)" (QUERY CALL reply; SNR always sign-prefixed)
+        // never count. Passive observer: NO continue — display and
+        // downstream processing are unchanged.
+        if (!isAllCall && d.cmd == QStringLiteral(" YES")) {
+            static QRegularExpression const kArqLevelReplyRe{
+                QStringLiteral(R"(^(\d{1,3})$)")};
+            if (auto const lm = kArqLevelReplyRe.match(
+                    d.text.toUpper().simplified());
+                lm.hasMatch()) {
+                int const level = lm.captured(1).toInt();
+                // [2026-07-23] INVARIANT: this is the ONE and ONLY
+                // place a peer's ARQ level is ever cached, and it is
+                // reached ONLY by an actual "YES <digits>" reply.
+                // SILENCE MUST NEVER CACHE ANYTHING. QUERY ARQ? is
+                // YES-or-silence by design — nobody ever answers
+                // "NO" — so a missing reply carries NO information
+                // about the peer: the query or the reply is easily
+                // stepped on (half-duplex collision, QRM). Caching a
+                // level-1 assumption from silence would permanently
+                // demote a capable peer for the whole session. The
+                // timeout path therefore falls back to V1 for THAT
+                // TRANSFER ONLY and writes nothing, so the next
+                // transfer re-queries. Do not "optimise" that away.
+                m_peerArqLevel[d.from.toUpper()] = level;
+                qWarning() << "[ARQ] peer capability cached (from an"
+                              " actual YES reply):"
+                           << d.from << "level=" << level
+                           << (toMe ? "(to us)" : "(overheard)");
+                // [BUILD 353 yesflag retro] Retro-color the waterfall
+                // label: the YES frame's own label was painted BEFORE
+                // this capture ran (decode path precedes the command
+                // queue), so it went up white. Re-annotate as an
+                // in-place upgrade — same call + column matches the
+                // just-painted label and overdraws it at its original
+                // row, and with the cache now filled the paint-time
+                // predicate yields the capability yellow. A YES
+                // reply's destination is always a callsign, never a
+                // group, so inMyGroup=false here can never downgrade
+                // a purple label (purple precedence preserved,
+                // operator decision 2026-07-30).
+                m_wideGraph->setCallsignOverlayEnabled(
+                    m_config.show_calls_on_waterfall());
+                m_wideGraph->annotateCall(
+                    d.from, d.offset, d.submode,
+                    /*inMyGroup=*/false,
+                    /*destIsSubspaceGroup=*/false,
+                    /*isUpgrade=*/true);
+                // [BUILD 339 TODO #103] A file transfer may be
+                // parked waiting on exactly this reply — resume it
+                // with the just-learned format. Deferred 1.5 s so RX
+                // processing settles before we key up. toMe-gated:
+                // only OUR reply resumes OUR transfer.
+                if (toMe && capabilityNegotiationPending() &&
+                    d.from.compare(m_pendingFilePeer,
+                                   Qt::CaseInsensitive) == 0) {
+                    QString path, link, pr;
+                    // Hold the phase open across the 1.5 s defer below
+                    // — see takeCapabilityNegotiation()'s declaration.
+                    takeCapabilityNegotiation(&path, &link, &pr, true);
+                    qWarning() << "[FT-TX] capability received — "
+                                  "resuming pending transfer to"
+                               << pr << "level=" << level
+                               << (link.isEmpty() ? "(file)" : "(link)");
+                    QPointer<UI_Constructor> const self(this);
+                    QTimer::singleShot(1500, this,
+                        [self, path, link, pr, level]() {
+                            if (!self) return;
+                            if (!link.isEmpty()) {
+                                // Cache now holds the level; sendWebLink
+                                // proceeds directly.
+                                self->sendWebLink(link, pr);
+                            } else {
+                                self->startFileTransferWithFormat(
+                                    path, pr, level);
+                            }
+                            // Transfer now owns the lock via m_sends
+                            // (or failed to start) — close the phase.
+                            self->endCapabilityNegotiationPhase();
+                        });
+                }
+            } else if (toMe &&
+                       (!m_pendingFilePath.isEmpty() ||
+                        !m_pendingLinkUrl.isEmpty()) &&
+                       d.from.compare(m_pendingFilePeer,
+                                      Qt::CaseInsensitive) == 0 &&
+                       !d.text.toUpper().simplified()
+                            .startsWith(QStringLiteral("MSG"))) {
+                // [BUILD 341 capRetry] A YES from the very peer we're
+                // querying, but the level digits didn't survive (the
+                // reply's second frame lost — operator-observed
+                // "YES <missing frame>" 2026-07-17). The peer IS
+                // answering; only the level is missing. Fire the
+                // timeout logic NOW instead of waiting out the full
+                // window — it re-queries once (with a fresh
+                // generation + full window) or, if the retry is
+                // already spent, falls back to V1 (safe for any
+                // ARQ-capable peer). The "MSG" exclusion keeps a
+                // concurrent "YES MSG ID n" (QUERY MSGS reply) from
+                // burning the retry. toMe-gated (BUILD 353): an
+                // overheard garbled YES to a third party must not
+                // burn our retry.
+                qWarning() << "[FT-TX] YES from" << d.from
+                           << "without level digits (text="
+                           << d.text.left(20)
+                           << ") — immediate re-query";
+                onCapQueryTimeout(m_capQueryGen);
+            }
+        }
+
         // we're only responding to allcall, groupcalls, and our callsign at
         // this point, so we'll end after logging the callsigns we've heard
         if (!isAllCall && !toMe && !isGroupCall) {
@@ -644,97 +769,11 @@ void UI_Constructor::processCommandActivity() {
             }
         }
 
-        // [BUILD 339 TODO #103] Passive capture of ARQ capability
-        // replies. A peer answering our QUERY ARQ? sends
-        // "<us> YES <level>" — and since YES is a directed-command
-        // token, it arrives as cmd=" YES" with the bare level digits
-        // in d.text (VERIFIED in sender log 2026-07-17: cmd=" YES"
-        // text="2"; the first-cut freetext match never fired). Cache
-        // the level (full callsign, session-long) so file transfers
-        // pick wire-format V2 for level >= 2 peers. Exact-digits
-        // match so "YES MSG ID n" (text="MSG ID n") doesn't count.
-        // Passive observer: NO continue — the reply still displays.
-        if (!isAllCall && d.cmd == QStringLiteral(" YES")) {
-            static QRegularExpression const kArqLevelReplyRe{
-                QStringLiteral(R"(^(\d{1,3})$)")};
-            if (auto const lm = kArqLevelReplyRe.match(
-                    d.text.toUpper().simplified());
-                lm.hasMatch()) {
-                int const level = lm.captured(1).toInt();
-                // [2026-07-23] INVARIANT: this is the ONE and ONLY
-                // place a peer's ARQ level is ever cached, and it is
-                // reached ONLY by an actual "YES <digits>" reply.
-                // SILENCE MUST NEVER CACHE ANYTHING. QUERY ARQ? is
-                // YES-or-silence by design — nobody ever answers
-                // "NO" — so a missing reply carries NO information
-                // about the peer: the query or the reply is easily
-                // stepped on (half-duplex collision, QRM). Caching a
-                // level-1 assumption from silence would permanently
-                // demote a capable peer for the whole session. The
-                // timeout path therefore falls back to V1 for THAT
-                // TRANSFER ONLY and writes nothing, so the next
-                // transfer re-queries. Do not "optimise" that away.
-                m_peerArqLevel[d.from.toUpper()] = level;
-                qWarning() << "[ARQ] peer capability cached (from an"
-                              " actual YES reply):"
-                           << d.from << "level=" << level;
-                // [BUILD 339 TODO #103] A file transfer may be
-                // parked waiting on exactly this reply — resume it
-                // with the just-learned format. Deferred 1.5 s so RX
-                // processing settles before we key up.
-                if (capabilityNegotiationPending() &&
-                    d.from.compare(m_pendingFilePeer,
-                                   Qt::CaseInsensitive) == 0) {
-                    QString path, link, pr;
-                    // Hold the phase open across the 1.5 s defer below
-                    // — see takeCapabilityNegotiation()'s declaration.
-                    takeCapabilityNegotiation(&path, &link, &pr, true);
-                    qWarning() << "[FT-TX] capability received — "
-                                  "resuming pending transfer to"
-                               << pr << "level=" << level
-                               << (link.isEmpty() ? "(file)" : "(link)");
-                    QPointer<UI_Constructor> const self(this);
-                    QTimer::singleShot(1500, this,
-                        [self, path, link, pr, level]() {
-                            if (!self) return;
-                            if (!link.isEmpty()) {
-                                // Cache now holds the level; sendWebLink
-                                // proceeds directly.
-                                self->sendWebLink(link, pr);
-                            } else {
-                                self->startFileTransferWithFormat(
-                                    path, pr, level);
-                            }
-                            // Transfer now owns the lock via m_sends
-                            // (or failed to start) — close the phase.
-                            self->endCapabilityNegotiationPhase();
-                        });
-                }
-            } else if ((!m_pendingFilePath.isEmpty() ||
-                        !m_pendingLinkUrl.isEmpty()) &&
-                       d.from.compare(m_pendingFilePeer,
-                                      Qt::CaseInsensitive) == 0 &&
-                       !d.text.toUpper().simplified()
-                            .startsWith(QStringLiteral("MSG"))) {
-                // [BUILD 341 capRetry] A YES from the very peer we're
-                // querying, but the level digits didn't survive (the
-                // reply's second frame lost — operator-observed
-                // "YES <missing frame>" 2026-07-17). The peer IS
-                // answering; only the level is missing. Fire the
-                // timeout logic NOW instead of waiting out the full
-                // window — it re-queries once (with a fresh
-                // generation + full window) or, if the retry is
-                // already spent, falls back to V1 (safe for any
-                // ARQ-capable peer). The "MSG" exclusion keeps a
-                // concurrent "YES MSG ID n" (QUERY MSGS reply) from
-                // burning the retry.
-                qWarning() << "[FT-TX] YES from" << d.from
-                           << "without level digits (text="
-                           << d.text.left(20)
-                           << ") — immediate re-query";
-                onCapQueryTimeout(m_capQueryGen);
-            }
-        }
+        // [BUILD 353 yesflag] The passive ARQ-capability YES capture
+        // used to live here — moved ABOVE the addressed-to-us gate so
+        // OVERHEARD third-party "YES <level>" replies also cache (and
+        // feed the waterfall capability flag, TODO #131). One fact,
+        // one site — see the block before the gate.
 
         // [BUILD 331-bell TODO #80] BELL command. Peer addresses us
         // with "<us> BELL" — we play the configured "bell" sound

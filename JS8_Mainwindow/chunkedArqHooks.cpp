@@ -114,14 +114,15 @@ void UI_Constructor::onChunkedWantsResponseTx(QString const &text) {
             << m_arqResponseSavedText.size()
             << "for response=" << text.left(40);
     }
-    // [BUILD 342.18 bannerNack] While the V3 in-progress banner is
-    // up, ANY response keyup (ACK, or the watchdog's post-halt NACK
-    // probes) proves this station is still busy with the session —
+    // [BUILD 342.18 bannerNack] While the in-progress banner is
+    // up, ANY response keyup (ACK, or the watchdog's NACK probes)
+    // proves this station is still busy with the session —
     // refresh the banner so the operator isn't invited to type/send
-    // while we're still keying NACKs (bench 2026-07-20: banner
-    // dropped at +60 s, NACK probes ran to +2 min). Banner is
-    // V3-only (m_arqPlaceholderOrig is set only by native-path
-    // signals), so V2 responses are a no-op here.
+    // while we're still keying replies (bench 2026-07-20: banner
+    // dropped at +60 s, NACK probes ran to +2 min).
+    // [BUILD 353 rxbanner] Banner now covers ALL multi-part ARQ
+    // receives (text / V1 / V2 via onChunkedChunkAdded, V3 via the
+    // native signals), so this refresh serves every path.
     if (!m_arqPlaceholderOrig.isNull()) {
         refreshArqPlaceholder();
     }
@@ -147,12 +148,29 @@ void UI_Constructor::onChunkedChunkAdded(QString const &fromCall,
         << "[ARQ-RX] chunkAdded from=" << fromCall
         << "chunk=" << chunkId << "/" << total
         << "bodyLen=" << chunkBody.size();
+
+    // [BUILD 353 rxbanner, operator request 2026-08-02] Multi-part
+    // TEXT / V1-file / V2 receives now show the same in-progress
+    // banner V3 always had — banner ONLY, no button disabling for
+    // these paths (unlike V3's RX lock). Cleared by: delivery
+    // (onChunkedMessageDelivered), operator Halt/Esc
+    // (restoreArqPlaceholder in the operator slot), or the cosmetic
+    // speed-derived stall timeout in refreshArqPlaceholder — which
+    // reverts the BANNER only and cancels NOTHING; a late chunk
+    // still assembles and simply re-raises the banner here.
+    if (total > 1) {
+        refreshArqPlaceholder(chunkId, total);
+    }
 }
 
 void UI_Constructor::onChunkedMessageDelivered(QString const &fromCall,
                                                QString const &toCall,
                                                QString const &assembledBody,
                                                int            msgId) {
+    // [BUILD 353 rxbanner] Delivery clears the in-progress banner
+    // immediately (mirrors the V3 delivered path).
+    restoreArqPlaceholder();
+
     // Multi-chunk message fully assembled. The per-chunk (CC/TT)
     // lines already show the operator what arrived; we still write
     // ONE final " assembled-body ♦" line so the complete message
@@ -855,7 +873,7 @@ void UI_Constructor::promptAndSaveReceivedFile(
         "Incoming file from %1\n\n"
         "    Name:  %2\n"
         "    Size:  %3 bytes\n\n"
-        "Save to disk?").arg(fromCall, header.name).arg(header.bytes);
+        "Save to file storage?").arg(fromCall, header.name).arg(header.bytes);
     auto *box = new QMessageBox(this);
     box->setWindowTitle(QStringLiteral("Incoming file"));
     box->setText(msg);
@@ -1090,9 +1108,10 @@ void UI_Constructor::onNativeChunkCollected(QString const &peer,
                                             int const chunkId,
                                             int const totalChunks) {
     // Chunk progress refreshes the in-progress banner too (chunks
-    // land every ~33 s, so the 60 s restore timer stays ahead of a
-    // healthy transfer and drops within a minute of a real stall).
-    refreshArqPlaceholder();
+    // land every ~33 s, so the 16-period restore timer stays ahead of
+    // a healthy transfer and drops soon after a real stall).
+    // [rxbanner3] Passes (N/T) so the banner first line shows count.
+    refreshArqPlaceholder(chunkId, totalChunks);
     displayTextForFreq(
         QStringLiteral("%1: %2 [Submsg %3 of %4] %5")
             .arg(peer, m_config.my_callsign().trimmed())
@@ -1104,19 +1123,22 @@ void UI_Constructor::onNativeChunkCollected(QString const &peer,
         m_nSubMode);
 }
 
-// [TODO #107] Level-3-only RX feedback (operator request 2026-07-19):
-// while a multi-part native transfer is inbound, the outgoing box's
-// placeholder (visible only while the box is empty) shows the
-// in-progress banner. Refreshed by BOTH progress signals — every
-// live-transfer marker AND every collected chunk (chunks land every
-// ~33 s: 8 frames ≈ 30 s + ACK turnaround) — so the restore timer
-// only has to span ONE chunk cycle plus grace: 60 s. Timer expiry
-// means the stream stalled/ended → restore; delivery restores
-// immediately. V2 transfers never touch this — both signals fire
-// only from the native path.
-namespace {
-constexpr int ARQ_PLACEHOLDER_RESTORE_MS = 60000;
-}
+// [TODO #107 / BUILD 353 rxbanner] RX feedback for ALL multi-part
+// ARQ receives (operator requests 2026-07-19 + 2026-08-02): while a
+// multi-part transfer is inbound — plain text, V1 file, V2, or V3
+// native — the outgoing box's placeholder (visible only while the
+// box is empty) shows the in-progress banner. Refreshed by every
+// progress event: V3 markers + collected chunks via the native
+// signals, text/V1/V2 chunks via onChunkedChunkAdded, and our own
+// ACK/NACK keyups (bannerNack). The restore timer is a COSMETIC
+// stall timeout only — expiry reverts the banner to the default
+// placeholder and cancels NOTHING; the receive stays live and any
+// late chunk re-raises the banner. Delivery and operator Halt/Esc
+// restore immediately. Duration derives from the speed in effect at
+// the last refresh: 16 periods — the span of one chunk cycle plus a
+// retry's grace, and exactly the old bench-validated 60 s at
+// Subspace (16 × 3.75 s), now correct at every speed instead of
+// only that one.
 
 void UI_Constructor::onNativeMarkerSeen(QString const &peer,
                                         int const chunkId,
@@ -1127,14 +1149,28 @@ void UI_Constructor::onNativeMarkerSeen(QString const &peer,
     refreshArqPlaceholder();
 }
 
-void UI_Constructor::refreshArqPlaceholder() {
+void UI_Constructor::refreshArqPlaceholder(int const chunkId,
+                                           int const totalChunks) {
     if (!ui->extFreeTextMsgEdit) return;
+    // [BUILD 353 rxbanner3] Received-chunk events carry (N/T) and
+    // update the remembered progress; no-arg refreshes keep it.
+    if (chunkId > 0 && totalChunks > 0) {
+        m_arqBannerProgress =
+            tr(" (%1/%2)").arg(chunkId).arg(totalChunks);
+    }
     QString const banner =
-        tr("MULTI-PART MSG IN PROGRESS...\n"
+        tr("MULTI-PART MSG IN PROGRESS%1...\n"
            "TYPE AN OUTGOING MESSAGE HERE,\n"
-           "WAIT TO SEND.");
+           "WAIT TO SEND ('HALT' TO CANCEL).")
+            .arg(m_arqBannerProgress);
     if (ui->extFreeTextMsgEdit->placeholderText() != banner) {
-        m_arqPlaceholderOrig = ui->extFreeTextMsgEdit->placeholderText();
+        // Save the DEFAULT placeholder only on first raise — banner
+        // text varies with progress now, so guard on banner-not-up
+        // (orig null), not on text inequality.
+        if (m_arqPlaceholderOrig.isNull()) {
+            m_arqPlaceholderOrig =
+                ui->extFreeTextMsgEdit->placeholderText();
+        }
         ui->extFreeTextMsgEdit->setPlaceholderText(banner);
     }
     if (!m_arqPlaceholderTimer) {
@@ -1143,7 +1179,8 @@ void UI_Constructor::refreshArqPlaceholder() {
         connect(m_arqPlaceholderTimer, &QTimer::timeout,
                 this, &UI_Constructor::restoreArqPlaceholder);
     }
-    m_arqPlaceholderTimer->start(ARQ_PLACEHOLDER_RESTORE_MS);
+    m_arqPlaceholderTimer->start(
+        16 * ChunkedArq::periodMsForSubmode(m_nSubMode));
 }
 
 void UI_Constructor::restoreArqPlaceholder() {
@@ -1155,6 +1192,7 @@ void UI_Constructor::restoreArqPlaceholder() {
     }
     ui->extFreeTextMsgEdit->setPlaceholderText(m_arqPlaceholderOrig);
     m_arqPlaceholderOrig.clear();
+    m_arqBannerProgress.clear();  // [rxbanner3] fresh count next time
 }
 
 // [TODO #107] V3 RX hook: transfer fully collected — parse the raw

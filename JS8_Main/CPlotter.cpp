@@ -511,6 +511,11 @@ void CPlotter::paintLabelAt(QPainter &p,
     //     yellow text on black.
     //   Standard mode + in MyGroups:
     //     white text on purple.
+    //   Standard mode + not in any group + ARQ-capable (answered
+    //   "YES <level>", ours or overheard — [BUILD 353 yesflag
+    //   TODO #131]):
+    //     yellow text on black — the station runs the Subspace app
+    //     even though this transmission was at a standard speed.
     //   Standard mode + not in any group:
     //     white text on black.
     bool const isSubspace = (e.submode == Varicode::JS8CallFT2);
@@ -523,7 +528,8 @@ void CPlotter::paintLabelAt(QPainter &p,
     } else if (e.inMyGroup) {
         bgColor = QColor(128, 0, 128);
         textColor = Qt::white;
-    } else if (isSubspace) {
+    } else if (isSubspace ||
+               (m_arqCapableCheck && m_arqCapableCheck(e.call))) {
         bgColor = Qt::black;
         textColor = Qt::yellow;
     } else {

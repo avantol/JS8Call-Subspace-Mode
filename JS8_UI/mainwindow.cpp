@@ -1428,7 +1428,10 @@ void UI_Constructor::on_monitorTxButton_toggled(bool checked) {
     if (!checked) {
         qCDebug(mainwindow_js8)
             << "on_monitorTxButton_toggled(" << checked << ") to stop TX.";
-        on_stopTxButton_clicked();
+        // [BUILD 353 haltwrap] Mechanical: unchecking TX-enable (by
+        // the user OR programmatically, e.g. the stuck-key path's
+        // setChecked(false)) stops TX but must not destroy ARQ state.
+        stopTxMechanical();
     }
 }
 
@@ -1450,11 +1453,9 @@ void UI_Constructor::auto_tx_mode(bool state) {
         // that will be done soon anyway:
         prepareSending(DriftingDateTime::currentMSecsSinceEpoch());
     } else {
-        // This function is called recursively from on_stopTxButton_clicked()!
-        bool previous_stopTxButtonisLongterm = m_stopTxButtonIsLongterm;
-        m_stopTxButtonIsLongterm = false;
-        on_stopTxButton_clicked();
-        m_stopTxButtonIsLongterm = previous_stopTxButtonisLongterm;
+        // This function is called recursively from stopTxMechanical()!
+        // (m_auto is false by the time we call back, so it terminates.)
+        stopTxMechanical();
     }
     qCDebug(mainwindow_js8) << "auto_tx_mode(" << state << ") completed.";
 }
@@ -3017,9 +3018,7 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
             qWarning() << "[FT2-TX] prepareSending: msgLength=0, stopping TX"
                         << "btxok=" << m_btxok << "iptt=" << m_iptt
                         << "auto=" << m_auto;
-        m_stopTxButtonIsLongterm = false;
-        this->on_stopTxButton_clicked();
-        m_stopTxButtonIsLongterm = true;
+        this->stopTxMechanical();
     }
 
     double const fraction_of_tx_slot = seconds_into_the_period / period;
@@ -4430,10 +4429,7 @@ void UI_Constructor::stopTx() {
         ui->extFreeTextMsgEdit->clear();
         ui->extFreeTextMsgEdit->setReadOnly(false);
         update_dynamic_property(ui->extFreeTextMsgEdit, "transmitting", false);
-        bool previous_stopTxButtonIsLongterm = m_stopTxButtonIsLongterm;
-        m_stopTxButtonIsLongterm = false;
-        on_stopTxButton_clicked();
-        m_stopTxButtonIsLongterm = previous_stopTxButtonIsLongterm;
+        stopTxMechanical();
         tryRestoreFreqOffset();
 
         // Notify API clients that the queued transmission block finished.
@@ -5006,23 +5002,27 @@ bool UI_Constructor::ensureCreateMessageReady(const QString &text) {
         return false;
     }
 
+    // [BUILD 353 haltwrap] Pre-flight failures are AUTOMATIC error
+    // paths, not operator gestures — mechanical stop only, never
+    // haltAll (an idle-watchdog block during an auto-ACK keyup must
+    // not destroy a half-assembled receive session).
     if (!ensureCanTransmit()) {
-        on_stopTxButton_clicked();
+        stopTxMechanical();
         return false;
     }
 
     if (!ensureCallsignSet()) {
-        on_stopTxButton_clicked();
+        stopTxMechanical();
         return false;
     }
 
     if (!ensureNotIdle()) {
-        on_stopTxButton_clicked();
+        stopTxMechanical();
         return false;
     }
 
     if (!ensureKeyNotStuck(text)) {
-        on_stopTxButton_clicked();
+        stopTxMechanical();
 
         ui->monitorButton->setChecked(false);
         ui->monitorTxButton->setChecked(false);
@@ -5666,8 +5666,21 @@ void UI_Constructor::on_startTxButton_toggled(bool checked) {
     if (checked) {
         startTx();
     } else {
+        // [BUILD 353 haltwrap2 2026-08-02] MECHANICAL, not the
+        // operator slot. This toggled(false) fires both from the
+        // operator un-clicking Send AND programmatically — notably
+        // resetMessage()'s uncheck at the end of every completed
+        // burst. Under the old longterm-flag ritual the nested signal
+        // chain was accidentally protected (flag still false inside
+        // the toggle window); deleting the flag exposed it, and the
+        // first rxguard build halted every V3 transfer 3 ms after
+        // chunk 1 finished airing (field log 2026-08-02 03:25:29:
+        // stopTx → resetMessage → uncheck → toggled(false) → operator
+        // slot → haltAll → sendFailed "halted", totalRetries=0).
+        // Un-clicking Send means "stop sending" — session-kill is the
+        // Halt button's job alone.
         resetMessage();
-        on_stopTxButton_clicked();
+        stopTxMechanical();
         stopTx();
     }
 }
@@ -7104,8 +7117,12 @@ void UI_Constructor::armCapQueryTimeout(int const gen) {
     QPointer<UI_Constructor> const self(this);
     auto const arm = [self, gen]() {
         if (!self) return;
-        int const capMs = ChunkedArq::replyTimeoutMsForSubmode(
-            self->m_nSubMode, ChunkedArq::CAP_QUERY_REPLY_FRAMES);
+        // [BUILD 353 bounddec] 2-frame YES → decide at B0+4P on the
+        // period grid (Subspace keeps its ms budget internally).
+        int const capMs = ChunkedArq::replyDeadlineMsForSubmode(
+            self->m_nSubMode, ChunkedArq::CAP_QUERY_REPLY_FRAMES,
+            DriftingDateTime::currentMSecsSinceEpoch(),
+            static_cast<int>(self->m_TxDelay * 1000));
         qCWarning(chunkedarq_js8)
             << "[FT-TX] capability reply window armed post-TX-done:"
             << "gen=" << gen << "capMs=" << capMs;
@@ -8090,7 +8107,9 @@ void UI_Constructor::on_tuneButton_clicked(bool checked) {
 
 void UI_Constructor::end_tuning() {
     tuneATU_Timer.stop(); // stop tune watchdog when stopping Tune manually
-    on_stopTxButton_clicked();
+    // [BUILD 353 haltwrap2] Mechanical: tune-end is also reached by
+    // the ATU watchdog timer — must not destroy ARQ session state.
+    stopTxMechanical();
     // we're turning off so remember our Tune pwr setting and reset to Tx pwr
     if (m_config.pwrBandTuneMemory() || m_config.pwrBandTxMemory()) {
         m_pwrBandTuneMemory[m_lastBand] =
@@ -8158,7 +8177,13 @@ void UI_Constructor::resetPushButtonToggleText(QPushButton *btn) {
 #endif
 }
 
-void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
+// [BUILD 353 haltwrap] The mechanical TX stop — see the header
+// comment. NO ARQ-terminal actions here, ever: routine inter-chunk
+// cleanup killing the session means chunk 1 finishes, state tears
+// down, the ACK arrives seconds later, and onAckReceived finds no
+// SendState — the message stalls at one chunk forever (the original
+// reason the old longterm-flag gate existed).
+void UI_Constructor::stopTxMechanical()
 {
     if (m_tune)
         stop_tuning();
@@ -8167,23 +8192,23 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
     m_btxok = false;
 
     resetMessage();
+}
+
+void UI_Constructor::on_stopTxButton_clicked() // Stop Tx — OPERATOR halt
+{
+    // [BUILD 353 haltwrap] This slot is now reached ONLY by operator
+    // gestures: the Halt button (Qt auto-connect) and Escape. All
+    // programmatic stops call stopTxMechanical() directly and can no
+    // longer destroy ARQ session state (the old m_stopTxButtonIsLongterm
+    // flag ritual had four callers that forgot it — deleted).
+    stopTxMechanical();
 
     // Operator-initiated halt aborts any in-flight chunked-ARQ
     // session and clears all per-peer state (incl. MSG-cmd flags).
-    // Done after resetMessage so the TX queue is already empty when
-    // Manager fires its sendFailed("halted") for each pending send.
-    //
-    // GATED on m_stopTxButtonIsLongterm: this slot is reached by THREE
-    // different paths, only one of which is the operator pressing Halt:
-    //   (a) Halt button click — m_stopTxButtonIsLongterm = true (default)
-    //   (b) stopTx() after a TX frame completes — toggles longterm to
-    //       false before calling us (mainwindow.cpp:3278), restores after
-    //   (c) auto_tx_mode(false) → us — same toggle pattern (line 1230-33)
-    // Paths (b) and (c) are routine inter-chunk cleanup; killing the ARQ
-    // session there means chunk 1 finishes, we tear down state, the ACK
-    // arrives a few seconds later, and onAckReceived finds no SendState
-    // to advance — the message stalls at one chunk forever.
-    if (m_chunkedArq && m_stopTxButtonIsLongterm) {
+    // Done after resetMessage (in stopTxMechanical) so the TX queue
+    // is already empty when Manager fires its sendFailed("halted")
+    // for each pending send.
+    if (m_chunkedArq) {
         m_chunkedArq->haltAll();
         // [TODO #109 2026-07-21] haltAll() stops the RX collect
         // watchdog (clearNativeState), but the operator-visible
@@ -8197,9 +8222,9 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx
         restoreArqPlaceholder();
     }
 
-    if (m_stopTxButtonIsLongterm) {
+    {
         if (m_hb_loop->isActive())
-            qWarning() << "[HAIL-DIAG] loop cancelled: stop button (longterm)";
+            qWarning() << "[HAIL-DIAG] loop cancelled: stop button (operator)";
         m_hb_loop->onLoopCancel();
         m_cq_loop->onLoopCancel();
         // [BUILD 336 TODO #94] Operator-initiated Halt cancels the
@@ -8455,7 +8480,9 @@ void UI_Constructor::handle_transceiver_update(
 void UI_Constructor::handle_transceiver_failure(QString const &reason) {
     update_dynamic_property(ui->readFreq, "state", "error");
     ui->readFreq->setEnabled(true);
-    on_stopTxButton_clicked();
+    // [BUILD 353 haltwrap2] Mechanical: a CAT hiccup mid-receive must
+    // not destroy a half-assembled ARQ session.
+    stopTxMechanical();
     rigFailure(reason);
 }
 

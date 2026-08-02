@@ -222,7 +222,19 @@ class UI_Constructor : public QMainWindow {
      * In an ugly klugde, we try to distinguish these cases
      * via these three *IsLongterm variables.
      */
-    bool m_stopTxButtonIsLongterm;
+    // [BUILD 353 haltwrap 2026-08-01] Mechanical TX stop — everything
+    // on_stopTxButton_clicked does EXCEPT the operator-terminal
+    // actions (haltAll, loop cancels, hail abort, negotiation abort).
+    // Every PROGRAMMATIC stop (end-of-frame cleanup, auto_tx_mode,
+    // empty-box stop, API RIG.TX_HALT, TX-enable untoggle, pre-flight
+    // failures) calls THIS; only genuine operator gestures (Halt
+    // button via the auto-connected slot, Escape) reach the terminal
+    // actions. Replaces the m_stopTxButtonIsLongterm flag + its
+    // save/set/call/restore ritual, which four callers had already
+    // forgotten to perform — a convention-enforced invariant turned
+    // into a structural one (a caller now CANNOT destroy ARQ session
+    // state by merely stopping TX).
+    void stopTxMechanical();
     bool m_hbButtonIsLongterm;
     bool m_cqButtonIsLongterm;
 
@@ -838,7 +850,11 @@ class UI_Constructor : public QMainWindow {
                                 int totalChunks);
     void onNativeMarkerSeen(QString const &peer, int chunkId,
                             int totalChunks);
-    void refreshArqPlaceholder();
+    // [BUILD 353 rxbanner3] Optional progress: received-chunk events
+    // pass (chunkId, totalChunks) and the banner's first line shows
+    // "(N/T)"; no-arg refreshes (markers, our own reply keyups) keep
+    // the last shown progress and just re-arm the stall timer.
+    void refreshArqPlaceholder(int chunkId = -1, int totalChunks = -1);
     void restoreArqPlaceholder();
     void onNativeBinaryMessageReceived(QString const &fromCall,
                                        QByteArray const &envelope,
@@ -1165,6 +1181,9 @@ class UI_Constructor : public QMainWindow {
     // timer when the next marker fails to appear, or on delivery).
     QTimer *m_arqPlaceholderTimer{nullptr};
     QString m_arqPlaceholderOrig;
+    // [BUILD 353 rxbanner3] Last "(N/T)" progress shown in the banner
+    // first line; cleared with the banner in restoreArqPlaceholder.
+    QString m_arqBannerProgress;
     // [TODO #107 Phase 2 DEBUG — remove before push] Burst-experiment
     // composite, staged into the Modulator's full-frame override by
     // guiUpdate's FT2 block (same flag pattern as Visible Hail).

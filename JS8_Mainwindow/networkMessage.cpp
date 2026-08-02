@@ -114,7 +114,7 @@ void UI_Constructor::networkMessage(Message const &message) {
      */
     if (type == "RIG.TX_HALT") {
         auto value = QVariant(message.value());
-        UI_Constructor::on_stopTxButton_clicked();
+        UI_Constructor::stopTxMechanical(); // [BUILD 353 haltwrap] API E-stop: mechanical only, never haltAll
           sendNetworkMessage("RIG.TX_HALT", "", {
             {"_ID", id},
             {"value", ui->monitorTxButton->isChecked()}

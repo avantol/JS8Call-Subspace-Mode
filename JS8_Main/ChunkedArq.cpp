@@ -690,8 +690,11 @@ void Manager::armAckTimer(QString const &peer, SendState &state) {
     }
     // [BUILD 331-arqTimeoutLock] Size from the chunk's TX-time submode
     // so the timeout matches the mode the chunk actually went out in.
-    int const timeoutMs = m_ackTimeoutFn ? m_ackTimeoutFn(state.txSubmode)
-                                         : DEFAULT_ACK_TIMEOUT_MS;
+    // [BUILD 353 derive] No-fn fallback (FSM harness) uses the SAME
+    // derived budget function, not a separate magic number.
+    int const timeoutMs = m_ackTimeoutFn
+                              ? m_ackTimeoutFn(state.txSubmode)
+                              : ackTimeoutMsForSubmode(state.txSubmode);
     state.ackTimer->start(timeoutMs);
     qCWarning(chunkedarq_js8)
         << "[ARQ-TX] ACK timer armed post-TX-done: peer=" << peer
@@ -1398,6 +1401,22 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
         // immediately off a frame decode, not on ones already timed.
         QTimer::singleShot(delayMs, this, [this, peer, cc]() {
             sendAck(peer, cc);
+            // [BUILD 353 wdanchor] Same re-anchor as the frame-
+            // triggered re-ACK path: our reply just went out, so the
+            // open window's patience restarts from HERE — the sender
+            // needs ACK flight + decode + turnaround + a full burst
+            // before silence means anything.
+            auto rxIt2 = m_recv.find(peer);
+            if (rxIt2 != m_recv.end()) {
+                RxState &rxs2 = rxIt2.value();
+                if (rxs2.nativeWin.active &&
+                    rxs2.nativeWin.collectTimer) {
+                    rxs2.nativeWin.noProgressNacks = 0;
+                    rxs2.nativeWin.collectTimer->start(
+                        (rxs2.nativeWin.collector.frameCount() + 2 +
+                         ACK_RTT_SLOTS) * m_nativeFrameMs);
+                }
+            }
         });
     };
     // Whole message already delivered → the sender lost our final
@@ -1660,6 +1679,21 @@ bool Manager::onNativeFrameReceived(int const seq, int const chk4,
                 // [TODO #119] Triggered by the LAST frame of the
                 // retry burst — sender is in turnaround right now.
                 sendAck(it.key(), prevCc, frameHoldMs);
+                // [BUILD 353 wdanchor 2026-08-01] Re-anchor the open
+                // window's watchdog to THIS re-ACK: the sender must
+                // decode it, turn around, and air the next chunk's
+                // full burst before any no-progress judgment is fair.
+                // Field case (K9AVT→WM8Q msg #40): the dup-marker
+                // revive re-armed at marker decode, the re-ACK went
+                // out 30 s later, and the un-anchored budget expired
+                // mid-turnaround — two blind NACK keyups into the
+                // sender's next-chunk burst.
+                rx.nativeWin.noProgressNacks = 0;
+                if (rx.nativeWin.collectTimer) {
+                    rx.nativeWin.collectTimer->start(
+                        (rx.nativeWin.collector.frameCount() + 2 +
+                         ACK_RTT_SLOTS) * m_nativeFrameMs);
+                }
             }
             return true;  // ours; keep out of the orphan store
         }
@@ -1808,6 +1842,34 @@ bool Manager::nativeCollectTimeout(QString const &peer) {
     if (rxIt == m_recv.end()) return false;
     RxState &rx = rxIt.value();
     if (!rx.nativeWin.active || rx.nativeWin.collector.complete()) {
+        return false;
+    }
+    // [BUILD 353 nacksilence 2026-08-02, operator decision] NACK on
+    // EVIDENCE, never on SILENCE. A window with ZERO collected frames
+    // cannot distinguish "chunk lost in flight" from "sender never
+    // sent it" (e.g. our ACK died and the sender is mid-retry-burst
+    // of the PREVIOUS chunk — transmitting, deaf, and about to be
+    // keyed over by our NACK). In every zero-frame world the sender's
+    // own ACK timeout already drives recovery; a timer-fired NACK
+    // adds no information and repeatedly caused harm — the mechanism
+    // (Build 343) accumulated FOUR limiters in two weeks (giveup cap,
+    // turnaround holds, re-ACK re-anchor, a proposed grace round),
+    // every field incident a silence-fired NACK. Deleted, not tuned.
+    // The window stays passively open: any future frame or marker
+    // re-arms the collect budget through the existing accept/marker
+    // paths. NACKs below now fire ONLY on PARTIAL receipt — the one
+    // case where the receiver knows something the sender doesn't
+    // ("your burst aired and pieces died").
+    if (static_cast<int>(rx.nativeWin.collector.missingSeqs().size()) ==
+        rx.nativeWin.collector.frameCount()) {
+        qCWarning(chunkedarq_js8)
+            << "[V3-RX] collect timeout with ZERO frames — staying"
+            << "silent (sender's own timeout drives retry): peer="
+            << peer << "msgId=" << rx.nativeWin.msgId
+            << "chunk=" << rx.nativeWin.chunkId;
+        if (rx.nativeWin.collectTimer) {
+            rx.nativeWin.collectTimer->stop();
+        }
         return false;
     }
     if (rx.nativeWin.noProgressNacks >= NATIVE_NACK_GIVEUP) {

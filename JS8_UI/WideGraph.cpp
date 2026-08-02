@@ -475,6 +475,11 @@ void WideGraph::setCallsignOverlayEnabled(bool const enabled) {
     ui->widePlot->setCallsignOverlayEnabled(enabled);
 }
 
+void WideGraph::setArqCapableCheck(
+    std::function<bool(QString const &)> fn) {
+    ui->widePlot->setArqCapableCheck(std::move(fn));
+}
+
 void WideGraph::dataSink(WF::SPlot const &s, float const df3) {
     QMutexLocker lock(&m_drawLock);
 

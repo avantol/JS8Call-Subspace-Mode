@@ -16,6 +16,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include <functional>
+
 #include <array>
 
 namespace Ui {
@@ -56,6 +58,9 @@ class WideGraph : public QWidget {
                       bool destIsSubspaceGroup = false,
                       bool isUpgrade = false);
     void setCallsignOverlayEnabled(bool enabled);
+    // [BUILD 353 yesflag TODO #131] Passthrough to CPlotter — see
+    // CPlotter::setArqCapableCheck.
+    void setArqCapableCheck(std::function<bool(QString const &)> fn);
     void saveSettings();
     void setBand(QString const &);
     void setFilterCenter(int);

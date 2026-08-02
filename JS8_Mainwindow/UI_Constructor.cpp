@@ -47,7 +47,7 @@ int ms_minute_error() {
 UI_Constructor::UI_Constructor(QString const &program_info,
                                QDir const &temp_directory, bool const multiple,
                                MultiSettings *multi_settings, QWidget *parent)
-    : QMainWindow(parent), m_stopTxButtonIsLongterm{true},
+    : QMainWindow(parent),
       m_hbButtonIsLongterm{true}, m_cqButtonIsLongterm{true},
       m_network_manager{this}, m_valid{true}, m_multiple{multiple},
       m_multi_settings{multi_settings}, m_configurations_button{0},
@@ -229,8 +229,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // actually went out in — not a live read, so an operator mode-
     // switch between capture and arm can't give the timer the wrong
     // mode.
-    m_chunkedArq->setAckTimeoutFn([](int submode) {
-        return ChunkedArq::ackTimeoutMsForSubmode(submode);
+    // [BUILD 353 bounddec] Deadline counted in period boundaries
+    // (decide at B0+3P for the 1-frame ACK), computed from the live
+    // period grid at arm time. Subspace + FSM harness keep the ms
+    // budget inside replyDeadlineMsForSubmode.
+    m_chunkedArq->setAckTimeoutFn([this](int submode) {
+        return ChunkedArq::replyDeadlineMsForSubmode(
+            submode, 1,
+            DriftingDateTime::currentMSecsSinceEpoch(),
+            static_cast<int>(m_TxDelay * 1000));
     });
     // [#121 2026-07-24 acktrack] Live-submode provider. armAckTimer
     // (post-TX-done) calls this to RE-CAPTURE txSubmode per chunk, so
@@ -1074,6 +1081,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // label scoots to the right immediately if the user has it on.
     m_wideGraph->setCallsignOverlayEnabled(
         m_config.show_calls_on_waterfall());
+
+    // [BUILD 353 yesflag TODO #131] Waterfall label capability flag:
+    // paint-time predicate over the ONE capability cache (the passive
+    // YES-capture's m_peerArqLevel — ours or overheard). Any cached
+    // bare-digits level counts, so a future protocol level 4 flags
+    // without a code change. Evaluated per paint; no copied state.
+    m_wideGraph->setArqCapableCheck([this](QString const &call) {
+        return m_peerArqLevel.contains(call.toUpper());
+    });
 
     // remove disabled menus from the menu bar
     foreach (auto action, ui->menuBar->actions()) {

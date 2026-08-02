@@ -26,6 +26,7 @@
 #include <boost/circular_buffer.hpp>
 #include <cmath>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <variant>
 
@@ -153,6 +154,17 @@ class CPlotter final : public QWidget {
                       bool isUpgrade = false);
     void setCallsignOverlayEnabled(bool enabled);
     bool callsignOverlayEnabled() const { return m_callsignOverlayEnabled; }
+    // [BUILD 353 yesflag TODO #131] Predicate: has this callsign
+    // proven ARQ/Subspace-app capability (answered "YES <level>" to a
+    // QUERY ARQ?, ours or overheard)? Evaluated at PAINT time so the
+    // flag reads the live session cache (m_peerArqLevel in the UI) —
+    // no copied state here to drift. Upgrades ONLY the plain
+    // white-on-black label case to yellow-on-black; the canonical
+    // @SUBSPACE yellow-background and the in-my-group purple keep
+    // precedence (operator decision 2026-07-30).
+    void setArqCapableCheck(std::function<bool(QString const &)> fn) {
+        m_arqCapableCheck = std::move(fn);
+    }
     void setBinsPerPixel(int);
     void setColors(Colors const &);
     void setDialFreq(float);
@@ -257,6 +269,8 @@ class CPlotter final : public QWidget {
     QString callAt(QPoint const &widgetPos) const;
     std::deque<LabelEntry> m_recentLabels;
     qint64 m_waterfallRow = 0;  // monotonic 1-per-scroll counter
+    // [BUILD 353 yesflag] see setArqCapableCheck.
+    std::function<bool(QString const &)> m_arqCapableCheck;
 
     RDP m_rdp;
     Scaler1D m_scaler1D;

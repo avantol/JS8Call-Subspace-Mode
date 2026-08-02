@@ -139,33 +139,13 @@ constexpr int    DEFAULT_MAX_RETRIES     = 3;
 // unbounded re-NACK kept keying for 4.5 min after the sender halted,
 // garbling the next transfer's marker mid-decode.
 constexpr int    NATIVE_NACK_GIVEUP      = 3;
-constexpr int    DEFAULT_ACK_TIMEOUT_MS  = 12000; // 2x Subspace cycle + ACK decode slack (FT2 fallback)
-
-// Post-TX-done ACK budget per JS8 submode.
-//   budget ≈ 2 × cycle_s + decode_slack
-//   covers: receiver decode lag + receiver cycle-align + receiver TX
-//           frame + sender decode lag.
-// Submode IDs from Varicode.h (NOT contiguous — 0,1,2,4,16).
-inline int ackTimeoutMsForSubmode(int submode) {
-    switch (submode) {
-        case 0:  return 36000; // JS8CallNormal — 15 s cycle
-        case 1:  return 25000; // JS8CallFast   — 10 s cycle
-        case 2:  return 16000; // JS8CallTurbo  —  6 s cycle
-        case 4:  return 66000; // JS8CallSlow   — 30 s cycle
-        // [BUILD 342.6] Subspace 12 s → 16 s: the V3 deferred-ACK
-        // worst case (receiver last-frame decode lag ~2-5 s + 250 ms
-        // audio ramp + slot align ≤3.75 s + 3.75 s ACK frame + our
-        // decode lag ~2-5 s) brushes 12 s — bench round 2 lost the
-        // ACK-vs-timeout race by <1 s on every chunk-2 attempt. The
-        // longer budget is FREE in the happy path (an arriving ACK
-        // cancels the timer); it only paces real-loss retries.
-        case 16: return 16000; // JS8CallFT2 / Subspace — 3.75 s cycle
-        default: return 25000; // Unknown — pick a middling value
-    }
-}
-
 // Period (T/R cycle) length per submode. Submode IDs from Varicode.h
-// (NOT contiguous — 0,1,2,4,16).
+// (NOT contiguous — 0,1,2,4,16). THE one physical-constant table in
+// this header — every timing budget below DERIVES from it. Do not
+// add sibling tables of hand-computed milliseconds ([BUILD 353
+// derive], operator 2026-07-30: "the timings were *supposed* to be
+// computed from periods" — the tabulated budgets this replaces were
+// the violation, and their rows drifted independently three times).
 inline int periodMsForSubmode(int submode) {
     switch (submode) {
         case 0:  return 15000; // JS8CallNormal
@@ -175,6 +155,37 @@ inline int periodMsForSubmode(int submode) {
         case 16: return 3750;  // JS8CallFT2 / Subspace
         default: return 15000; // Unknown — Normal
     }
+}
+
+// Reply-turnaround decode slack: the sum of both ends' decode lags
+// (~2-5 s each in the field, per-period alignment already accounted
+// separately below). One constant, not per-speed — decode lag is a
+// property of the decoders, not of the cycle length.
+constexpr int    DECODE_SLACK_MS         = 6000;
+
+// Post-TX-done ACK budget per JS8 submode — DERIVED, not tabulated:
+//   budget = 3 × period + DECODE_SLACK_MS
+//   covers: receiver decode lag + receiver cycle-align (typically
+//           MISSED by a few seconds, since our TX ends ON a boundary
+//           and their decode takes 2-5 s — so align costs nearly a
+//           full period) + one period of boundary-miss margin + the
+//           one-frame reply + sender decode lag.
+// [BUILD 353 ackmiss→derive 2026-07-30] History that forced the
+// derivation: the model was corrected TWICE on single rows of a
+// hand-tabulated switch (342.6 fixed Subspace 12→16 s; ackmiss fixed
+// the four legacy rows 36/25/16/66 → 51/35/22/96 after a live race —
+// KG4GEK's legitimate +46 s ACK vs a 36 s window, rescued only by a
+// manual halt) while sibling rows silently kept stale values. A
+// formula cannot have a forgotten row. Resulting budgets:
+//   Normal 51 s, Fast 36 s, Turbo 24 s, Slow 96 s, Subspace 17.25 s.
+// Deltas vs the last tabulated values: Fast +1 s, Turbo +2 s,
+// Subspace +1.25 s (16 → 17.25) — all in the SAFE direction (longer):
+// an arriving ACK cancels the timer, so the happy path is untouched
+// and only real-loss retry pacing slows. The 342.6 bench validation
+// established 16 s as a working FLOOR for Subspace; 17.25 s keeps
+// that property.
+inline int ackTimeoutMsForSubmode(int submode) {
+    return 3 * periodMsForSubmode(submode) + DECODE_SLACK_MS;
 }
 
 // [BUILD 352 capUnify] THE unified reply-wait budget, anchored at
@@ -206,10 +217,55 @@ inline int replyTimeoutMsForSubmode(int submode, int replyFrames) {
 // The QUERY ARQ? capability exchange: peer's "YES <level>" reply is
 // TWO frames (proven on-air 2026-07-28 — stepped-on replies decode
 // with frame 2 missing, "YES ~~~~~"; our own cancelled query logged
-// frame 1 only, "... QUERY"). Resulting post-TX-done windows:
-//   Subspace 19.75 s   Turbo 22.00 s   Fast 35.00 s
-//   Normal   51.00 s   Slow  96.00 s
+// frame 1 only, "... QUERY").
 constexpr int CAP_QUERY_REPLY_FRAMES = 2;
+
+// [BUILD 353 bounddec] Reply deadline COUNTED IN PERIOD BOUNDARIES,
+// not milliseconds (operator spec 2026-07-30). For period-aligned
+// speeds the entire exchange is boundary-quantized: the peer decodes
+// our sub-msg INSIDE its final airing period (the ~13.6 s
+// samplesNeeded trigger), keys a boundary — missing at most one —
+// airs replyFrames periods, and we decode THEIR reply inside its
+// final period too. So the correct decision instant is the TxDelay
+// window just before boundary (2 + replyFrames) after B0 (the
+// boundary ending our own TX):
+//   ACK (1 frame)  → decide at B0+3P; worst-case reply is fully
+//                    decoded by ~B0+P+14.6 s — a full period of margin.
+//   YES (2 frames) → decide at B0+4P; worst case decoded ~B0+2P+14.6.
+// Expiry lands (txDelay + 1.5 s) before the target boundary so the
+// staged retransmit clears the once-per-second TX-queue tick AND the
+// TxDelay gate, keying ON that boundary. An ACK decoded any earlier
+// stops the timer — nothing is ever committed before the decision
+// instant. No slack constant: every term is a period count, the
+// configured TX delay, or the queue-tick bound.
+//
+// B0 recovery from the arm instant (post-TX-done idle-poll, which
+// lags actual audio end by ≤~1 s): TX audio occupies > P/2 of its
+// final period in every legacy mode, so at arm time we are either
+// late in the final TX period (mod > P/2 → B0 = next boundary) or
+// just past it (mod < P/2 → B0 = previous boundary). The two cases
+// are separated from P/2 by >0.3 P in all modes — no ambiguity.
+//
+// Subspace is exempt (ARQ relax gate = no boundary grid; retries key
+// at expiry itself) and keeps the bench-validated ms budget via
+// replyTimeoutMsForSubmode, as does the FSM harness fallback.
+inline int replyDeadlineMsForSubmode(int const submode,
+                                     int const replyFrames,
+                                     qint64 const nowMs,
+                                     int const txDelayMs) {
+    if (submode == 16) {  // JS8CallFT2 / Subspace — no boundary grid
+        return replyTimeoutMsForSubmode(submode, replyFrames);
+    }
+    qint64 const p        = periodMsForSubmode(submode);
+    qint64 const inPeriod = nowMs % p;
+    qint64 const b0       = (inPeriod > p / 2) ? nowMs + (p - inPeriod)
+                                               : nowMs - inPeriod;
+    qint64 const target   = b0 + (2 + qint64(replyFrames)) * p
+                               - (txDelayMs + 1500);
+    qint64 duration = target - nowMs;
+    if (duration < p / 2) duration += p;  // grid-slip paranoia clamp
+    return static_cast<int>(duration);
+}
 
 // TX-idle poll: how often the manager re-checks "has JS8Call finished
 // my TX yet?" while a chunk is in flight. 1 s is fine — finer than
@@ -239,17 +295,37 @@ constexpr int    TX_IDLE_POLL_INTERVAL_MS = 1000;
 // the cap at its original value for fast modes (FT2, Turbo, Fast)
 // where 8×cycle is smaller than the original constant.
 inline int txIdleMaxWaitMsForSubmode(int submode) {
-    int const cycleS = [submode]() {
-        switch (submode) {
-            case 0:  return 15;  // JS8CallNormal
-            case 1:  return 10;  // JS8CallFast
-            case 2:  return 6;   // JS8CallTurbo
-            case 4:  return 30;  // JS8CallSlow
-            case 16: return 4;   // JS8CallFT2 / Subspace — round 3.75 up to 4
-            default: return 15;  // Unknown — Normal
-        }
-    }();
-    int const dynamic = 8 * cycleS * 1000;     // ms
+    // [BUILD 353 derive] Was a private, ROUNDED duplicate of the
+    // period table (Subspace "4 s") — now derives from the one
+    // periodMsForSubmode source like every other budget.
+    // [BUILD 353 txcap 2026-07-31] 8 × P → 14 × P. The 8-period
+    // figure modeled 7-frame V3 chunks + margin and was NEVER checked
+    // against V1/V2 TEXT chunks: a full 60-char base32 body + marker
+    // packs to 10+ frames (~150 s at Normal), LONGER than the 120 s
+    // cap — so the cap fired mid-transmission and armed the ACK
+    // window ~30 s before our own TX ended, leaving one boundary of
+    // real listening instead of three (diag log 03:11:27.960
+    // "TX-idle safety cap hit ms=120959", K9AVT→WM8Q msg #37, every
+    // chunk-2 attempt, deterministic; chunk 1 at 4 frames never
+    // tripped it). 14 P covers the ~12-frame worst-case text chunk
+    // with margin; the cap is a WEDGE BACKSTOP — oversizing costs
+    // nothing when the idle check works, which is the happy path.
+    // [BUILD 353 txcap 2026-07-31, operator catch] Subspace/V3 needs
+    // its own worst case: a K=15 chunk-1 is up to
+    // MAX_FRAMES_PER_CHUNK (15 payload) + 1 binary marker + ~8 text-
+    // marker frames ≈ 24 frames ≈ 90 s — EXACTLY the old floor, i.e.
+    // zero margin (negative once commit→keyup alignment and turnhold
+    // are counted, since awaitingSinceMs starts at send-commit). The
+    // default K=8 (~15 frames ≈ 56 s) never trips it, which is why
+    // bench V3 transfers masked this. Derive from the real frame
+    // model + 4 periods margin.
+    if (submode == 16) {
+        int const worstFrames =
+            NativeBinary::MAX_FRAMES_PER_CHUNK + 1 /*binary marker*/
+            + 8 /*text-marker frames, upper bound*/;
+        return (worstFrames + 4) * periodMsForSubmode(submode); // 105 s
+    }
+    int const dynamic = 14 * periodMsForSubmode(submode);
     int const floor   = 90000;                  // ms (original constant)
     return dynamic > floor ? dynamic : floor;
 }
@@ -543,7 +619,8 @@ class Manager : public QObject {
      *        was captured at chunk-TX-commit time (state.txSubmode),
      *        guaranteeing the timer matches the mode the chunk actually
      *        went out in — not the mode the operator might have just
-     *        switched to. Defaults to DEFAULT_ACK_TIMEOUT_MS if unset.
+     *        switched to. Falls back to ackTimeoutMsForSubmode(the
+     *        state's txSubmode) if unset ([BUILD 353 derive]).
      *
      * Typical UI wiring:
      *     mgr->setAckTimeoutFn([](int submode){
@@ -1207,7 +1284,7 @@ class Manager : public QObject {
     // Ensure the TX-idle poll timer is running (lazy-init + start).
     void ensureTxIdlePolling();
     // Arm `state.ackTimer` using whatever timeout the AckTimeoutFn
-    // currently reports (falls back to DEFAULT_ACK_TIMEOUT_MS).
+    // currently reports (falls back to the derived per-submode budget).
     void armAckTimer(QString const &peer, SendState &state);
     // Helpers for the per-peer maps.
     SendState &getOrCreateSend(QString const &peer);
