@@ -101,6 +101,8 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
             " color: rgb(210,210,225); border: 1px solid rgb(70,70,90);"
             " border-radius: 3px; }"
             "QToolButton:hover { background-color: rgba(60,60,80,220); }"
+            "QToolButton:checked { background-color: rgba(80,100,150,230);"
+            " color: white; border-color: rgb(120,140,190); }"
             "QToolButton:disabled { color: rgb(120,120,140); }"));
         return b;
     };
@@ -124,6 +126,29 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     m_zoomInBtn->setToolTip(tr("Zoom in"));
     m_zoomAutoBtn->setToolTip(tr("Auto zoom (fit all spots)"));
     m_zoomOutBtn->setToolTip(tr("Zoom out"));
+
+    // [spotwin] Accumulation-window buttons, upper right. Checkable +
+    // auto-exclusive (siblings), default 60 min each open (matches
+    // the fleet's hourly re-spot cache). Storage always keeps the
+    // full hour; these only filter the display.
+    m_win15Btn = makeZoomButton(QStringLiteral("15m"));
+    m_win30Btn = makeZoomButton(QStringLiteral("30m"));
+    m_win60Btn = makeZoomButton(QStringLiteral("60m"));
+    struct WinDef { QToolButton *b; int secs; };
+    for (WinDef const wd : {WinDef{m_win15Btn, 15 * 60},
+                            WinDef{m_win30Btn, 30 * 60},
+                            WinDef{m_win60Btn, 60 * 60}}) {
+        wd.b->setCheckable(true);
+        wd.b->setAutoExclusive(true);
+        wd.b->setToolTip(tr("Show spots from the last %1 minutes")
+                             .arg(wd.secs / 60));
+        connect(wd.b, &QToolButton::clicked, this, [this, wd]() {
+            m_viewWindowSecs = wd.secs;
+            requestReplot();
+        });
+    }
+    m_win60Btn->setChecked(true);
+    positionWindowButtons();
     // Auto is the startup state; the disabled Auto button doubles as
     // the mode indicator (disabled = auto active).
     m_zoomAutoBtn->setEnabled(false);
@@ -179,6 +204,10 @@ void SpotMapWindow::rebuildTopics() {
         topic = ov;
     }
 
+    // [spotfmt] Accumulation clock: restarts whenever the
+    // subscription (re)starts — the title's "last X of Y min" is
+    // honest about how much history can possibly be on screen.
+    m_accumStart = DriftingDateTime::currentDateTimeUtc();
     m_mqtt->setClientIdPrefix(QStringLiteral("JS8Call_%1").arg(topicCall));
     m_mqtt->setTopics({topic});
     m_debugDumpsLeft = 20;
@@ -343,14 +372,13 @@ void SpotMapWindow::pruneBand(QString const &band) {
 }
 
 void SpotMapWindow::onPruneTick() {
-    bool currentChanged = false;
-    for (auto it = m_spotsByBand.begin(); it != m_spotsByBand.end(); ++it) {
-        int const before = it.value().size();
+    for (auto it = m_spotsByBand.begin(); it != m_spotsByBand.end(); ++it)
         pruneBand(it.key());
-        if (it.key() == m_currentBand && it.value().size() != before)
-            currentChanged = true;
-    }
-    if (currentChanged && isVisible())
+    // [maptick] Repaint on every 30 s tick while visible (was: only
+    // when pruning removed something) — keeps the "last X of Y min"
+    // counter, the age fade, and the view-window filter current on a
+    // quiet band instead of freezing until the next spot arrives.
+    if (isVisible())
         requestReplot();
 }
 
@@ -567,19 +595,28 @@ void SpotMapWindow::redraw() {
     float const unitScale = miles ? 0.621371f : 1.0f;
     QString const unitLabel = miles ? tr("mi") : tr("km");
 
-    auto const &spots = m_spotsByBand.value(m_currentBand);
     auto const now = DriftingDateTime::currentDateTimeUtc();
+    // [spotwin] Storage holds the full hour; the 15/30/60 buttons
+    // pick how much of it renders. Everything below (auto-scale,
+    // counts, dots, hover) operates on the filtered view.
+    QVector<Spot> visible;
+    {
+        auto const cutoff = now.addSecs(-m_viewWindowSecs);
+        for (Spot const &s : m_spotsByBand.value(m_currentBand))
+            if (s.when >= cutoff)
+                visible.append(s);
+    }
 
     // Auto-scale: outer ring just past the farthest live spot (nice
     // 1/2/5 value), floored so a lone close-in spot isn't degenerate.
     // Manual zoom (m_manualScaleKm > 0, +/Auto/− buttons) overrides;
     // spots beyond a manual scale clamp to the outer ring below.
     float maxDist = 0.0f;
-    for (Spot const &s : spots)
+    for (Spot const &s : visible)
         maxDist = std::max(maxDist, s.distance);
     float const autoScaleKm =
-        spots.isEmpty() ? DEFAULT_SCALE_KM
-                        : std::max(niceCeil(maxDist), FLOOR_SCALE_KM);
+        visible.isEmpty() ? DEFAULT_SCALE_KM
+                          : std::max(niceCeil(maxDist), FLOOR_SCALE_KM);
     float const scaleKm =
         m_manualScaleKm > 0.0f ? m_manualScaleKm : autoScaleKm;
     m_lastScaleKm = scaleKm;
@@ -670,14 +707,15 @@ void SpotMapWindow::redraw() {
     // Spots: oldest first so the newest draw on top. Heat blobs blend
     // additively (operator choice); age fades alpha 1.0 -> 0.5 across
     // the 15-minute window.
-    QVector<Spot> ordered = spots;
+    QVector<Spot> ordered = visible;
     std::sort(ordered.begin(), ordered.end(),
               [](Spot const &a, Spot const &b) { return a.when < b.when; });
 
     m_screenSpots.clear();
     for (Spot const &s : ordered) {
         float const age =
-            std::clamp(static_cast<float>(s.when.secsTo(now)) / WINDOW_SECS,
+            std::clamp(static_cast<float>(s.when.secsTo(now)) /
+                           static_cast<float>(m_viewWindowSecs),
                        0.0f, 1.0f);
         float const alpha = 1.0f - 0.5f * age;
         // TRUE radial position — no outer-ring clamp (pan model:
@@ -726,14 +764,26 @@ void SpotMapWindow::redraw() {
     p.setFont(title);
     QString const bandText =
         m_currentBand.isEmpty() ? tr("no band") : m_currentBand;
+    // [spotfmt] "last X of Y min" while accumulation is younger than
+    // the selected window; plain "last Y min" once it's full.
+    int const viewMin = m_viewWindowSecs / 60;
+    qint64 const accumMin =
+        m_accumStart.isValid()
+            ? std::max<qint64>(1, m_accumStart.secsTo(now) / 60)
+            : viewMin;
+    QString const windowText =
+        accumMin < viewMin
+            ? tr("last %1 of %2 min").arg(accumMin).arg(viewMin)
+            : tr("last %1 min").arg(viewMin);
     p.drawText(QRectF{0, 0, static_cast<qreal>(w), TITLE_STRIP_PX},
                Qt::AlignCenter,
-               tr("%1 @ %2 — %3 — %4 spotters / last 15 min — %5")
+               tr("%1 @ %2 — %3 — %4 spotters / %5 — %6")
                    .arg(m_myCall, m_myGrid, bandText)
-                   .arg(spots.size())
+                   .arg(visible.size())
+                   .arg(windowText)
                    .arg(m_stateText));
 
-    if (spots.isEmpty()) {
+    if (visible.isEmpty()) {
         p.setPen(QColor(150, 150, 170));
         // One line height below the WINDOW center (not the panned
         // chart center) — dead-center overlapped the own-station
@@ -779,7 +829,20 @@ void SpotMapWindow::paintEvent(QPaintEvent *) {
     p.drawPixmap(0, 0, m_pixmap);
 }
 
-void SpotMapWindow::resizeEvent(QResizeEvent *) { requestReplot(); }
+void SpotMapWindow::positionWindowButtons() {
+    if (!m_win15Btn) return;
+    int const x = width() - 36 - 6; // right-aligned, mirrors zoom stack
+    int y = TITLE_STRIP_PX + 6;
+    for (QToolButton *b : {m_win15Btn, m_win30Btn, m_win60Btn}) {
+        b->move(x, y);
+        y += 22;
+    }
+}
+
+void SpotMapWindow::resizeEvent(QResizeEvent *) {
+    positionWindowButtons();
+    requestReplot();
+}
 
 SpotMapWindow::ScreenSpot const *
 SpotMapWindow::hitTest(QPointF const &pos) const {

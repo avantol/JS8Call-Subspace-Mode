@@ -101,7 +101,17 @@ class SpotMapWindow final : public QWidget {
         float distance = 0.0f;  // km or miles per Configuration::miles()
     };
 
-    static constexpr int WINDOW_SECS = 15 * 60;
+    // [spotwin] STORAGE horizon: spots are retained in memory per
+    // band for a full hour (fleet stations on stock JS8Call re-spot
+    // at most hourly per band — the 1-hour reporting cache — so a
+    // shorter accumulation misses most of the fleet). The DISPLAY
+    // window (15/30/60 buttons, m_viewWindowSecs) filters at paint
+    // time; band changes keep each band's accumulated hour.
+    static constexpr int WINDOW_SECS = 60 * 60;
+    // Default view = the full hour (operator, 2026-08-03: with the
+    // fleet's hourly re-spot cache, anything shorter hides most
+    // reporting stations by default).
+    static constexpr int DEFAULT_VIEW_SECS = 60 * 60;
     static constexpr int SNR_COLD = -25; // dB → blue
     static constexpr int SNR_HOT = 10;   // dB → red
 
@@ -156,6 +166,16 @@ class SpotMapWindow final : public QWidget {
     class QToolButton *m_zoomOutBtn = nullptr;
     float m_manualScaleKm = 0.0f;
     float m_lastScaleKm = 0.0f; // effective scale of the last redraw
+
+    // [spotwin] Accumulation-window buttons (15/30/60 min, upper
+    // right). Session-only; every open defaults to 60 (no
+    // persistence, operator directive 2026-08-03).
+    class QToolButton *m_win15Btn = nullptr;
+    class QToolButton *m_win30Btn = nullptr;
+    class QToolButton *m_win60Btn = nullptr;
+    int m_viewWindowSecs = DEFAULT_VIEW_SECS;
+    QDateTime m_accumStart; // [spotfmt] when accumulation (re)started
+    void positionWindowButtons();
 
     // Drag-to-pan (session-only, like manual zoom; Auto recenters).
     // m_panPx = chart-center offset from the geometric center, in
