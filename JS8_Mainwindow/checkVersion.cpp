@@ -199,9 +199,12 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
                     if (!alertOnUpToDate) {
                         QString const key =
                             QStringLiteral("store-%1").arg(storeBuild);
-                        QSettings settings;
-                        if (settings
-                                .value(QStringLiteral(
+                        // [TODO #134] App ini, not the bare default
+                        // store (Windows/MSIX never persisted it, so
+                        // the once-per-build suppression was lost on
+                        // every restart there).
+                        if (m_settings
+                                ->value(QStringLiteral(
                                     "Common/LastUpdateNotifiedVersion"))
                                 .toString() == key) {
                             qWarning()
@@ -209,7 +212,7 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
                                 << key << "— suppressing";
                             return;
                         }
-                        settings.setValue(
+                        m_settings->setValue(
                             QStringLiteral(
                                 "Common/LastUpdateNotifiedVersion"),
                             key);
@@ -317,16 +320,16 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
                 // Once per new version — but only for the automatic
                 // (startup) check; the Help-menu check always reports.
                 if (!alertOnUpToDate) {
-                    QSettings settings;
-                    if (settings
-                            .value(QStringLiteral(
+                    // [TODO #134] App ini, not the bare default store.
+                    if (m_settings
+                            ->value(QStringLiteral(
                                 "Common/LastUpdateNotifiedVersion"))
                             .toString() == normStr) {
                         qWarning() << "[UPDATE-CHECK] already notified for"
                                    << normStr << "— suppressing";
                         return;
                     }
-                    settings.setValue(
+                    m_settings->setValue(
                         QStringLiteral("Common/LastUpdateNotifiedVersion"),
                         normStr);
                 }

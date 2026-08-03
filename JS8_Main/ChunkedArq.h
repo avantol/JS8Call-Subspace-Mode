@@ -38,6 +38,8 @@
 #include <QString>
 
 #include "JS8_Main/NativeBinary.h"
+
+class QSettings;
 #include <QTimer>
 
 Q_DECLARE_LOGGING_CATEGORY(chunkedarq_js8)
@@ -636,7 +638,16 @@ class Manager : public QObject {
     Q_OBJECT
 
   public:
-    explicit Manager(QObject *parent = nullptr);
+    // [TODO #134 build 354 msgini] settings = the app's REAL ini-file
+    // settings object (JS8Call.ini via MultiSettings). The msg-id
+    // counter previously used a bare default-constructed QSettings —
+    // the platform default store, which is the REGISTRY on Windows
+    // and MSIX-virtualized there, so the counter never persisted
+    // (worked on Linux only by accident: ~/.config conf file).
+    // nullptr (test harnesses) = no persistence at all; counter
+    // starts at MSG_ID_MIN and stays in-process.
+    explicit Manager(QSettings *settings = nullptr,
+                     QObject *parent = nullptr);
     ~Manager() override;
 
     void setMyCall(QString const &myCall) { m_myCall = myCall; }
@@ -1405,6 +1416,7 @@ class Manager : public QObject {
     void clearNativeState(RxState &rx);
 
     QString                     m_myCall;
+    class QSettings            *m_settings{nullptr}; // app ini; see ctor
     int                         m_nextMsgId{MSG_ID_MIN};
     QHash<QString, SendState>   m_sends;
     // [2026-07-23 negophase] Opening phase of a TX session — see

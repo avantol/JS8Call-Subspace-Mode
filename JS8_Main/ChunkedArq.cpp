@@ -224,13 +224,35 @@ QList<QString> splitIntoChunks(QString const &body, int maxChunkBody) {
 // fired messageDelivered.
 static constexpr char const *kNextMsgIdSettingsKey = "chunkedArq/nextMsgId";
 
-Manager::Manager(QObject *parent) : QObject(parent) {
-    QSettings settings;
-    int const stored = settings.value(QString::fromLatin1(kNextMsgIdSettingsKey),
-                                      MSG_ID_MIN).toInt();
+Manager::Manager(QSettings *settings, QObject *parent)
+    : QObject(parent), m_settings(settings) {
+    if (!m_settings) {
+        // Test harnesses: no persistence, counter stays in-process.
+        return;
+    }
+    // [TODO #134 build 354 msgini] Counter lives in the app's REAL
+    // ini file now (JS8Call.ini), same store as every other setting.
+    // The old bare `QSettings{}` default store (Windows: registry,
+    // MSIX-virtualized → never persisted; Linux: ~/.config conf,
+    // worked by accident) is read ONCE as a migration source when
+    // the ini has no value yet, so Linux users resume their counter
+    // seamlessly instead of resetting to MSG_ID_MIN (a reset
+    // re-exposes the 2026-06-12 msgId-collision dedup swallow).
+    QString const key = QString::fromLatin1(kNextMsgIdSettingsKey);
+    int stored = MSG_ID_MIN;
+    if (m_settings->contains(key)) {
+        stored = m_settings->value(key, MSG_ID_MIN).toInt();
+    } else {
+        QSettings legacy;
+        stored = legacy.value(key, MSG_ID_MIN).toInt();
+        qCWarning(chunkedarq_js8)
+            << "[ARQ] msg-id counter migrated from legacy default "
+               "store to ini:" << stored;
+    }
     m_nextMsgId = (stored >= MSG_ID_MIN && stored <= MSG_ID_MAX)
                       ? stored
                       : MSG_ID_MIN;
+    m_settings->setValue(key, m_nextMsgId);
     qCWarning(chunkedarq_js8)
         << "[ARQ] persistent msg-id counter restored from settings:"
         << m_nextMsgId;
@@ -431,10 +453,11 @@ SendResult Manager::sendChunked(QString const &peer, QString const &inputBody,
     }
     // [PERSIST MSG ID 2026-06-12 build 254] Persist after every bump so
     // a process restart resumes from the next value, not from 1.
-    {
-        QSettings settings;
-        settings.setValue(QString::fromLatin1(kNextMsgIdSettingsKey),
-                          m_nextMsgId);
+    // [TODO #134] Through the app ini (see ctor) — never the bare
+    // default store, which the Windows/MSIX container swallows.
+    if (m_settings) {
+        m_settings->setValue(QString::fromLatin1(kNextMsgIdSettingsKey),
+                             m_nextMsgId);
     }
 
     qCWarning(chunkedarq_js8)
@@ -504,10 +527,10 @@ SendResult Manager::sendChunkedBinary(QString const &peer,
     if (++m_nextMsgId > MSG_ID_MAX) {
         m_nextMsgId = MSG_ID_MIN;
     }
-    {
-        QSettings settings;
-        settings.setValue(QString::fromLatin1(kNextMsgIdSettingsKey),
-                          m_nextMsgId);
+    // [TODO #134] Through the app ini (see ctor).
+    if (m_settings) {
+        m_settings->setValue(QString::fromLatin1(kNextMsgIdSettingsKey),
+                             m_nextMsgId);
     }
 
     qCWarning(chunkedarq_js8)

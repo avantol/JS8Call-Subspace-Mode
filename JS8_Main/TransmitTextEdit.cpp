@@ -9,6 +9,8 @@
 
 #include <QLoggingCategory>
 #include <QMimeData>
+#include <QPainter>
+#include <QPaintEvent>
 #include <QScrollBar>
 
 #include <iterator>
@@ -532,6 +534,34 @@ void TransmitTextEdit::insertFromMimeData(const QMimeData *source) {
     if (source && source->hasText()) {
         insertPlainText(source->text().toUpper());
     }
+}
+
+// [BUILD 354 winban] See header: placeholder painted by us so ALL
+// lines render on every Qt version (native Qt 6.9 elides to one
+// line, which truncated the RX banner on Windows).
+void TransmitTextEdit::setPlaceholderText(QString const &text) {
+    if (m_placeholder == text)
+        return;
+    m_placeholder = text;
+    // Belt and braces: the native placeholder must stay empty or Qt
+    // would paint its own copy on top of ours.
+    QTextEdit::setPlaceholderText(QString());
+    viewport()->update();
+}
+
+void TransmitTextEdit::paintEvent(QPaintEvent *e) {
+    QTextEdit::paintEvent(e);
+    if (m_placeholder.isEmpty() || !document()->isEmpty())
+        return;
+    QPainter p(viewport());
+    p.setPen(palette().color(QPalette::PlaceholderText));
+    int const margin = qRound(document()->documentMargin());
+    QRect const r = viewport()->rect().adjusted(margin, margin,
+                                                -margin, -margin);
+    // Rect-form drawText honors '\n' line breaks; TextWordWrap folds
+    // long lines instead of clipping on narrow layouts.
+    p.drawText(r, Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap,
+               m_placeholder);
 }
 
 Q_LOGGING_CATEGORY(transmittextedit_js8, "transmittextedit.js8", QtWarningMsg)

@@ -61,10 +61,25 @@ class TransmitTextEdit : public QTextEdit {
 
     bool eventFilter(QObject * /*o*/, QEvent *e);
 
+    // [BUILD 354 winban] Placeholder painted by US, not Qt. Qt's
+    // native QTextEdit placeholder rendering changed across versions
+    // — Qt 6.4 (Linux builds) draws every line, Qt 6.9 (Windows CI)
+    // draws a single elided line, which truncated the multi-line
+    // "MULTI-PART MSG IN PROGRESS..." banner and the default two-line
+    // prompt to their first lines on Windows. These SHADOW the
+    // non-virtual QTextEdit members: every call site reaches the
+    // widget through a TransmitTextEdit* (ui->extFreeTextMsgEdit), so
+    // compile-time dispatch lands here; the native placeholder is
+    // kept EMPTY so Qt paints nothing and paintEvent draws all lines
+    // itself — identical rendering on every Qt version.
+    QString placeholderText() const { return m_placeholder; }
+    void setPlaceholderText(QString const &text);
+
   protected:
     // Prevent crash in Qt's QWidgetTextControl::insertFromMimeData
     // when clipboard contains non-text data (QTBUG in Qt 6.4.x)
     void insertFromMimeData(const QMimeData *source) override;
+    void paintEvent(QPaintEvent *e) override;
 
   public slots:
     void on_selectionChanged();
@@ -79,6 +94,7 @@ class TransmitTextEdit : public QTextEdit {
     QFont m_font;
     QColor m_fg;
     QColor m_bg;
+    QString m_placeholder; // see setPlaceholderText shadow above
 };
 
 #endif // TRANSMITTEXTEDIT_H

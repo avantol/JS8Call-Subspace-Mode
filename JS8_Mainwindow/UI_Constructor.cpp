@@ -171,7 +171,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // (outbound sends, inbound reassembly, ACK/NACK timers). Lives on
     // the main thread; receives RX events from processCommandActivity
     // and emits wantToTransmit when it has outgoing chunks/ACKs/NACKs.
-    m_chunkedArq = new ChunkedArq::Manager(this);
+    // [TODO #134] Pass the app's real ini settings object so the
+    // persistent msg-id counter survives restarts on EVERY platform
+    // (the old bare-QSettings default store never persisted under
+    // the Windows MSIX container).
+    m_chunkedArq = new ChunkedArq::Manager(m_settings, this);
     // Use the FULL callsign (e.g. "WM8Q/P"), not m_baseCall — the
     // ARQ wire format puts the from-call into the chunk marker line
     // "<myCall>: <peer> <body> #NN.CC/TT.HHHH" verbatim, and stripping
