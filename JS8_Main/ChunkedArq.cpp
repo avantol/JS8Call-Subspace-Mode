@@ -1448,10 +1448,22 @@ void Manager::rxSessionActivity(QString const &peer, RxState &rx,
     }
     rx.rxLastArmMono = nowMono;
     rx.rxStallTimer->start(armMs);
-    qCWarning(chunkedarq_js8)
-        << "[RX-SESSION]" << (phaseChange ? "-> Receiving" : "activity")
-        << "peer=" << peer << rx.rxLastChunkId << "/" << rx.rxTotalChunks
-        << "stallMs=" << stallMs << "budgetFrames=" << budgetFrames;
+    // [BUILD 356 quietlog] Per-frame "activity" lines DISABLED
+    // (operator, 2026-08-03 — log volume); PHASE TRANSITIONS still
+    // log (low volume, high diagnostic value). Flip to 1 + recompile
+    // for full arming traces.
+#define JS8_VERBOSE_RX_SESSION 0
+#if JS8_VERBOSE_RX_SESSION
+    bool const logIt = true;
+#else
+    bool const logIt = phaseChange;
+#endif
+    if (logIt) {
+        qCWarning(chunkedarq_js8)
+            << "[RX-SESSION]" << (phaseChange ? "-> Receiving" : "activity")
+            << "peer=" << peer << rx.rxLastChunkId << "/" << rx.rxTotalChunks
+            << "stallMs=" << stallMs << "budgetFrames=" << budgetFrames;
+    }
     emit rxSessionChanged(peer, static_cast<int>(RxPhase::Receiving),
                           rx.rxLastChunkId, rx.rxTotalChunks);
 }

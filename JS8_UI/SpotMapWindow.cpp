@@ -107,6 +107,14 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     m_zoomInBtn = makeZoomButton(QStringLiteral("+"));
     m_zoomAutoBtn = makeZoomButton(tr("Auto"));
     m_zoomOutBtn = makeZoomButton(QStringLiteral("−")); // minus sign
+    // +/− glyphs bold and 50% larger (8 → 12 pt) for legibility;
+    // "Auto" keeps the small face (operator, 2026-08-03).
+    for (QToolButton *b : {m_zoomInBtn, m_zoomOutBtn}) {
+        QFont f = b->font();
+        f.setPointSize(12);
+        f.setBold(true);
+        b->setFont(f);
+    }
     int const zx = 6;
     int y = TITLE_STRIP_PX + 6;
     for (QToolButton *b : {m_zoomInBtn, m_zoomAutoBtn, m_zoomOutBtn}) {

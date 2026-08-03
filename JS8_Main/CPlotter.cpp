@@ -438,6 +438,15 @@ void CPlotter::annotateCall(QString const &call,
         if (std::abs(it->x - x) >= columnWidth) continue;
         qint64 const oldTopY = currentRow - it->row;
         if (oldTopY >= paddedLenPx) continue;  // already scrolled past
+        // [BUILD 356 labelprobe] Field: zero marker labels on one
+        // machine with the toggle ON and decodes confirmed — say WHY
+        // a label dies. If oldTopY is small at every suppression
+        // across tens of seconds, m_waterfallRow isn't advancing.
+        qWarning() << "[LABEL] SUPPRESSED call=" << call << "x=" << x
+                   << "blocker=" << it->call << "blockerX=" << it->x
+                   << "oldTopY=" << oldTopY
+                   << "paddedLenPx=" << paddedLenPx
+                   << "row=" << currentRow;
         return;  // would overlap → suppress
     }
 
@@ -446,6 +455,9 @@ void CPlotter::annotateCall(QString const &call,
                            inMyGroup, destIsSubspaceGroup};
     paintLabelAt(p, entry, yOffset);
     m_recentLabels.push_front(entry);
+    // [BUILD 356 labelprobe]
+    qWarning() << "[LABEL] painted call=" << call << "x=" << x
+               << "row=" << currentRow << "upgrade=" << isUpgrade;
 
     update();
 }

@@ -127,11 +127,20 @@ std::size_t DecodeFT2::operator()(struct dec_data &data, int kposFT2,
     }
     rms = std::sqrt(rms / nsamples);
 
+    // [BUILD 356 quietlog] Per-call decode-entry line DISABLED
+    // (operator, 2026-08-03 — diag-log disk pressure). Flip to 1 +
+    // recompile to restore.
+#define JS8_VERBOSE_FT2_RX 0
+#if JS8_VERBOSE_FT2_RX
     qWarning() << "[FT2-RX] decode: kpos=" << kposFT2
                << "ksz=" << kszFT2 << "nsamples=" << nsamples
                << "nfqso=" << data.params.nfqso
                << "nfa=" << data.params.nfa << "nfb=" << data.params.nfb
                << "peak=" << peakSample << "rms=" << rms;
+#else
+    (void)peakSample;
+    (void)rms;
+#endif
 
     CallbackContext ctx{.emitEvent = &emitEvent,
                         .utc = data.params.nutc,
@@ -146,7 +155,9 @@ std::size_t DecodeFT2::operator()(struct dec_data &data, int kposFT2,
                  data.params.nfb, 3,
                  &DecodeFT2::decodeCallback, &ctx);
 
+#if JS8_VERBOSE_FT2_RX
     qWarning() << "[FT2-RX] decode complete: decoded=" << ctx.count;
+#endif
 
     return ctx.count;
 }

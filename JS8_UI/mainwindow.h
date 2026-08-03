@@ -1398,6 +1398,11 @@ class UI_Constructor : public QMainWindow {
     // monotonic counter makes subtraction unambiguous and expiration
     // correct at any sampling cadence.
     std::atomic<std::int64_t> m_l2RingPos{0};   // monotonic sample count (audio thread writes, main thread reads)
+    // [BUILD 356 ringpurge] Samples older than this monotonic position
+    // are own-TX-era — presented as silence to the L2 decoder (see
+    // l2TryDecode linearization). Main thread only (set at per-frame
+    // TX end, read at decode launch) — no atomics needed.
+    std::int64_t m_l2ZeroBeforePos{0};
     bool m_l2Decoding = false;                  // decode in progress
     bool m_l2Enabled = false;                   // L2 decode active
     qint64 m_l2DecodeFinishedMs = 0;            // timestamp when decode thread finished

@@ -51,7 +51,13 @@ constexpr int MIN_SEND_INTERVAL = 120;       // in seconds
 constexpr int JITTER_MAX = 5;                // in seconds
 constexpr int FLUSH_INTERVAL = 4;            // in send intervals
 constexpr qsizetype MAX_STRING_LENGTH = 254; // PSK reporter spec
-constexpr std::time_t CACHE_TIMEOUT = 3600;  // in seconds
+// [BUILD 356 spot5min] Was 3600 (inherited from upstream JS8Call) —
+// a station could be re-spotted at most hourly per band, which made
+// pskreporter (and our Spots Map fed from it) look an hour stale
+// while FT8 stations refresh in minutes. WSJT-X master uses
+// CACHE_TIMEOUT {300} with the same 120 s batch send we already
+// have; matching it is within spotting etiquette by construction.
+constexpr std::time_t CACHE_TIMEOUT = 300;  // in seconds (WSJT-X parity)
 constexpr int MIN_PAYLOAD_LENGTH = 508;
 constexpr int MAX_PAYLOAD_LENGTH = 10000;
 } // namespace

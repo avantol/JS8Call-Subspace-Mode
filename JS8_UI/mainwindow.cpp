@@ -8,6 +8,7 @@
 #include "mainwindow.h"
 
 #include <cstdlib>   // std::_Exit — shutdown watchdog (see ~UI_Constructor)
+#include <random>    // noisefill: watermark-seeded Gaussian fill
 
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 #include "JS8_Main/FileTransfer.h"
@@ -4322,6 +4323,29 @@ void UI_Constructor::stopTx() {
     m_btxok = false;
     m_transmitting = false;
     m_iptt = 0;
+    // [BUILD 356 ringpurge, field 2026-08-03] Watermark: everything
+    // in the L2 ring older than this instant is own-TX-era audio —
+    // half-duplex, so it is physically meaningless (leakage/garbage
+    // at our own offset) yet it stayed in the 7.5 s decode window
+    // and wrecked the noise-baseline estimate for ~7.5 s after every
+    // unkey. Auto-ACKs arrive ~2 s after unkey → sync locked but
+    // LDPC failed on nearly every one (manual ACKs, sent later,
+    // always decoded — Andy's discriminating test). l2TryDecode
+    // zeroes pre-watermark samples at linearization. Fires per frame
+    // during a burst (this site is the per-frame TX end), so the
+    // watermark naturally ends at true burst end. The monotonic ring
+    // counter itself is untouched — dedup identity is unaffected.
+    // [BUILD 356 txblank] Watermark extends 1.0 s PAST unkey: the
+    // marker-label evidence (2026-08-03, local RX loses each burst's
+    // FIRST frame arriving ~2-4 s after its own short ACK TX, while
+    // the identical window shape decodes 9/9 on the other machine)
+    // points at post-PTT artifacts in the first moment after unkey —
+    // inside the un-zeroed region, invisible on the waterfall, but
+    // adjacent to frame 1 in the decode window. Earliest legitimate
+    // arrival is the peer's turnhold reply at +1.8 s, so +1.0 s
+    // blanking keeps 0.8 s of margin and can never zero real signal.
+    m_l2ZeroBeforePos = m_l2RingPos.load(std::memory_order_acquire) +
+                        12000; // 1.0 s @ 12 kHz ring rate
     m_lastTxStopTime = DriftingDateTime::currentDateTimeUtc();
     if (!m_tx_watchdog) {
         tx_status_label.setStyleSheet("");
@@ -8583,10 +8607,12 @@ void UI_Constructor::transmitDisplay(bool transmitting) {
                            << "m_monitoring=" << m_monitoring;
                 if (m_monitoring)
                     monitor(false);
-            } else {
-                qWarning() << "[MONITOR] FT2-mode TX: keeping audio"
-                              " capture ON; m_monitoring=" << m_monitoring;
             }
+            // [BUILD 356 quietlog] The FT2-mode "keeping audio
+            // capture ON" line fired EVERY SECOND of every TX —
+            // biggest single log consumer. The legacy-mode branch
+            // above still logs (rare, state-changing). Behavior
+            // unchanged: FT2 mode keeps capture on, silently.
             m_btxok = true;
         }
     }
@@ -10651,6 +10677,50 @@ void UI_Constructor::l2TryDecode(char const *source) {
     std::int64_t ringStart = (pos - validSamples) % FT2_L2_RINGSIZE;
     for (int i = 0; i < validSamples; ++i)
         (*linear)[i] = m_l2RingBuf[(ringStart + i) % FT2_L2_RINGSIZE];
+    // [BUILD 356 ringpurge/noisefill] Own-TX-era samples (older than
+    // the TX-end watermark) are half-duplex garbage whose residual
+    // energy at our own offset poisons the baseline/whitening
+    // estimate — the root cause of "sync locked but 0 frames" on
+    // every auto-ACK arriving within 7.5 s of our own unkey. They
+    // must not reach the decoder — but neither may SILENCE (operator
+    // catch 2026-08-03: an all-zeros half-window biases the noise
+    // floor low, a mistake tried before). Fill instead with white
+    // Gaussian noise MATCHED to the clean region's measured level:
+    // statistically ordinary window, no residual, no floor skew.
+    // White noise cannot false-sync (2.6 noise ceiling vs 3.0 gate,
+    // 0/676 noise-only cycles) and the watermark-seeded RNG makes
+    // the fill identical across passes (no phantom flicker). Decode-
+    // thread only; audio callback and monotonic positions untouched.
+    // [BUILD 356 nofill-switch] Compile-time kill switch for the
+    // whole fill mechanism — 0 restores PRE-ringpurge behavior (raw
+    // ring incl. own-TX residual) for A/B isolation against the
+    // Mac-Mini resume-cycle audio oscillation finding. Flip to 1 and
+    // recompile to restore the fill.
+#define L2_RING_FILL_ENABLED 0
+    if (std::int64_t const basePos = pos - validSamples;
+        L2_RING_FILL_ENABLED && m_l2ZeroBeforePos > basePos) {
+        int const fillN = static_cast<int>(std::min<std::int64_t>(
+            m_l2ZeroBeforePos - basePos, validSamples));
+        int const cleanN = validSamples - fillN;
+        // Need a usable level estimate; below ~0.1 s of clean audio
+        // nothing is decodable yet anyway — zeros are fine that early.
+        if (cleanN >= 1200) {
+            double acc = 0.0;
+            for (int i = fillN; i < validSamples; ++i)
+                acc += std::abs(static_cast<double>((*linear)[i]));
+            double const meanAbs = acc / cleanN;
+            // Gaussian: E|x| = sigma*sqrt(2/pi) -> sigma = 1.2533*E|x|
+            float const sigma = static_cast<float>(1.2533 * meanAbs);
+            std::minstd_rand rng(
+                static_cast<std::uint32_t>(m_l2ZeroBeforePos & 0x7fffffff));
+            std::normal_distribution<float> gauss(0.0f, sigma);
+            for (int i = 0; i < fillN; ++i)
+                (*linear)[i] = static_cast<std::int16_t>(std::clamp(
+                    gauss(rng), -32000.0f, 32000.0f));
+        } else {
+            std::fill_n(linear->begin(), fillN, std::int16_t{0});
+        }
+    }
 
     auto buf = linear;
 
@@ -10728,6 +10798,13 @@ void UI_Constructor::l2TryDecode(char const *source) {
             // residual at the same offset). ~1-2 s cadence, not the
             // per-sample readData path.
             constexpr float SYNC_NOISE_FLOOR = 2.60f;
+            // [BUILD 356 quietlog] Per-pass probe line DISABLED
+            // (operator, 2026-08-03: forensic detail was filling the
+            // diag log). Flip to 1 + recompile for the next decode
+            // hunt — this line was the key instrument of the
+            // ringpurge forensics.
+#define JS8_VERBOSE_RX_PROBE 0
+#if JS8_VERBOSE_RX_PROBE
             if (syncBest >= SYNC_NOISE_FLOOR) {
                 qCWarning(mainwindow_js8)
                     << "[RX-PROBE] L2 sync scan:" << syncMs << "ms"
@@ -10737,6 +10814,9 @@ void UI_Constructor::l2TryDecode(char const *source) {
                     << (syncBest >= 3.00f ? "[>=3.0 will decode]"
                                           : "[<3.0 REJECTED]");
             }
+#else
+            (void)syncMs;
+#endif
 
             if (syncBest >= 3.00f) {
                 // Strong sync well above noise floor (~2.6) — skip getcandidates2
@@ -10805,6 +10885,9 @@ void UI_Constructor::l2TryDecode(char const *source) {
         // ACK. The pattern that proves marginal-signal: no SYNC-HIT at
         // all in the window (sync never reached 3.0). Silent when
         // nothing was attempted, so no flood.
+        // [BUILD 356 quietlog] Per-pass decode-result line DISABLED
+        // (same flag as the sync-scan line above).
+#if JS8_VERBOSE_RX_PROBE
         if (useNfqsoOnly || nNewDecoded > 0) {
             qCWarning(mainwindow_js8)
                 << "[RX-PROBE] L2 decode took" << elapsed << "ms"
@@ -10816,6 +10899,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
                           "or LDPC fail]"
                         : "");
         }
+#endif
         m_l2DecodeFinishedMs = QDateTime::currentMSecsSinceEpoch();
         if (elapsed > 3000) {
             qWarning() << "[FT2-L2] WARNING: decode cycle approaching buffer limit (7500ms)";

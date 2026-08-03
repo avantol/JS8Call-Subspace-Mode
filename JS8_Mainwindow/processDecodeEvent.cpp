@@ -229,10 +229,17 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     if (NativeBinary::decodeFrame(value, rem, &seq,
                                                   &chk4, &p8) &&
                         m_chunkedArq) {
+                        // [BUILD 356 quietlog] Per-binary-frame line
+                        // DISABLED (operator, 2026-08-03 — one line
+                        // per 3.75 s frame of every transfer). Flip
+                        // to 1 + recompile for frame-bind traces.
+#define JS8_VERBOSE_V3_FRAMES 0
+#if JS8_VERBOSE_V3_FRAMES
                         qWarning() << "[V3-RX] frame: seq=" << seq
                                    << "chk4=" << chk4
                                    << "freq=" << ev.frequency
                                    << "absPos=" << ev.absPos;
+#endif
                         bool const accepted =
                             m_chunkedArq->onNativeFrameReceived(
                                 seq, chk4, p8,
