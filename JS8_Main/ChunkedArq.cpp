@@ -1422,13 +1422,21 @@ void Manager::rxSessionActivity(QString const &peer, RxState &rx,
     }
     bool const phaseChange = (rx.rxPhase != RxPhase::Receiving);
     rx.rxPhase = RxPhase::Receiving;
-    // [BUILD 354 armclamp] Same-cascade arms never lengthen: within
-    // RX_ARM_COALESCE_MS of the previous arm, the deadline may only
-    // shorten — statement order inside a handler can no longer
-    // clobber a short window with a coarser budget.
+    // [BUILD 354 armclamp / BUILD 355 clampfix] Same-cascade arms
+    // never lengthen: within RX_ARM_COALESCE_MS of the previous arm,
+    // the deadline may only shorten — statement order inside a
+    // handler can no longer clobber a short window with a coarser
+    // budget. EXCEPTION (clampfix, field log 20260803_004124Z): a
+    // countChange event means the prior expectation was FULFILLED —
+    // chunk completed, its per-frame remainder (~7 s) is void — so
+    // the new phase's window REPLACES it outright; the clamp resumes
+    // for later arms in the same cascade (the ACK's 6-frame window
+    // still correctly trims the chunk-collected full-cycle budget).
+    // Without this the banner stalled ~7 s after every chunk ACK and
+    // re-raised on the next burst — the flapping Andy observed.
     qint64 const nowMono = QDateTime::currentMSecsSinceEpoch();
     int armMs = stallMs;
-    if (rx.rxStallTimer->isActive() &&
+    if (!countChange && rx.rxStallTimer->isActive() &&
         nowMono - rx.rxLastArmMono < RX_ARM_COALESCE_MS) {
         int const remaining = rx.rxStallTimer->remainingTime();
         if (remaining > 0 && remaining < armMs) {
@@ -1635,6 +1643,26 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
             << "[V3-RX] marker for already-collected chunk —"
             << "frame-trigger/watchdog will answer: peer=" << peer
             << "msgId=" << chunk.msgId << "chunk=" << chunk.chunkId;
+        // [BUILD 355 dupalive] The dup marker is liveness evidence
+        // (sender re-airing after our lost ACK) — poke the session
+        // timer so the banner rides out the retry cycle. Budget =
+        // the retry burst it announces + our re-ACK + grace.
+        {
+            int const totalBytes =
+                rx.binaryTotalBytes.value(chunk.msgId, 0);
+            int const kb = rx.binaryChunkBytes.value(
+                chunk.msgId, NativeBinary::DEFAULT_CHUNK_BYTES);
+            int const bytes = NativeBinary::chunkBytesFor(
+                chunk.chunkId, chunk.total, totalBytes, kb);
+            int const frames =
+                bytes > 0
+                    ? (bytes + NativeBinary::FRAME_PAYLOAD_BYTES - 1) /
+                          NativeBinary::FRAME_PAYLOAD_BYTES
+                    : 8;
+            rxSessionActivity(peer, rx, -1, -1, /*countChange=*/false,
+                              frames + RX_STALL_ACK_FRAMES +
+                                  RX_STALL_GRACE_FRAMES);
+        }
         if (rx.nativeWin.active && rx.nativeWin.msgId == chunk.msgId) {
             rx.nativeWin.noProgressNacks = 0;
             if (rx.nativeWin.collectTimer) {
@@ -1879,6 +1907,17 @@ bool Manager::onNativeFrameReceived(int const seq, int const chk4,
                     ? (prevBytes + NativeBinary::FRAME_PAYLOAD_BYTES -
                        1) / NativeBinary::FRAME_PAYLOAD_BYTES
                     : 8;
+            // [BUILD 355 dupalive] Every swallowed retry frame is
+            // LIVENESS evidence — the peer is demonstrably still
+            // transmitting to us. Without this the session timer saw
+            // a whole retry burst (up to ~56 s) as silence and the
+            // banner reverted mid-transfer. Content handling below is
+            // unchanged (frames stay swallowed); budget = remaining
+            // retry frames + our re-ACK + grace.
+            rxSessionActivity(
+                it.key(), rx, -1, -1, /*countChange=*/false,
+                (prevFrames - 1 - seq) + RX_STALL_ACK_FRAMES +
+                    RX_STALL_GRACE_FRAMES);
             if (seq == prevFrames - 1) {
                 qCWarning(chunkedarq_js8)
                     << "[V3-RX] retry burst of collected chunk ended"

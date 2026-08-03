@@ -9300,7 +9300,14 @@ void UI_Constructor::selectCallsign(QString call, int submode) {
 void UI_Constructor::refreshOutgoingPlaceholder() {
     if (!ui->extFreeTextMsgEdit) return;
     QString text;
-    if (m_chunkedArq && m_chunkedArq->isNegotiating()) {
+    // [BUILD 355 oneban] THE single writer of the outgoing box's
+    // placeholder. Precedence: live receive-session banner first —
+    // onRxSessionChanged only sets m_rxBannerText and calls here, so
+    // selection/negotiation/lock refreshes can no longer clobber the
+    // banner mid-receive.
+    if (!m_rxBannerText.isEmpty()) {
+        text = m_rxBannerText;
+    } else if (m_chunkedArq && m_chunkedArq->isNegotiating()) {
         // [2026-07-23 negophase] The negotiation phase locks the same
         // controls as a transfer, so it needs its own wording — during
         // the QUERY ARQ? window no chunks exist yet and "MULTI-PART

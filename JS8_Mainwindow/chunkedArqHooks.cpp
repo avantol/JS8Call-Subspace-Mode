@@ -1148,42 +1148,48 @@ void UI_Constructor::onNativeMarkerSeen(QString const &peer,
 // and four scattered refresh call-sites — is DELETED (operator,
 // 2026-08-02: "are we operating outside of the control of a state
 // machine, with flags/patches/hacks?" — we were).
+// [BUILD 355 oneban] SINGLE-WRITER: this slot no longer writes the
+// placeholder itself — it only updates m_rxBannerText and asks the
+// ONE writer (refreshOutgoingPlaceholder) to repaint. The previous
+// design had TWO writers (this slot + refreshOutgoingPlaceholder's
+// seven call sites: selection changes, negotiation/lock toggles…);
+// any of those triggers firing mid-receive clobbered the banner with
+// the default prompt until the next session event re-raised it —
+// operator saw the text alternate ("race?"-looking, actually
+// deterministic last-writer-wins). Same one-fact-one-home rule as
+// [[feedback_new_phase_is_same_machine]]. The save/restore snapshot
+// (m_arqPlaceholderOrig) is DELETED — the writer recomputes the
+// correct default itself, nothing to snapshot.
 void UI_Constructor::onRxSessionChanged(QString const &peer,
                                         int const phase,
                                         int const chunkId,
                                         int const totalChunks) {
     Q_UNUSED(peer);  // single-operator: latest session renders
-    if (!ui->extFreeTextMsgEdit) return;
     if (phase == static_cast<int>(ChunkedArq::RxPhase::Receiving)) {
         QString const progress =
             (chunkId > 0 && totalChunks > 0)
                 ? tr(" (%1/%2)").arg(chunkId).arg(totalChunks)
                 : QString();
-        QString const banner =
+        m_rxBannerText =
             tr("MULTI-PART MSG IN PROGRESS%1...\n"
                "TYPE AN OUTGOING MESSAGE HERE,\n"
                "WAIT TO SEND ('HALT' TO CANCEL).")
                 .arg(progress);
-        if (ui->extFreeTextMsgEdit->placeholderText() != banner) {
-            if (m_arqPlaceholderOrig.isNull()) {
-                m_arqPlaceholderOrig =
-                    ui->extFreeTextMsgEdit->placeholderText();
-            }
-            ui->extFreeTextMsgEdit->setPlaceholderText(banner);
+    } else {
+        if (!m_rxBannerText.isEmpty()) {
+            qCWarning(chunkedarq_js8)
+                << "[RX-BANNER] default placeholder restored";
         }
-        return;
+        m_rxBannerText.clear();
     }
-    restoreArqPlaceholder();
+    refreshOutgoingPlaceholder();
 }
 
 void UI_Constructor::restoreArqPlaceholder() {
-    if (!ui->extFreeTextMsgEdit || m_arqPlaceholderOrig.isNull()) {
-        return;  // banner not up — nothing to restore
-    }
-    qCWarning(chunkedarq_js8)
-        << "[RX-BANNER] default placeholder restored";
-    ui->extFreeTextMsgEdit->setPlaceholderText(m_arqPlaceholderOrig);
-    m_arqPlaceholderOrig.clear();
+    // [BUILD 355 oneban] Kept as a thin alias for existing callers:
+    // banner down + repaint via the single writer.
+    m_rxBannerText.clear();
+    refreshOutgoingPlaceholder();
 }
 
 // [TODO #107] V3 RX hook: transfer fully collected — parse the raw

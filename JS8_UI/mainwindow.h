@@ -1181,7 +1181,10 @@ class UI_Constructor : public QMainWindow {
     // while a multi-part native transfer is inbound (restored by
     // timer when the next marker fails to appear, or on delivery).
 
-    QString m_arqPlaceholderOrig;
+    // [BUILD 355 oneban] Live RX-session banner text; empty = no
+    // receive in progress. ONLY refreshOutgoingPlaceholder() renders
+    // it (single-writer rule) — onRxSessionChanged just sets/clears.
+    QString m_rxBannerText;
 
     // [TODO #107 Phase 2 DEBUG — remove before push] Burst-experiment
     // composite, staged into the Modulator's full-frame override by
