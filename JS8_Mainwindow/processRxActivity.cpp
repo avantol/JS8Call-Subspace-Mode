@@ -54,7 +54,13 @@ void UI_Constructor::processRxActivity() {
                 // because at this point it hasn't been displayed" <<
                 // m_messageBuffer[prevOffset].compound.last().call;
 
-                auto lastCompound = m_messageBuffer[prevOffset].compound.last();
+                // [BUILD 358 cppos] Prefer the entry that ON-AIR
+                // precedes this fragment; arrival-order .last() only
+                // as fallback (standard decoder / no position).
+                auto const &cmpsE = m_messageBuffer[prevOffset].compound;
+                int const ciE = compoundIndexBefore(cmpsE, d.absPos);
+                auto lastCompound = (ciE >= 0) ? cmpsE.at(ciE)
+                                               : cmpsE.last();
 
                 // fixup compound call incremental text
                 d.text = QString("%1: %2").arg(lastCompound.call).arg(d.text);

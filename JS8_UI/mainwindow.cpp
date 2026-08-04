@@ -9596,6 +9596,32 @@ void UI_Constructor::processIdleActivity() {
 
 void processRxActivity(); // JS8_Mainwindow/processRxActivity.cpp
 
+// [BUILD 358 cppos] See header. On the air a compound callsign frame
+// IMMEDIATELY precedes the frame that references it, so ring position
+// orders every pair unambiguously — arrival order does not (async
+// decode passes deliver out of order; third confirmed consumer of the
+// revoked ordering guarantee, see reference_async_order_consumers).
+int UI_Constructor::compoundIndexBefore(QQueue<CallDetail> const &comp,
+                                        qint64 const consumerAbsPos) const {
+    if (consumerAbsPos <= 0)
+        return -1;
+    constexpr qint64 kMaxGapSamples = 3LL * 30240; // 3 frame-lengths
+    int best = -1;
+    qint64 bestPos = -1;
+    for (int i = 0; i < comp.size(); ++i) {
+        qint64 const p = comp.at(i).absPos;
+        if (p <= 0 || p >= consumerAbsPos)
+            continue;
+        if (consumerAbsPos - p > kMaxGapSamples)
+            continue;
+        if (p > bestPos) {
+            bestPos = p;
+            best = i;
+        }
+    }
+    return best;
+}
+
 void UI_Constructor::processCompoundActivity() {
     if (m_messageBuffer.isEmpty()) {
         return;
@@ -9641,28 +9667,77 @@ void UI_Constructor::processCompoundActivity() {
             continue;
         }
 
-        if (buffer.cmd.from == "<....>") {
-            auto d = buffer.compound.dequeue();
-            buffer.cmd.from = d.call;
-            buffer.cmd.grid = d.grid;
+        // [BUILD 358 cppos] Position-mode resolution: match each
+        // placeholder to the compound entry that ON-AIR immediately
+        // precedes its consumer (from-compound airs before
+        // to-compound airs before the directed frame, so with both
+        // needed: to = closest below the cmd's position, from =
+        // closest below the to-entry's). Arrival-order dequeue
+        // remains ONLY for standard-decoder events (absPos == 0),
+        // where delivery order IS on-air order. If position mode
+        // can't find a companion yet (async inversion delivered it
+        // late), SKIP this pass — the buffer persists and the pair
+        // resolves when the late frame lands, instead of mis-gluing.
+        bool const posMode = buffer.cmd.absPos > 0;
+        auto const applyCompound = [&buffer](CallDetail const &d,
+                                             bool const isFrom) {
+            if (isFrom) {
+                buffer.cmd.from = d.call;
+                buffer.cmd.grid = d.grid;
+            } else {
+                buffer.cmd.to = d.call;
+            }
             buffer.cmd.isCompound = true;
             buffer.cmd.utcTimestamp =
                 qMin(buffer.cmd.utcTimestamp, d.utcTimestamp);
-
             if ((d.bits & Varicode::JS8CallLast) == Varicode::JS8CallLast) {
                 buffer.cmd.bits = d.bits;
             }
-        }
-
-        if (buffer.cmd.to == "<....>") {
-            auto d = buffer.compound.dequeue();
-            buffer.cmd.to = d.call;
-            buffer.cmd.isCompound = true;
-            buffer.cmd.utcTimestamp =
-                qMin(buffer.cmd.utcTimestamp, d.utcTimestamp);
-
-            if ((d.bits & Varicode::JS8CallLast) == Varicode::JS8CallLast) {
-                buffer.cmd.bits = d.bits;
+        };
+        if (posMode) {
+            bool const needFrom = buffer.cmd.from == "<....>";
+            bool const needTo = buffer.cmd.to == "<....>";
+            if (needFrom || needTo) {
+                int idxFrom = -1, idxTo = -1;
+                if (needFrom && needTo) {
+                    idxTo = compoundIndexBefore(buffer.compound,
+                                                buffer.cmd.absPos);
+                    if (idxTo >= 0)
+                        idxFrom = compoundIndexBefore(
+                            buffer.compound,
+                            buffer.compound.at(idxTo).absPos);
+                    if (idxFrom < 0)
+                        idxTo = -1; // need the pair or nothing
+                } else if (needFrom) {
+                    idxFrom = compoundIndexBefore(buffer.compound,
+                                                  buffer.cmd.absPos);
+                } else {
+                    idxTo = compoundIndexBefore(buffer.compound,
+                                                buffer.cmd.absPos);
+                }
+                if ((needFrom && idxFrom < 0) || (needTo && idxTo < 0)) {
+                    qCDebug(mainwindow_js8)
+                        << "-> cppos: companion frame not in buffer "
+                           "yet (positions)...waiting";
+                    continue;
+                }
+                if (idxFrom >= 0)
+                    applyCompound(buffer.compound.at(idxFrom), true);
+                if (idxTo >= 0)
+                    applyCompound(buffer.compound.at(idxTo), false);
+                // Remove claimed entries, higher index first.
+                for (int idx : {qMax(idxFrom, idxTo),
+                                qMin(idxFrom, idxTo)}) {
+                    if (idx >= 0)
+                        buffer.compound.removeAt(idx);
+                }
+            }
+        } else {
+            if (buffer.cmd.from == "<....>") {
+                applyCompound(buffer.compound.dequeue(), true);
+            }
+            if (buffer.cmd.to == "<....>") {
+                applyCompound(buffer.compound.dequeue(), false);
             }
         }
 

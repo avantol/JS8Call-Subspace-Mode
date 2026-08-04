@@ -978,7 +978,10 @@ class Manager : public QObject {
      *        transfer right after negotiation can bind even if the
      *        chunk-1 TEXT marker is lost (on-air msg-33 failure).
      */
-    void registerPeerCandidate(QString const &peer);
+    // [BUILD 358 leadmark] registerPeerCandidate + the hash-based
+    // fresh-open it enabled are DELETED: a receive session is created
+    // ONLY by the chunk-1 TEXT lead marker, decoded, addressed to us.
+    // See onNativeMarkerFrameReceived.
 
     /**
      * @brief Test seam: shrink the V3 frame-slot duration (default

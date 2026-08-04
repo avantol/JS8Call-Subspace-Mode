@@ -466,7 +466,12 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                         if ((attribFrom.isEmpty() ||
                              attribFrom == "<....>") &&
                             !buf.compound.isEmpty()) {
-                            attribFrom = buf.compound.last().call;
+                            // [BUILD 358 cppos] positional first
+                            int const ciD = compoundIndexBefore(
+                                buf.compound, d.absPos);
+                            attribFrom = (ciD >= 0)
+                                             ? buf.compound.at(ciD).call
+                                             : buf.compound.last().call;
                         }
                         if (!attribFrom.isEmpty() &&
                             attribFrom != "<....>") {
@@ -597,6 +602,7 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     cd.utcTimestamp = DriftingDateTime::currentDateTimeUtc();
                     cd.bits = decodedtext.bits();
                     cd.submode = decodedtext.submode();
+                    cd.absPos = ev.absPos; // [cppos] on-air ordering key
                     cd.tdrift = (cd.submode == Varicode::JS8CallFT2)
                                     ? 0.0
                                     : m_wideGraph->shouldAutoSyncSubmode(d.submode)
@@ -714,8 +720,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             decodedtext.frequencyOffset());
                         if (bufIt != m_messageBuffer.end() &&
                             !bufIt.value().compound.isEmpty()) {
-                            annotateFrom =
-                                bufIt.value().compound.last().call;
+                            // [BUILD 358 cppos] positional first
+                            auto const &cmpsB = bufIt.value().compound;
+                            int const ciB =
+                                compoundIndexBefore(cmpsB, ev.absPos);
+                            annotateFrom = (ciB >= 0)
+                                               ? cmpsB.at(ciB).call
+                                               : cmpsB.last().call;
                             annotateIsUpgrade = true;
                         } else {
                             annotateFrom = "<....>";
@@ -731,14 +742,34 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             if (bufIt != m_messageBuffer.end() &&
                                 !bufIt.value().compound.isEmpty()) {
                                 auto const &cmps = bufIt.value().compound;
+                                // [BUILD 358 cppos] positional first:
+                                // to = closest preceding this frame,
+                                // from = closest preceding the to-
+                                // entry (on-air order from, to, cmd).
+                                int const ciTo =
+                                    compoundIndexBefore(cmps, ev.absPos);
+                                int const ciFrom =
+                                    (ciTo >= 0)
+                                        ? compoundIndexBefore(
+                                              cmps,
+                                              cmps.at(ciTo).absPos)
+                                        : -1;
                                 if (fromCompound && toCompound &&
+                                    ciFrom >= 0 && ciTo >= 0) {
+                                    annotateFrom = cmps.at(ciFrom).call;
+                                    annotateTo = cmps.at(ciTo).call;
+                                } else if (fromCompound && toCompound &&
                                     cmps.size() >= 2) {
                                     annotateFrom = cmps.first().call;
                                     annotateTo = cmps.last().call;
                                 } else if (fromCompound) {
-                                    annotateFrom = cmps.last().call;
+                                    annotateFrom = (ciTo >= 0)
+                                                       ? cmps.at(ciTo).call
+                                                       : cmps.last().call;
                                 } else if (toCompound) {
-                                    annotateTo = cmps.last().call;
+                                    annotateTo = (ciTo >= 0)
+                                                     ? cmps.at(ciTo).call
+                                                     : cmps.last().call;
                                 }
                                 annotateIsUpgrade = fromCompound;
                             }

@@ -276,6 +276,14 @@ class UI_Constructor : public QMainWindow {
     void createGroupCallsignTableRows(QTableWidget *table,
                                       const QString &selectedCall,
                                       bool &showIconColumn);
+    // [BUILD 358 cppos] Index of the compound entry that ON-AIR
+    // immediately precedes consumerAbsPos (largest absPos strictly
+    // below it, within 3 frame-lengths), or -1. Position matching is
+    // only meaningful when both sides carry a ring position
+    // (absPos > 0, async decoder); callers keep arrival-order
+    // behavior for standard-decoder events, which ARE in order.
+    int compoundIndexBefore(QQueue<CallDetail> const &comp,
+                            qint64 consumerAbsPos) const;
     void displayTextForFreq(QString text, int freq, QDateTime date, bool isTx,
                             bool isNewLine, bool isLast, int submode = -1);
     void writeNoticeTextToUI(QDateTime date, QString text);
@@ -1053,6 +1061,11 @@ class UI_Constructor : public QMainWindow {
         int bits;
         float tdrift;
         int submode;
+        // [BUILD 358 cppos] Ring position of the decode (0 = standard
+        // decoder, no position). Lets compound-callsign pairing match
+        // by ON-AIR order instead of arrival order — the async
+        // decoder delivers out of order across passes.
+        qint64 absPos{0};
     };
 
     struct CommandDetail {

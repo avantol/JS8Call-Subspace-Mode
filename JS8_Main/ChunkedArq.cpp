@@ -1760,17 +1760,44 @@ bool Manager::onNativeMarkerFrameReceived(
     // state for (active window, past deliveries, or a registered
     // negotiation asker). No match → drop: only the text marker may
     // open a session with a never-seen station.
+    // [BUILD 358 leadmark, operator design 2026-08-03] A receive
+    // session is created by EXACTLY ONE thing: the chunk-1 TEXT lead
+    // marker, decoded, addressed to us (the toMe-gated intercept in
+    // processCommandActivity). This destination-less frame may only
+    // ATTACH to a transfer we are already engaged in — its hash must
+    // resolve to a peer whose state holds THIS msgId: a live window
+    // on it, latched geometry for it, or a just-delivered record of
+    // it (re-ACK when the sender lost our final ACK). "We know this
+    // sender from earlier" proves nothing about THIS message and no
+    // longer admits anyone — the flaw that had bystander stations
+    // (on-air 2026-08-03: two fleet stations) collecting and ACKing
+    // transfers addressed to someone else. Cost of the rule: a
+    // clipped lead marker at the true addressee = one retry cycle
+    // (every chunk-1 attempt re-airs the lead marker, all builds).
     QString peer;
+    bool sawStranger = false;
     for (auto it = m_recv.begin(); it != m_recv.end(); ++it) {
-        if (NativeBinary::peerHash16(it.key()) == m.peerHash) {
+        if (NativeBinary::peerHash16(it.key()) != m.peerHash)
+            continue;
+        RxState &cand = it.value();
+        bool const engaged =
+            (cand.nativeWin.active && cand.nativeWin.msgId == m.msgId) ||
+            cand.binaryTotalBytes.contains(m.msgId) ||
+            cand.deliveredMsgs.contains(m.msgId);
+        if (engaged) {
             peer = it.key();
             break;
         }
+        sawStranger = true;
     }
     if (peer.isEmpty()) {
         qCWarning(chunkedarq_js8)
-            << "[V3-RX] binary marker: no candidate for peerHash="
-            << Qt::hex << m.peerHash << Qt::dec
+            << "[V3-RX] binary marker:"
+            << (sawStranger
+                    ? "sender known but no session for this transfer "
+                      "(lead-marker rule) —"
+                    : "no candidate for")
+            << "peerHash=" << Qt::hex << m.peerHash << Qt::dec
             << "msgId=" << m.msgId << "chunk=" << m.chunkId
             << "freq=" << freq << "— dropped";
         return false;
@@ -1793,10 +1820,6 @@ bool Manager::onNativeMarkerFrameReceived(
     return true;
 }
 
-void Manager::registerPeerCandidate(QString const &peer) {
-    if (peer.trimmed().isEmpty()) return;
-    getOrCreateRx(peer.trimmed().toUpper());
-}
 
 void Manager::openNativeChunkWindow(QString const &peer, RxState &rx,
                                     int const msgId, int const chunkId,

@@ -8,6 +8,7 @@
 #include "JS8_UI/mainwindow.h"
 
 #include "JS8_Main/ChunkedArq.h"
+#include "JS8_Main/NativeBinary.h"
 
 #include <QPointer>
 #include <QRandomGenerator>
@@ -1756,13 +1757,12 @@ void UI_Constructor::processCommandActivity() {
         // deferral — a capability negotiation on the other end times
         // out in 20 s.
         if (arqProtocolReply) {
-            // [BUILD 344 binMarker] The asker is about to become a V3
-            // sender — register it as a peer candidate so a fresh
-            // transfer's BINARY marker can bind by callsign hash even
-            // if the chunk-1 TEXT marker is clipped (on-air msg-33).
-            if (m_chunkedArq) {
-                m_chunkedArq->registerPeerCandidate(d.from);
-            }
+            // [BUILD 358 leadmark] The Build 344 registerPeerCandidate
+            // call that lived here is DELETED along with hash-based
+            // session creation: a receive session now requires the
+            // addressed chunk-1 TEXT lead marker (a clipped one costs
+            // the sender one retry, which re-airs it). Hash matching
+            // only ATTACHES frames to transfers already underway.
             QString const responseText = reply;
             QPointer<UI_Constructor> const self(this);
             QTimer::singleShot(
