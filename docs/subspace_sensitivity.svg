@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="710" font-family="sans-serif">
+<rect width="900" height="710" fill="#fcfcfb"/>
+<text x="70" y="28" font-size="17" font-weight="bold" fill="#333333">Subspace mode sensitivity — decode probability vs SNR</text>
+<text x="70" y="48" font-size="12" fill="#666666">Real decoder (decodeL2), native 77-bit frame, n=100/point, SNR in 2.5 kHz bandwidth; frame 1 s after window fill region</text>
+<line x1="70" y1="530.0" x2="690" y2="530.0" stroke="#e8e8e4"/>
+<text x="62" y="534.0" font-size="11" fill="#666666" text-anchor="end">0%</text>
+<line x1="70" y1="413.5" x2="690" y2="413.5" stroke="#e8e8e4"/>
+<text x="62" y="417.5" font-size="11" fill="#666666" text-anchor="end">25%</text>
+<line x1="70" y1="297.0" x2="690" y2="297.0" stroke="#e8e8e4"/>
+<text x="62" y="301.0" font-size="11" fill="#666666" text-anchor="end">50%</text>
+<line x1="70" y1="180.5" x2="690" y2="180.5" stroke="#e8e8e4"/>
+<text x="62" y="184.5" font-size="11" fill="#666666" text-anchor="end">75%</text>
+<line x1="70" y1="64.0" x2="690" y2="64.0" stroke="#e8e8e4"/>
+<text x="62" y="68.0" font-size="11" fill="#666666" text-anchor="end">100%</text>
+<line x1="70.0" y1="64" x2="70.0" y2="530" stroke="#e8e8e4"/>
+<text x="70.0" y="548" font-size="11" fill="#666666" text-anchor="middle">-18</text>
+<line x1="138.88888888888889" y1="64" x2="138.88888888888889" y2="530" stroke="#e8e8e4"/>
+<text x="138.88888888888889" y="548" font-size="11" fill="#666666" text-anchor="middle">-16</text>
+<line x1="173.33333333333331" y1="64" x2="173.33333333333331" y2="530" stroke="#e8e8e4"/>
+<text x="173.33333333333331" y="548" font-size="11" fill="#666666" text-anchor="middle">-15</text>
+<line x1="207.77777777777777" y1="64" x2="207.77777777777777" y2="530" stroke="#e8e8e4"/>
+<text x="207.77777777777777" y="548" font-size="11" fill="#666666" text-anchor="middle">-14</text>
+<line x1="242.22222222222223" y1="64" x2="242.22222222222223" y2="530" stroke="#e8e8e4"/>
+<text x="242.22222222222223" y="548" font-size="11" fill="#666666" text-anchor="middle">-13</text>
+<line x1="276.66666666666663" y1="64" x2="276.66666666666663" y2="530" stroke="#e8e8e4"/>
+<text x="276.66666666666663" y="548" font-size="11" fill="#666666" text-anchor="middle">-12</text>
+<line x1="311.1111111111111" y1="64" x2="311.1111111111111" y2="530" stroke="#e8e8e4"/>
+<text x="311.1111111111111" y="548" font-size="11" fill="#666666" text-anchor="middle">-11</text>
+<line x1="345.55555555555554" y1="64" x2="345.55555555555554" y2="530" stroke="#e8e8e4"/>
+<text x="345.55555555555554" y="548" font-size="11" fill="#666666" text-anchor="middle">-10</text>
+<line x1="380.0" y1="64" x2="380.0" y2="530" stroke="#e8e8e4"/>
+<text x="380.0" y="548" font-size="11" fill="#666666" text-anchor="middle">-9</text>
+<line x1="414.44444444444446" y1="64" x2="414.44444444444446" y2="530" stroke="#e8e8e4"/>
+<text x="414.44444444444446" y="548" font-size="11" fill="#666666" text-anchor="middle">-8</text>
+<line x1="483.3333333333333" y1="64" x2="483.3333333333333" y2="530" stroke="#e8e8e4"/>
+<text x="483.3333333333333" y="548" font-size="11" fill="#666666" text-anchor="middle">-6</text>
+<text x="380.0" y="570" font-size="12" fill="#333333" text-anchor="middle">SNR (dB, 2500 Hz noise bandwidth)</text>
+<text x="20" y="297.0" font-size="12" fill="#333333" transform="rotate(-90 20 297.0)" text-anchor="middle">decode probability</text>
+<line x1="293.8888888888889" y1="64" x2="293.8888888888889" y2="530" stroke="#666666" stroke-dasharray="5,4" stroke-width="1.5"/>
+<text x="307.8888888888889" y="293" font-size="12" fill="#333333">50% threshold ≈ −11.5 dB</text>
+<polyline points="70.0,530.0 138.9,530.0 173.3,530.0 207.8,530.0 242.2,530.0 276.7,530.0 311.1,530.0 345.6,530.0 380.0,530.0 414.4,530.0 483.3,530.0" fill="none" stroke="#c98500" stroke-width="2.5"/>
+<polyline points="70.0,530.0 138.9,530.0 173.3,530.0 207.8,530.0 242.2,525.3 276.7,422.8 311.1,203.8 345.6,87.3 380.0,68.7 414.4,64.0 483.3,64.0" fill="none" stroke="#2a78d6" stroke-width="2.5"/>
+<circle cx="70.0" cy="530.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="138.9" cy="530.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="173.3" cy="530.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="207.8" cy="530.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="242.2" cy="525.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="276.7" cy="422.8" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="311.1" cy="203.8" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="345.6" cy="87.3" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="380.0" cy="68.7" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="414.4" cy="64.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="483.3" cy="64.0" r="4" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="66.0" y="526.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 70.0 530.0)"/>
+<rect x="134.9" y="526.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 138.9 530.0)"/>
+<rect x="169.3" y="526.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 173.3 530.0)"/>
+<rect x="203.8" y="526.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 207.8 530.0)"/>
+<rect x="238.2" y="512.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 242.2 516.0)"/>
+<rect x="272.7" y="376.9" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 276.7 380.9)"/>
+<rect x="307.1" y="213.8" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 311.1 217.8)"/>
+<rect x="341.6" y="78.6" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 345.6 82.6)"/>
+<rect x="376.0" y="60.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 380.0 64.0)"/>
+<rect x="410.4" y="60.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 414.4 64.0)"/>
+<rect x="479.3" y="60.0" width="8" height="8" fill="#eb6834" stroke="#fcfcfb" stroke-width="2" transform="rotate(45 483.3 64.0)"/>
+<rect x="66.0" y="526.0" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="134.9" y="526.0" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="169.3" y="526.0" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="203.8" y="526.0" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="238.2" y="516.7" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="272.7" y="381.5" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="307.1" y="181.2" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="341.6" y="64.7" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="376.0" y="64.7" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="410.4" y="60.0" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<rect x="479.3" y="60.0" width="8" height="8" fill="#1baf7a" stroke="#fcfcfb" stroke-width="2"/>
+<text x="495.3333333333333" y="68.0" font-size="12" fill="#333333">clean window <tspan fill="#666666">(line)</tspan></text>
+<text x="495.3333333333333" y="86.0" font-size="12" fill="#333333">matched fill ◆ / zeros fill ■</text>
+<text x="495.3333333333333" y="534.0" font-size="12" fill="#333333">own-TX residual <tspan fill="#666666">(0% at ALL SNR)</tspan></text>
+<rect x="70" y="594" width="12" height="12" rx="3" fill="#2a78d6"/>
+<text x="88" y="604" font-size="12" fill="#333333">clean window (line + ●)</text>
+<rect x="273" y="594" width="12" height="12" rx="3" fill="#eb6834"/>
+<text x="291" y="604" font-size="12" fill="#333333">matched-noise fill (◆)</text>
+<rect x="469" y="594" width="12" height="12" rx="3" fill="#1baf7a"/>
+<text x="487" y="604" font-size="12" fill="#333333">zeros fill (■)</text>
+<rect x="609" y="594" width="12" height="12" rx="3" fill="#c98500"/>
+<text x="627" y="604" font-size="12" fill="#333333">own-TX residual (8× amp)</text>
+<text x="70" y="638" font-size="11" fill="#666666" font-family="monospace">SNR dB</text><text x="160" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-18</text><text x="206" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-16</text><text x="252" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-15</text><text x="298" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-14</text><text x="344" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-13</text><text x="390" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-12</text><text x="436" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-11</text><text x="482" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-10</text><text x="528" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-9</text><text x="574" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-8</text><text x="620" y="638" font-size="11" fill="#666666" font-family="monospace" text-anchor="end">-6</text>
+<text x="70" y="654" font-size="11" fill="#333333" font-family="monospace">clean %</text><text x="160" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="206" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="252" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="298" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="344" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">1</text><text x="390" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">23</text><text x="436" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">70</text><text x="482" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">95</text><text x="528" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">99</text><text x="574" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">100</text><text x="620" y="654" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">100</text>
+<text x="70" y="670" font-size="11" fill="#333333" font-family="monospace">match %</text><text x="160" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="206" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="252" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="298" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="344" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">3</text><text x="390" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">32</text><text x="436" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">67</text><text x="482" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">96</text><text x="528" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">100</text><text x="574" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">100</text><text x="620" y="670" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">100</text>
+<text x="70" y="686" font-size="11" fill="#333333" font-family="monospace">zeros %</text><text x="160" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="206" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="252" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="298" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">0</text><text x="344" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">2</text><text x="390" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">31</text><text x="436" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">74</text><text x="482" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">99</text><text x="528" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">99</text><text x="574" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">100</text><text x="620" y="686" font-size="11" fill="#333333" font-family="monospace" text-anchor="end">100</text>
+</svg>
