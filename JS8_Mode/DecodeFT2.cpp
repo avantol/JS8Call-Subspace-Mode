@@ -195,9 +195,6 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                            msgbits_out, &ndecoded,
                            known_bits, nknown, nfqso_only, sync_score);
 
-    if (ndecoded > 0)
-        qDebug() << "[FT2-L2] ft2_triggered_decode returned ndecoded=" << ndecoded;
-
     // [GARBAGE-STATE FIX 2026-07-13 TODO #72] Frames rejected by the
     // garbage filter below must not update caller-visible decoder
     // state. Previously decoded_bits_out / decoded_freq_out carried

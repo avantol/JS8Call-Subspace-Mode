@@ -10701,23 +10701,22 @@ void UI_Constructor::l2DecodeWatchdogCheck() {
 }
 
 void UI_Constructor::l2TryDecode(char const *source) {
-    // [TODO #113/#120 l2watch] Say WHICH gate blocked, rate-limited to
-    // one line per 10 s. Every previous investigation of "it stopped
-    // decoding" had to guess between these three, because a silent
-    // early return looks identical to a quiet band.
+    // [TODO #113/#120 l2watch] Log ONLY the abnormal gate state: a
+    // decode task wedged >5 s (normal tasks finish in ~250 ms). The
+    // routine closures (task in flight, transmitting, L2 disabled)
+    // are normal operation and logged nothing tells us — Build 360
+    // quieted them (166 lines/session of chatter). The wedge
+    // detector this line exists for is preserved unchanged.
     if (!m_l2Enabled || m_l2Decoding || m_transmitting) {
         qint64 const now = QDateTime::currentMSecsSinceEpoch();
-        if (now - m_l2LastGateLogMs > 10000) {
+        if (m_l2Decoding && m_l2DecodeStartedMs > 0 &&
+            now - m_l2DecodeStartedMs > 5000 &&
+            now - m_l2LastGateLogMs > 10000) {
             m_l2LastGateLogMs = now;
             qCWarning(mainwindow_js8)
                 << "[FT2-L2] decode gate closed: source=" << source
-                << "enabled=" << m_l2Enabled
-                << "decoding=" << m_l2Decoding
-                << (m_l2Decoding && m_l2DecodeStartedMs > 0
-                        ? QStringLiteral("(for %1 ms)")
-                              .arg(now - m_l2DecodeStartedMs)
-                        : QString())
-                << "transmitting=" << m_transmitting;
+                << "decode task WEDGED for"
+                << (now - m_l2DecodeStartedMs) << "ms";
         }
         return;
     }
@@ -10836,21 +10835,33 @@ void UI_Constructor::l2TryDecode(char const *source) {
         float syncFreq = 0.0f;
         int syncIbest = -1, syncIdf = 0;
 
-        constexpr int MAX_SCAN_FREQS = 40;
+        // [BUILD 359 fullscan, field 2026-08-06] The sync scan sweeps
+        // the FULL passband on EVERY pass. The old ±100 Hz tunnel
+        // around the last-decoded frequency made the receiver a
+        // one-station radio: WM8Q decoding at 1513 every 15 s kept
+        // the tunnel at 1413-1613 permanently, and WM8Q/P at 1971 —
+        // sync 3.4-4.5, cleanly decodable when pinned — was never
+        // scanned again after the session's first decode set the
+        // tunnel. The internal full-band fallback (getcandidates2)
+        // demonstrably fails to surface such signals (0 decodes
+        // across a whole capture that the grid scan + pinned deep
+        // decode gets 20/20 on — autopsy = TODO #138), so the grid
+        // scan is the load-bearing finder and must see everything.
+        // ft2_sync_scan_c's per-point idf refinement is ±12 Hz
+        // (idf loop in ft2_modem.cpp), so the grid step must be
+        // <= 25 Hz or the band has dead zones the scan cannot see:
+        // a 50 Hz step left 26 Hz-wide blind stripes at grid+13..37,
+        // and a live signal at 1971 (+21/-29 from its neighbors) sat
+        // in one — the .359.1 live-test failure. 25 Hz puts every
+        // frequency within 12.5 Hz of a grid point, inside idf
+        // reach. Known limitation: the scan returns ONE best peak,
+        // so two stations keying SIMULTANEOUSLY still resolve
+        // strongest-first (multi-peak scan = TODO #139).
+        constexpr int MAX_SCAN_FREQS = 84;
         float scanFreqs[MAX_SCAN_FREQS];
         int nScanFreqs = 0;
-
-        if (nfqso > 0 && nfqso >= nfa && nfqso <= nfb) {
-            // Known signal frequency — scan ±100 Hz in 25 Hz steps
-            for (int f = std::max(nfa, nfqso - 100);
-                 f <= std::min(nfb, nfqso + 100) && nScanFreqs < MAX_SCAN_FREQS;
-                 f += 25)
-                scanFreqs[nScanFreqs++] = static_cast<float>(f);
-        } else {
-            // No known frequency — scan full passband in 50 Hz steps
-            for (int f = nfa; f <= nfb && nScanFreqs < MAX_SCAN_FREQS; f += 50)
-                scanFreqs[nScanFreqs++] = static_cast<float>(f);
-        }
+        for (int f = nfa; f <= nfb && nScanFreqs < MAX_SCAN_FREQS; f += 25)
+            scanFreqs[nScanFreqs++] = static_cast<float>(f);
 
         if (nScanFreqs > 0) {
             auto tSync = QDateTime::currentMSecsSinceEpoch();

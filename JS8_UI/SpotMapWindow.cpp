@@ -805,11 +805,13 @@ void SpotMapWindow::redraw() {
         QRectF bar{(w - barW) / 2.0,
                    static_cast<qreal>(h - LEGEND_STRIP_PX + 8), barW, 10};
         QLinearGradient lg{bar.topLeft(), bar.topRight()};
-        for (float t = 0.0f; t <= 1.001f; t += 0.1f)
+        for (int i = 0; i <= 10; ++i) {
+            float const t = i / 10.0f;
             lg.setColorAt(t, snrColor(SNR_COLD +
                                           static_cast<int>(
                                               t * (SNR_HOT - SNR_COLD)),
                                       1.0f));
+        }
         p.fillRect(bar, lg);
         p.setPen(QColor(190, 190, 210));
         p.setFont(small);
