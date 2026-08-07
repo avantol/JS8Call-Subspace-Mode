@@ -10789,7 +10789,17 @@ void UI_Constructor::l2TryDecode(char const *source) {
     // ring incl. own-TX residual) for A/B isolation against the
     // Mac-Mini resume-cycle audio oscillation finding. Flip to 1 and
     // recompile to restore the fill.
-#define L2_RING_FILL_ENABLED 0
+    // [BUILD 361.1 ringfill — RE-ENABLED 2026-08-07, Andy's call]
+    // The "until we find that we need it" condition was met: at
+    // Subspace cadence a peer's reply starts AT our unkey, so every
+    // 7.5 s window fully containing the reply also contains our own
+    // TX — first replies were structurally undecodable (field
+    // 03:19-03:25Z: misses resolve at exactly TX-end + 7.5 s, the
+    // ring horizon; offline, 3 s of own-TX overlap kills the window
+    // while 0.2 s decodes 5/5). The new non-QDX audio path also
+    // shows REAL TX ingress (own TX at sync 3+ in capture), making
+    // the polluted window worse than the old chain.
+#define L2_RING_FILL_ENABLED 1
     if (std::int64_t const basePos = pos - validSamples;
         L2_RING_FILL_ENABLED && m_l2ZeroBeforePos > basePos) {
         int const fillN = static_cast<int>(std::min<std::int64_t>(
@@ -10926,7 +10936,12 @@ void UI_Constructor::l2TryDecode(char const *source) {
             if (syncBest >= 3.00f) {
                 // Strong sync well above noise floor (~2.6) — skip getcandidates2
                 useNfqsoOnly = 1;
-                scanNfqso = static_cast<int>(syncFreq + 0.5f);
+                // [BUILD 361.4 pinfix] Pin at the REFINED frequency
+                // (grid + idf), not the bare grid point. nfqso_only=1
+                // uses the pin EXACTLY (ft2_modem.cpp ~1092), and the
+                // grid is 25 Hz — a true peak up to 13 Hz off the
+                // grid point could fail its own pinned decode.
+                scanNfqso = static_cast<int>(syncFreq + 0.5f) + syncIdf;
             }
         }
 
@@ -10940,7 +10955,7 @@ void UI_Constructor::l2TryDecode(char const *source) {
         std::int8_t newBits[77 * 20] = {};
         int nNewDecoded = 0;
         float decodedFreq = 0.0f;
-        JS8::DecodeFT2::decodeL2(buf->data(), scanNfqso, nfa, nfb, utc,
+        auto const l2Emitter =
             [this, snapBasePos](JS8::Event::Variant const &ev) {
                 // [BUILD 295] Compute absolute global sample position
                 // for Decoded events so processBufferedActivity can
@@ -10974,11 +10989,34 @@ void UI_Constructor::l2TryDecode(char const *source) {
                 QMetaObject::invokeMethod(this, [this, ev2]() {
                     processDecodeEvent(ev2);
                 }, Qt::QueuedConnection);
-            },
+            };
+        JS8::DecodeFT2::decodeL2(buf->data(), scanNfqso, nfa, nfb, utc,
+            l2Emitter,
             knownSnap, nknownSnap,
             newBits, &nNewDecoded,
             useNfqsoOnly, &decodedFreq,
             syncBest);
+        // [BUILD 361.4 fbretry] A pinned pass that yields nothing must
+        // not discard the pass. The scan's single best peak is often a
+        // SIDELOBE of a strong signal (probe 2026-08-07 04:10Z: best
+        // sync 3.0-4.5 at 2100-2175 while the true signal at 2207 sat
+        // decodable — live 3/11 vs offline 11/11 on identical audio;
+        // the one live decode came via FULL-SCAN the moment the
+        // sidelobe dipped below the 3.0 gate). Retry the same window
+        // with the full-band candidate search instead of wasting it.
+        if (useNfqsoOnly && nNewDecoded == 0) {
+            JS8::DecodeFT2::decodeL2(buf->data(), 0, nfa, nfb, utc,
+                l2Emitter,
+                knownSnap, nknownSnap,
+                newBits, &nNewDecoded,
+                0, &decodedFreq);
+#if JS8_VERBOSE_RX_PROBE
+            if (nNewDecoded > 0)
+                qCWarning(mainwindow_js8)
+                    << "[RX-PROBE] pinned pass empty -> full-band retry"
+                    << "decoded" << nNewDecoded;
+#endif
+        }
         auto elapsed = QDateTime::currentMSecsSinceEpoch() - t0;
         // [RX-PROBE 2026-06-09 / #120pt2 2026-07-24] Visible now, and
         // this is the decisive line for the missed-ACK question. It
@@ -11031,9 +11069,20 @@ void UI_Constructor::l2TryDecode(char const *source) {
                     std::memmove(m_l2KnownBits + i * 77,
                                  m_l2KnownBits + (i + 1) * 77,
                                  remaining * 77);
+                    // [BUILD 361.2 knownfix] sizeof(int) here since
+                    // Build 45 — but the array became std::int64_t
+                    // when positions went monotonic, so compaction
+                    // moved HALF of each entry, splicing neighboring
+                    // positions into garbage. Corrupted entries with
+                    // pos > curPos get negative age and NEVER expire:
+                    // the list accumulates immortal suppressors of
+                    // real frame bits, and any repeating message
+                    // matching one is threshold-suppressed for
+                    // minutes (field: 3 of 11 identical beacons
+                    // decoded, 2026-08-07 03:44Z).
                     std::memmove(m_l2KnownPos + i,
                                  m_l2KnownPos + i + 1,
-                                 remaining * sizeof(int));
+                                 remaining * sizeof(*m_l2KnownPos));
                 }
                 m_l2NKnown--;
             } else {
