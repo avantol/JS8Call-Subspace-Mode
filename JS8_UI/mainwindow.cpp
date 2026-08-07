@@ -4128,6 +4128,18 @@ void UI_Constructor::startTx() {
                    << "(was" << text.size() << "incl prefix)";
         auto const result =
             m_chunkedArq->sendChunked(arqPeer, arqBody, m_nSubMode);
+        if (result.ok) {
+            // [TODO #143 fullrestore] "Restore Previous Message" must
+            // return the operator's ENTIRE original message, pristine.
+            // Store it here at dispatch; the per-frame bookkeeping at
+            // prepareNextMessageFrame is suppressed while the chunked
+            // send is active (hasActiveTxSession) so per-sub-msg wire
+            // text (addressing + #NN.CC/TT.HHHH markers) never
+            // overwrites it. Field incident 2026-08-06 (WD4KAV): the
+            // restore buffer held only the LAST sub-msg's wire text,
+            // marker included.
+            m_lastTxMessage = arqBody;
+        }
         if (!result.ok) {
             qWarning() << "[ARQ] sendChunked rejected:" << result.error;
             // 2026-06-07 operator request: when the super-message is
@@ -5497,7 +5509,14 @@ bool UI_Constructor::prepareNextMessageFrame() {
     m_totalTxMessage.append(dt.message());
     ui->extFreeTextMsgEdit->setCharsSent(m_totalTxMessage.length());
     m_txFrameCountSent += 1;
-    m_lastTxMessage = m_totalTxMessage;
+    // [TODO #143 fullrestore] During a chunked-ARQ send each sub-msg
+    // is its own TX cycle, so this per-frame assignment would leave
+    // the restore buffer holding the last sub-msg's WIRE text
+    // (addressing + marker) instead of the operator's message. The
+    // pristine full body is stored once at dispatch (startTx ARQ
+    // path); keep it. Non-ARQ sends behave exactly as before.
+    if (!(m_chunkedArq && m_chunkedArq->hasActiveTxSession()))
+        m_lastTxMessage = m_totalTxMessage;
     qCDebug(mainwindow_js8) << "total sent:" << m_txFrameCountSent << "\n"
                             << m_totalTxMessage;
 

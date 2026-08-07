@@ -221,6 +221,24 @@ void UI_Constructor::onChunkedSendComplete(QString const &peer, int msgId,
         << "[ARQ-TX] sendComplete peer=" << peer << "msgId=" << msgId
         << "total=" << total << "totalRetries=" << totalRetries;
 
+    // [TODO #143 fullrestore] Success-path counterpart of the five
+    // failure-path restores (halted/busy/too_long/nack_exhausted/
+    // timeout_exhausted all call setPlainText(originalBody)): clear
+    // the outgoing box so the final sub-msg's as-aired WIRE text
+    // (addressing + chunk marker) is not left behind as ordinary
+    // editable text. Field incident 2026-08-06 (WD4KAV): the operator
+    // edited the leftover — "sent" styling reads as gone, but
+    // toPlainText() ships the whole document — and the stale
+    // "#84.01/01.6D79" rode into the next body as payload, forcing a
+    // wrong 2-sub-msg split and a receiver NACK loop. The message
+    // itself stays recoverable via "Restore Previous Message", which
+    // now holds the pristine full body.
+    if (ui->extFreeTextMsgEdit) {
+        ui->extFreeTextMsgEdit->blockSignals(true);
+        ui->extFreeTextMsgEdit->clear();
+        ui->extFreeTextMsgEdit->blockSignals(false);
+    }
+
     // [FILE-XFER build 282] If this msgId matches the file-send we
     // auto-enabled ARQ for, restore ARQ to its prior state.
     if (m_fileSendMsgId != 0 && msgId == m_fileSendMsgId) {

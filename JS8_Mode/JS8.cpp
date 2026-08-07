@@ -2470,7 +2470,27 @@ template <typename Mode> class DecodeMode {
                    dd.begin());
         }
 
-        Decode::Map decodes;
+        // [ALIAS-GHOST FIX Build 361] A very strong signal folds through
+        // the per-candidate downsample skirt at +/- k * (12000/NDOWN) Hz
+        // (e.g. +/-480 for Turbo, FS2=240), decodes from the aliased
+        // copy with the tone ladder intact, and gets reported at the
+        // CANDIDATE frequency — where the true spectrum holds nothing
+        // (xsnr honestly reads noise, -26..-28; field events 2026-08-07,
+        // same frame at 1810/+14 and 2289/-28). Ghost and true decode
+        // carry IDENTICAL codeword data, so they share one key in this
+        // map; the ghost surfaced only because emission was inline at
+        // first insert. Emission is now deferred to end-of-run and uses
+        // the best-SNR instance's frequency, so same-codeword aliases
+        // collapse to the real signal structurally. Residual gap: a run
+        // that decodes ONLY the ghost (true copy undecodable in the
+        // same window) still emits it — no in-run reference to beat it.
+        struct Best {
+            int snr;
+            float f1;
+            float xdt;
+            float conf;
+        };
+        std::unordered_map<Decode, Best, Decode::Hash> decodes;
         auto const ttl = std::chrono::seconds{Mode::NTXDUR * 2};
         m_softCombiner.flush(ttl);
 
@@ -2513,33 +2533,25 @@ template <typename Mode> class DecodeMode {
 
                 if (auto decode = js8dec(data.params.syncStats, subtract, f1,
                                          xdt, nharderrors, xsnr, emitEvent)) {
-                    // We don't need to be emitting duplicate events for
-                    // something that's effectively the same SNR as a previous
-                    // event.
-
                     auto const snr = static_cast<int>(std::round(xsnr));
 
                     // If this decode is new, or it's a duplicate with a better
                     // SNR than what we had before, then our situation has
-                    // improved and we must announce that we've had some
-                    // success.
+                    // improved. Record the best instance's parameters; the
+                    // event is emitted AFTER all passes so an alias ghost
+                    // (same codeword, wrong frequency, nonsense SNR) never
+                    // reaches the caller when the real signal also decoded.
+
+                    Best const best{snr, f1, xdt,
+                                    1.0f - nharderrors / 60.0f};
 
                     if (auto [it, inserted] =
-                            decodes.try_emplace(std::move(*decode), snr);
-                        inserted || it->second < snr) {
+                            decodes.try_emplace(std::move(*decode), best);
+                        inserted || it->second.snr < snr) {
                         improved = true;
 
-                        // Update the SNR if this is an improved decode.
-
                         if (!inserted)
-                            it->second = snr;
-
-                        // Emit decoded events on new or improved decodes.
-
-                        emitEvent(JS8::Event::Decoded{
-                            data.params.nutc, snr, xdt - Mode::ASTART, f1,
-                            it->first.data, it->first.type,
-                            1.0f - nharderrors / 60.0f, Mode::NSUBMODE});
+                            it->second = best;
                     }
                 }
             }
@@ -2549,6 +2561,16 @@ template <typename Mode> class DecodeMode {
 
             if (!improved)
                 break;
+        }
+
+        // Deferred emission: one event per unique codeword, from the
+        // best-SNR instance (see [ALIAS-GHOST FIX] above).
+
+        for (auto const &[decode, best] : decodes) {
+            emitEvent(JS8::Event::Decoded{data.params.nutc, best.snr,
+                                          best.xdt - Mode::ASTART, best.f1,
+                                          decode.data, decode.type, best.conf,
+                                          Mode::NSUBMODE});
         }
 
         // Let the caller know how many unique decodes we discovered, if any.
