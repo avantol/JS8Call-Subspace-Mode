@@ -110,6 +110,16 @@ void UI_Constructor::onChunkedWantsResponseTx(QString const &text) {
     if (ui->extFreeTextMsgEdit && !m_arqResponseRestorePending) {
         m_arqResponseSavedText = ui->extFreeTextMsgEdit->toPlainText();
         m_arqResponseRestorePending = true;
+        // [TODO #146] Lock the box for the whole save/inject/restore
+        // window: keystrokes during a response TX either ride into
+        // the wire text being transmitted or are wiped by the
+        // deferred restore. Read-only makes the frozen box explicit;
+        // unlocked in the same deferred restore that returns the
+        // draft (stopTx path). Back-to-back responses keep the lock
+        // (this save is skipped while a restore is pending).
+        ui->extFreeTextMsgEdit->setReadOnly(true);
+        statusBar()->showMessage(
+            tr("Sending ARQ reply — outgoing text locked"), 3000);
         qCWarning(chunkedarq_js8)
             << "[ARQ-RX] outgoing-text save: chars="
             << m_arqResponseSavedText.size()

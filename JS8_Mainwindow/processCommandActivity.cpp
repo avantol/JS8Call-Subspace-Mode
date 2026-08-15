@@ -77,6 +77,190 @@ void UI_Constructor::processCommandActivity() {
         logCallActivity(cd, true);
         logHeardGraph(d.from, d.to);
 
+        // [hearlines] Feed the Spots Map's on-air heard-mesh (blue
+        // lines). Runs BEFORE the command-allowed gate so EVERY
+        // queued frame contributes (field 2026-08-15: HB-SNR replies
+        // fed edges only pre-gate — N01ZE case). GRID replies are
+        // order-independent: the grid is parsed from THIS message's
+        // text directly (AC7WY sequence, 2026-08-14). Rationale (operator 2026-08-14): works with no
+        // internet, and some stations never report to PSK Reporter —
+        // on-air evidence is the only mesh they appear in. Sources:
+        //   1. every directed exchange: "A: B ..." = A hears/works B;
+        //   2. HEARING replies (below), incl. the relayed
+        //      "... *DE* CALL" form where the trailing DE call is the
+        //      true hearer.
+        auto const hearGridFor = [this](QString const &call) -> QString {
+            if (call.compare(m_config.my_callsign().trimmed(),
+                             Qt::CaseInsensitive) == 0)
+                return m_config.my_grid();
+            QString g = m_callActivity.value(call).grid;
+            if (g.isEmpty()) {
+                // [gridfall] Same fallback the Call Activity list
+                // uses: the LOGBOOK's grid for previously-worked
+                // stations (operator 2026-08-14 — session call
+                // activity is empty for a station that hasn't sent a
+                // grid since the last restart).
+                QString date, name, comment;
+                m_logBook.findCallDetails(call, g, date, name, comment);
+                g = g.trimmed();
+            }
+            return g;
+        };
+        auto const feedHearing = [&](QString const &hearer,
+                                     QStringList const &heard,
+                                     int reportedToMeSnr = -99) {
+            if (!m_spotMapWindow || hearer.isEmpty())
+                return;
+            QString const band = m_config.bands()->find(
+                static_cast<Radio::Frequency>(d.dial));
+            QStringList grids;
+            for (QString const &c : heard)
+                grids << hearGridFor(c);
+            // [gridpolicy 2026-08-15] SANCTIONED grid sources ONLY —
+            // the grid must be explicit CONTENT of a grid-bearing
+            // message: GRID replies, plain CQs ("CQ CQ CQ DM03"),
+            // heartbeats ("HEARTBEAT EN35"). The frame's grid EXTRA
+            // field (ping/lead metadata, arrives as " EM38") is NOT
+            // trusted (operator directive; W0MQD case). Relayed GRID
+            // replies are handled separately below with *DE*
+            // attribution. Fallback = the callsign-list/logbook
+            // lookup the operator specified. Trailing grid wins.
+            QString hearerGrid;
+            if (d.cmd == QStringLiteral(" GRID") ||
+                d.cmd.startsWith(QStringLiteral(" CQ")) ||
+                d.cmd.startsWith(QStringLiteral(" HEARTBEAT")) ||
+                d.cmd == QStringLiteral(" HB")) {
+                if (auto const gs = Varicode::parseGrids(d.text);
+                    !gs.isEmpty())
+                    hearerGrid = gs.last();
+            }
+            if (hearerGrid.isEmpty())
+                hearerGrid = hearGridFor(hearer);
+            m_spotMapWindow->addHearingReport(band, hearer, hearerGrid,
+                                              heard, grids,
+                                              reportedToMeSnr);
+        };
+        // [hbdots] PRESENCE for every on-air sender — heartbeats and
+        // all other frames put a hollow dot at the station's grid in
+        // the All view (65 HBs with grids went unused in one evening,
+        // log 2026-08-14).
+        feedHearing(d.from, {});
+        // [myears] OUR OWN reception is the most authoritative heard
+        // report of all: every frame we decode = an edge ME -> sender
+        // (field 2026-08-15: WD5EED decoded here, no line from us).
+        // The target's position comes from its own presence dot, so
+        // no grid is attached to the edge.
+        if (m_spotMapWindow) {
+            QString const myC = m_config.my_callsign().trimmed();
+            if (!myC.isEmpty() &&
+                d.from.compare(myC, Qt::CaseInsensitive) != 0) {
+                m_spotMapWindow->addHearingReport(
+                    m_config.bands()->find(
+                        static_cast<Radio::Frequency>(d.dial)),
+                    myC, m_config.my_grid(), {d.from}, {QString()});
+            }
+        }
+        if (!d.to.startsWith(QLatin1Char('@')) &&
+            Radio::is_callsign(d.to)) {
+            feedHearing(d.from, {d.to});
+        }
+        // [onairspot] A frame addressed TO ME proves the sender hears
+        // me — feed the map's MY view (the offline/PSKR-less
+        // equivalent of a reception report). SNR replies carry the
+        // actual report of MY signal; other frames are position-only.
+        if (m_spotMapWindow && toMe) {
+            int reportedSnr = -99;
+            if (d.cmd == QStringLiteral(" SNR")) {
+                bool ok = false;
+                if (int const v = d.text.trimmed()
+                                      .section(QLatin1Char(' '), 0, 0)
+                                      .toInt(&ok);
+                    ok)
+                    reportedSnr = v;
+            }
+            m_spotMapWindow->addOnAirSpotOfMe(
+                m_config.bands()->find(
+                    static_cast<Radio::Frequency>(d.dial)),
+                d.from, hearGridFor(d.from), reportedSnr);
+            // [hbdots] The reported value also colors this station's
+            // All-view dot (the ONLY sanctioned color source there).
+            if (reportedSnr > -99)
+                feedHearing(d.from, {}, reportedSnr);
+        }
+
+        // [gridpolicy] Relayed GRID replies ("A: B> GRID DN61 *DE* C")
+        // — the grid belongs to the *DE* originator (else the frame
+        // sender). Sanctioned source per the operator's grid policy.
+        if (d.cmd == QStringLiteral(">")) {
+            QString const rt = d.text.trimmed();
+            if (rt.toUpper().startsWith(QStringLiteral("GRID"))) {
+                QString gridOwner = d.from;
+                QString gridPart = rt;
+                static QRegularExpression const kDeTail2Re(
+                    QStringLiteral(R"(\*DE\*\s+(?<de>[A-Z0-9/]+))"),
+                    QRegularExpression::CaseInsensitiveOption);
+                if (auto const m = kDeTail2Re.match(rt); m.hasMatch()) {
+                    gridOwner = m.captured("de").toUpper();
+                    gridPart = rt.left(m.capturedStart());
+                }
+                if (auto const gs = Varicode::parseGrids(gridPart);
+                    !gs.isEmpty() && m_spotMapWindow) {
+                    m_spotMapWindow->addHearingReport(
+                        m_config.bands()->find(
+                            static_cast<Radio::Frequency>(d.dial)),
+                        gridOwner, gs.last(), {}, {});
+                }
+            }
+        }
+
+        // HEARING payloads: plain (" HEARING") or riding a relay
+        // reply (cmd ">", text "HEARING ... *DE* CALL"). The DE tail
+        // names the true hearer; without it the frame's sender is.
+        {
+            QString hearText;
+            if (d.cmd == QStringLiteral(" HEARING")) {
+                hearText = d.text;
+            } else if (d.cmd == QStringLiteral(">")) {
+                // A relayed result can still carry nested relay heads
+                // ("KJ7VWV> HEARING ... *DE* X" behind a multi-hop
+                // path) — strip every leading "CALL>" token before
+                // testing for the HEARING payload.
+                QString rt = d.text.trimmed();
+                static QRegularExpression const kRelayHeadRe(
+                    QStringLiteral(R"(^[A-Z0-9/]+>\s*)"),
+                    QRegularExpression::CaseInsensitiveOption);
+                while (true) {
+                    auto const m = kRelayHeadRe.match(rt);
+                    if (!m.hasMatch())
+                        break;
+                    rt = rt.mid(m.capturedLength());
+                }
+                if (rt.toUpper().startsWith(QStringLiteral("HEARING")))
+                    hearText = rt.mid(7); // drop "HEARING"
+            }
+            if (!hearText.isEmpty()) {
+                QString hearer = d.from;
+                QString listPart = hearText;
+                static QRegularExpression const kDeTailRe(
+                    QStringLiteral(
+                        R"(\*DE\*\s+(?<de>[A-Z0-9/]+))"),
+                    QRegularExpression::CaseInsensitiveOption);
+                if (auto const m = kDeTailRe.match(hearText);
+                    m.hasMatch()) {
+                    hearer = m.captured("de").toUpper();
+                    listPart = hearText.left(m.capturedStart());
+                }
+                QStringList heard =
+                    Varicode::parseCallsigns(listPart);
+                heard.removeAll(hearer);
+                if (!heard.isEmpty())
+                    feedHearing(hearer, heard);
+            }
+        }
+
+
+
+
         // we're only processing a subset of queries at this point
         if (!Varicode::isCommandAllowed(d.cmd)) {
             continue;
@@ -136,6 +320,8 @@ void UI_Constructor::processCommandActivity() {
         if (d.to == "@APRSIS") {
             spotAprsCmd(d);
         }
+
+
 
         // PREPARE CMD TEXT
         // Build baseText without the FROM prefix: "TO CMD EXTRA TEXT [eot]"
@@ -493,6 +679,19 @@ void UI_Constructor::processCommandActivity() {
         // we're only responding to allcall, groupcalls, and our callsign at
         // this point, so we'll end after logging the callsigns we've heard
         if (!isAllCall && !toMe && !isGroupCall) {
+            // [onfreqhdr 2026-08-15] DISPLAY-ONLY exception: overheard
+            // directed traffic ON OUR OFFSET already shows its payload
+            // frames in the conversation window (processRxActivity's
+            // on-frequency rule) — without this, the FROM/TO header is
+            // the one piece that never prints, leaving orphaned
+            // payloads ("BELL *DE* WM8Q VHY" with no addressing;
+            // operator question 2026-08-15). Print the full header
+            // line; all processing/handling still skipped.
+            if (std::abs(d.offset - freq()) <=
+                JS8::Submode::rxThreshold(d.submode)) {
+                displayTextForFreq(text, d.offset, d.utcTimestamp, false,
+                                   true, false, d.submode);
+            }
             continue;
         }
 
@@ -871,7 +1070,17 @@ void UI_Constructor::processCommandActivity() {
         }
 
         // PROCESS RELAY
-        else if (d.cmd == ">" && !isAllCall && !m_config.relay_off()) {
+        // [TODO #149] Gated on the OUTER frame addressee: an overheard
+        // relay hop (we are neither the relay station nor the frame's
+        // addressee) must never be processed here — its payload can
+        // name OUR call as the eventual destination ("WD4KAV: KJ7VWV>
+        // WM8Q TEST ..."), and honoring that inner addressee routed
+        // the hop into the bystander's conversation window (field
+        // 2026-08-12). Overheard relays now fall through to ordinary
+        // band-activity display; the legitimate delivery arrives as
+        // its own frame addressed to us.
+        else if (d.cmd == ">" && toMe && !isAllCall &&
+                 !m_config.relay_off()) {
 
             // 1. see if there are any more hops to process
             // 2. if so, forward

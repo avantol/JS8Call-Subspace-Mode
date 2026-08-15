@@ -94,6 +94,35 @@ void UI_Constructor::displayBandActivity() {
                         shouldDisplay = false;
                     }
 
+                    // [TODO #151] HB-ACK replies carrying a stored-
+                    // message notice leak past the patterns above in
+                    // two ways:
+                    // (a) the "YES MSG ID n" QUERY MSGS reply form has
+                    //     no signed SNR, so yesSnrRe below misses it;
+                    static const QRegularExpression yesMsgIdRe(
+                        QStringLiteral(
+                            R"(\w+:\s+\w+\s+YES\s+MSG\s+ID)"));
+                    if (yesMsgIdRe.match(item.text).hasMatch() &&
+                        !item.text.contains(myCall + " YES")) {
+                        shouldDisplay = false;
+                    }
+                    // (b) a multi-frame reply's LATER fragment holding
+                    //     only the "MSG ID nn" tail matches nothing —
+                    //     hide it when its preceding frame in this
+                    //     offset group was itself filtered (same
+                    //     adjacency mechanics as the bare "CALL:"
+                    //     prefix hide above).
+                    // [#151 rev2, field 2026-08-15 WB7TSQ] The frame
+                    // split can land between "MSG" and "ID 1261" —
+                    // accept the bare ID tail too (safe: only applies
+                    // when the PRECEDING frame was already filtered).
+                    static const QRegularExpression msgIdFragRe(
+                        QStringLiteral(R"((MSG\s+)?ID\s+\d+)"));
+                    if (i > 0 && !items[i - 1].shouldDisplay &&
+                        msgIdFragRe.match(item.text).hasMatch()) {
+                        shouldDisplay = false;
+                    }
+
                     // NO messages are intentionally NOT filtered here —
                     // even when "Show band heartbeats and acks" is off,
                     // a "CALL: CALL NO" reply is meaningful traffic

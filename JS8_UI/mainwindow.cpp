@@ -1278,6 +1278,11 @@ void UI_Constructor::openSettings(int tab) {
             m_spotMapWindow->setStation(m_config.my_callsign(),
                                         m_config.my_grid());
         }
+        // [units] Repaint the Spots Map on EVERY settings accept so a
+        // distance-units change (miles/km) shows immediately — the map
+        // reads m_config->miles() at paint time.
+        if (m_spotMapWindow)
+            m_spotMapWindow->configRefresh();
 
         enable_DXCC_entity(m_config.DXCC()); // sets text window proportions and
                                              // (re)inits the logbook
@@ -2804,6 +2809,26 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
     // enqueue for spotting to psk reporter
     if (spot) {
         m_rxCallQueue.append(d);
+    }
+
+    // [myears2 2026-08-15] Universal Spots-Map coverage at THE choke
+    // point every decode path funnels through: any station we decode
+    // DIRECTLY (not relay-learned: through empty, real SNR) gets a
+    // presence entry and a ME -> station heard-edge on the All map.
+    // The command-level feed still adds sanctioned message-borne
+    // grids; this catches every other decode (field: WD5EED,
+    // KF0FSV/P heard with no line from us).
+    if (m_spotMapWindow && spot && d.through.isEmpty() && d.snr > -64) {
+        QString const myC = m_config.my_callsign().trimmed();
+        if (!myC.isEmpty() &&
+            d.call.compare(myC, Qt::CaseInsensitive) != 0) {
+            QString const band = m_config.bands()->find(
+                static_cast<Radio::Frequency>(d.dial));
+            m_spotMapWindow->addHearingReport(
+                band, d.call, m_callActivity.value(d.call).grid, {}, {});
+            m_spotMapWindow->addHearingReport(
+                band, myC, m_config.my_grid(), {d.call}, {QString()});
+        }
     }
 
     // Mark the call-list model dirty so the next once-per-second tick
@@ -4401,6 +4426,8 @@ void UI_Constructor::stopTx() {
         QTimer::singleShot(750, this, [widget, saved]() {
             if (!widget) return;
             widget->setPlainText(saved);
+            // [TODO #146] Response TX over, draft returned — unlock.
+            widget->setReadOnly(false);
             qCWarning(chunkedarq_js8)
                 << "[ARQ-RX] outgoing-text restore (deferred 750ms):"
                 << "chars=" << saved.size();

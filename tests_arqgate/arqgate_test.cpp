@@ -52,6 +52,12 @@ static Case const cases[] = {
     {"K9AVT MSG HELLO FROM THE OTHER SIDE", TextClass::ArqExempt, "MSG"},
     {"K9AVT MSG TO:K1ABC PLEASE CALL HOME", TextClass::ArqExempt, "MSG TO:"},
     {"K9AVT >K1ABC RELAY THIS PLEASE",      TextClass::ArqExempt, "relay"},
+    // ---- [TODO #150] glued relay chains, incl. inner commands ----
+    {"AC7WY>WM8Q/P HEARING?",               TextClass::ArqExempt, "relay glued + inner cmd"},
+    {"WM8Q: AC7WY>WM8Q/P HEARING?",         TextClass::ArqExempt, "relay glued paste-back"},
+    {"AC7WY>KJ7VWV>KL7UT>WD4KAV MSG HI",    TextClass::ArqExempt, "relay 3-hop glued"},
+    {"AC7WY>KJ7VWV [MESSAGE]",              TextClass::ArqExempt, "relay-builder template"},
+    {"K9AVT SNR?",                          TextClass::DirectedCommand, "plain cmd still excluded"},
     // ---- no ARQ to a group, ANY body (Andy 2026-07-17) ----
     {"wm8q: @PUBLIC MSG hi!",       TextClass::DirectedCommand, "group specimen"},
     {"@PUBLIC MSG HELLO THERE",     TextClass::DirectedCommand, "group MSG"},

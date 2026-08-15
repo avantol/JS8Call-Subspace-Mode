@@ -2208,7 +2208,13 @@ QString leadingPeerOf(QString const &boxText) {
         u = u.mid(m.capturedLength()).trimmed();
     }
     int const sp = u.indexOf(QLatin1Char(' '));
-    QString const tok0 = sp > 0 ? u.left(sp) : u;
+    QString tok0 = sp > 0 ? u.left(sp) : u;
+    // [TODO #150] Glued relay chain ("AC7WY>WM8Q/P ..."): the station
+    // we ADDRESS is the first hop — everything after the first '>' is
+    // payload routing, not our addressee.
+    if (int const gt = tok0.indexOf(QLatin1Char('>')); gt > 0) {
+        tok0 = tok0.left(gt);
+    }
     if (!tok0.startsWith(QLatin1Char('@')) && Radio::is_callsign(tok0)) {
         return tok0;
     }
@@ -2245,6 +2251,17 @@ TextClass classifyOutgoingText(QString const &boxText) {
         QString const tok0 = sp > 0 ? u.left(sp) : u;
         if (tok0.startsWith(QLatin1Char('@'))) {
             return TextClass::DirectedCommand;
+        }
+        // [TODO #150] Relay chains classify by the OUTERMOST operator:
+        // a glued "CALL>..." head (any hop count, any INNER command —
+        // "AC7WY>WM8Q/P HEARING?") is a relay and ARQ-eligible; the
+        // inner command executes at the far end of the relay, not at
+        // the ARQ recipient, so the wrapped-commands-never-autoreply
+        // rationale doesn't apply. (The spaced form "PEER >CALL ..."
+        // already classified Exempt via the '>' policy table below.)
+        if (int const gt = tok0.indexOf(QLatin1Char('>'));
+            gt > 0 && Radio::is_callsign(tok0.left(gt))) {
+            return TextClass::ArqExempt;
         }
         if (Radio::is_callsign(tok0)) {
             u = sp > 0 ? u.mid(sp + 1).trimmed() : QString();

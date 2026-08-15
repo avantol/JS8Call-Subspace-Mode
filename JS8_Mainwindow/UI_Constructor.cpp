@@ -565,7 +565,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 switch (trySeedOutgoingGreeting(call)) {
                 case GreetingSeedResult::Seeded:
                     m_spotMapWindow->showToast(
-                        tr("Copied %1 to outgoing message")
+                        tr("Standard greeting to %1 placed in the "
+                           "outgoing message box")
                             .arg(call.trimmed()));
                     break;
                 case GreetingSeedResult::DraftBlocked:
@@ -575,6 +576,27 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 case GreetingSeedResult::InvalidCall:
                     break; // logged by the helper
                 }
+            });
+    // [relaysel] Relay-path builder "Done": put the template in the
+    // outgoing box with the [MESSAGE] placeholder SELECTED so typing
+    // replaces it immediately. Plain directed text — no ARQ wrap on
+    // any hop (operator directive 2026-08-14).
+    connect(m_spotMapWindow.data(), &SpotMapWindow::relayTemplateReady,
+            this, [this](QString const &tpl) {
+                ui->extFreeTextMsgEdit->setPlainText(tpl);
+                QTextCursor c = ui->extFreeTextMsgEdit->textCursor();
+                if (int const at =
+                        tpl.indexOf(QStringLiteral("[MESSAGE]"));
+                    at >= 0) {
+                    c.setPosition(at);
+                    c.setPosition(at + 9, QTextCursor::KeepAnchor);
+                } else {
+                    c.movePosition(QTextCursor::End);
+                }
+                ui->extFreeTextMsgEdit->setTextCursor(c);
+                ui->extFreeTextMsgEdit->setFocus();
+                activateWindow();
+                raise();
             });
     // [BUILD 336] Waterfall: double-click on (or very near) a painted
     // callsign label — seed logic; feedback via the status bar (the
@@ -602,7 +624,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                                 .arg(key).arg(offset), 5000);
                     } else {
                         statusBar()->showMessage(
-                            tr("Copied %1 to outgoing message")
+                            tr("Standard greeting to %1 placed in the "
+                           "outgoing message box")
                                 .arg(key), 5000);
                     }
                     break;
@@ -617,6 +640,27 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 case GreetingSeedResult::InvalidCall:
                     break; // logged by the helper
                 }
+            });
+    // [relaysel] Relay-path builder "Done": put the template in the
+    // outgoing box with the [MESSAGE] placeholder SELECTED so typing
+    // replaces it immediately. Plain directed text — no ARQ wrap on
+    // any hop (operator directive 2026-08-14).
+    connect(m_spotMapWindow.data(), &SpotMapWindow::relayTemplateReady,
+            this, [this](QString const &tpl) {
+                ui->extFreeTextMsgEdit->setPlainText(tpl);
+                QTextCursor c = ui->extFreeTextMsgEdit->textCursor();
+                if (int const at =
+                        tpl.indexOf(QStringLiteral("[MESSAGE]"));
+                    at >= 0) {
+                    c.setPosition(at);
+                    c.setPosition(at + 9, QTextCursor::KeepAnchor);
+                } else {
+                    c.movePosition(QTextCursor::End);
+                }
+                ui->extFreeTextMsgEdit->setTextCursor(c);
+                ui->extFreeTextMsgEdit->setFocus();
+                activateWindow();
+                raise();
             });
     // [TODO #106 / BUILD 342.20] File menu: open the received-files
     // folder (<Downloads>/Subspace-FileTransfer) in the platform file
