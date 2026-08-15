@@ -75,6 +75,12 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
             m_settings->value("ShowConnections", false).toBool();
         m_viewAll = m_settings->value("ViewAll", false).toBool();
         m_showPskr = m_settings->value("ShowPskr", true).toBool();
+        // [persistui] Zoom level (0 = Auto) and spots time range.
+        m_manualScaleKm =
+            m_settings->value("ManualScaleKm", 0.0f).toFloat();
+        m_viewWindowSecs =
+            m_settings->value("ViewWindowSecs", DEFAULT_VIEW_SECS)
+                .toInt();
     }
 
     m_replotTimer.setSingleShot(true);
@@ -158,7 +164,12 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
             requestReplot();
         });
     }
-    m_win60Btn->setChecked(true);
+    // [persistui] Reflect the persisted time range (default 60m).
+    (m_viewWindowSecs == 5 * 60    ? m_win5Btn
+     : m_viewWindowSecs == 15 * 60 ? m_win15Btn
+     : m_viewWindowSecs == 30 * 60 ? m_win30Btn
+                                   : m_win60Btn)
+        ->setChecked(true);
 
     // [viewall] View-selector buttons, lower-left vertical stack: my
     // call on top (the map as always: who hears ME), "All" below
@@ -291,9 +302,9 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     updateRelayButtons();
 
     positionWindowButtons();
-    // Auto is the startup state; the disabled Auto button doubles as
-    // the mode indicator (disabled = auto active).
-    m_zoomAutoBtn->setEnabled(false);
+    // [persistui] Auto button doubles as the mode indicator
+    // (disabled = auto active); a persisted manual zoom re-arms it.
+    m_zoomAutoBtn->setEnabled(m_manualScaleKm > 0.0f);
     connect(m_zoomInBtn, &QToolButton::clicked,
             this, &SpotMapWindow::zoomIn);
     connect(m_zoomAutoBtn, &QToolButton::clicked,
@@ -315,6 +326,8 @@ void SpotMapWindow::saveSettings() {
     m_settings->setValue("ShowConnections", m_showConnections); // [persistui]
     m_settings->setValue("ViewAll", m_viewAll);
     m_settings->setValue("ShowPskr", m_showPskr);
+    m_settings->setValue("ManualScaleKm", m_manualScaleKm); // [persistui]
+    m_settings->setValue("ViewWindowSecs", m_viewWindowSecs);
 }
 
 // -------------------------------------------------------------------------
@@ -1495,7 +1508,13 @@ void SpotMapWindow::redraw() {
             // confirmed no such links). Monitors draw no line of
             // their own; their edges come from each sender's spot.
             if (!m_viewAll) {
-                p.drawLine(center, from); // my view: center = me
+                // [linecolor 2026-08-15] Yellow = PSKR, per the
+                // legend — a RADIO-evidenced station must not wear
+                // the internet color (field: KC6UCN's on-air HB ACK
+                // read as a PSKR leak). Radio spots rely on their
+                // blue mesh edge instead.
+                if (s.pskr)
+                    p.drawLine(center, from); // my view: center = me
                 continue;
             }
             if (!s.monitorOnly && posByCall.contains(s.heardBy))
@@ -1503,7 +1522,9 @@ void SpotMapWindow::redraw() {
             // [melineall] Line to me for EVERY station that reported
             // my signal, whatever dataset drew its dot. [heararrow]
             // Connects to me → arrowhead at the hearing reporter.
-            if (meReporters.contains(s.receiverCall))
+            // [linecolor] Only PSKR-sourced reports draw yellow;
+            // radio reporters already carry their blue mesh edge.
+            if (meReporters.contains(s.receiverCall) && s.pskr)
                 heardLine(from, center);
         }
         // [hearlines] On-air heard-mesh edges: 1 px BLUE, drawn after
@@ -2160,10 +2181,9 @@ void SpotMapWindow::showEvent(QShowEvent *) {
     QTimer::singleShot(0, this, [this]() { positionWindowButtons(); });
     if (m_resetOnNextShow) {
         m_resetOnNextShow = false;
-        // Every (re)open starts in Auto — manual zoom/pan are
-        // per-viewing gestures (operator directive 2026-08-02).
-        zoomAuto();
-        // [persistui 2026-08-15] View type, Connections, and PSKR
+        // [persistui 2026-08-15] Zoom level and time range persist
+        // (operator revision — supersedes the 2026-08-02 every-open-
+        // starts-in-Auto directive); view type, Connections, and PSKR
         // toggle PERSIST across reopen and sessions — only the
         // relay builder resets (its path is a per-use gesture).
         if (m_relaySelBtn && m_relaySelBtn->isChecked())
