@@ -583,6 +583,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // any hop (operator directive 2026-08-14).
     connect(m_spotMapWindow.data(), &SpotMapWindow::relayTemplateReady,
             this, [this](QString const &tpl) {
+                // [relaysel] The template IS the full addressing —
+                // a selected call-list row would re-direct the send
+                // to the wrong station (operator 2026-08-15).
+                clearCallsignSelected();
                 ui->extFreeTextMsgEdit->setPlainText(tpl);
                 QTextCursor c = ui->extFreeTextMsgEdit->textCursor();
                 if (int const at =
@@ -647,6 +651,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // any hop (operator directive 2026-08-14).
     connect(m_spotMapWindow.data(), &SpotMapWindow::relayTemplateReady,
             this, [this](QString const &tpl) {
+                // [relaysel] The template IS the full addressing —
+                // a selected call-list row would re-direct the send
+                // to the wrong station (operator 2026-08-15).
+                clearCallsignSelected();
                 ui->extFreeTextMsgEdit->setPlainText(tpl);
                 QTextCursor c = ui->extFreeTextMsgEdit->textCursor();
                 if (int const at =

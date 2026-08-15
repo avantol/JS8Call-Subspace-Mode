@@ -78,7 +78,9 @@ class MqttClient final : public QObject {
     static constexpr int PING_INTERVAL_MS = 30 * 1000;
     static constexpr int DEAD_AFTER_MS = 75 * 1000; // no inbound traffic
     static constexpr int BACKOFF_MIN_MS = 5 * 1000;
-    static constexpr int BACKOFF_MAX_MS = 300 * 1000;
+    // 60 s cap (operator 2026-08-15; was 300 s) — a dead feed now
+    // costs at most a minute of map staleness.
+    static constexpr int BACKOFF_MAX_MS = 60 * 1000;
     static constexpr int BUFFER_CAP = 1 * 1024 * 1024; // desync guard
 
     void setState(State state, QString const &detail = {});

@@ -69,6 +69,12 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
         m_restoreVisible = m_settings->value("WindowVisible", false).toBool();
         m_showRings = m_settings->value("ShowRings", false).toBool();
         m_showCallsigns = m_settings->value("ShowCallsigns", false).toBool();
+        // [persistui 2026-08-15] Connections overlay, map type, and
+        // PSKR toggle persist across sessions AND across hide/show.
+        m_showConnections =
+            m_settings->value("ShowConnections", false).toBool();
+        m_viewAll = m_settings->value("ViewAll", false).toBool();
+        m_showPskr = m_settings->value("ShowPskr", true).toBool();
     }
 
     m_replotTimer.setSingleShot(true);
@@ -134,11 +140,13 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     // auto-exclusive (siblings), default 60 min each open (matches
     // the fleet's hourly re-spot cache). Storage always keeps the
     // full hour; these only filter the display.
+    m_win5Btn = makeZoomButton(QStringLiteral("5m"));
     m_win15Btn = makeZoomButton(QStringLiteral("15m"));
     m_win30Btn = makeZoomButton(QStringLiteral("30m"));
     m_win60Btn = makeZoomButton(QStringLiteral("60m"));
     struct WinDef { QToolButton *b; int secs; };
-    for (WinDef const wd : {WinDef{m_win15Btn, 15 * 60},
+    for (WinDef const wd : {WinDef{m_win5Btn, 5 * 60},
+                            WinDef{m_win15Btn, 15 * 60},
                             WinDef{m_win30Btn, 30 * 60},
                             WinDef{m_win60Btn, 60 * 60}}) {
         wd.b->setCheckable(true);
@@ -166,7 +174,7 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
         b->setCheckable(true);
         viewGroup->addButton(b);
     }
-    m_viewMineBtn->setChecked(true);
+    (m_viewAll ? m_viewAllBtn : m_viewMineBtn)->setChecked(true); // [persistui]
     m_viewMineBtn->setToolTip(tr("Show stations spotting MY signal"));
     m_viewAllBtn->setToolTip(
         tr("Show all spotted stations on this band (all reporters)"));
@@ -189,12 +197,39 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     // green lines between stations hearing each other (my view:
     // center to each spotter; All view: heard sender to its
     // reporter). Session-only, off at every open.
-    m_connBtn = makeZoomButton(tr("View connections"));
+    // [pskrtoggle] Internet-sourced spots are OPT-OUT: the button
+    // sits below the view stack as its own function group.
+    m_pskrBtn = makeZoomButton(tr("Add PSKReporter spots"));
+    m_pskrBtn->setCheckable(true);
+    m_pskrBtn->setChecked(m_showPskr); // [persistui]
+    m_pskrBtn->setAutoExclusive(false);
+    m_pskrBtn->setToolTip(
+        tr("Add PSKReporter (internet-sourced) spots to your on-air "
+           "radio spots"));
+    connect(m_pskrBtn, &QToolButton::toggled, this, [this](bool on) {
+        m_showPskr = on;
+        requestReplot();
+    });
+
+    m_connBtn = makeZoomButton(tr("Show connections"));
     m_connBtn->setCheckable(true);
+    m_connBtn->setChecked(m_showConnections); // [persistui]
     m_connBtn->setToolTip(
         tr("Draw lines between stations hearing each other"));
     connect(m_connBtn, &QToolButton::toggled, this, [this](bool on) {
         m_showConnections = on;
+        requestReplot();
+    });
+    // [callsbtn] On-map callsign labels, both views (operator
+    // 2026-08-15). Sits directly above View connections.
+    m_callsBtn = makeZoomButton(tr("Show call signs"));
+    m_callsBtn->setCheckable(true);
+    m_callsBtn->setChecked(m_showCallsigns);
+    m_callsBtn->setAutoExclusive(false);
+    m_callsBtn->setToolTip(
+        tr("Show each station's call sign next to its dot"));
+    connect(m_callsBtn, &QToolButton::toggled, this, [this](bool on) {
+        m_showCallsigns = on;
         requestReplot();
     });
 
@@ -277,6 +312,9 @@ void SpotMapWindow::saveSettings() {
     m_settings->setValue("WindowVisible", isVisible());
     m_settings->setValue("ShowRings", m_showRings);
     m_settings->setValue("ShowCallsigns", m_showCallsigns);
+    m_settings->setValue("ShowConnections", m_showConnections); // [persistui]
+    m_settings->setValue("ViewAll", m_viewAll);
+    m_settings->setValue("ShowPskr", m_showPskr);
 }
 
 // -------------------------------------------------------------------------
@@ -370,13 +408,21 @@ void SpotMapWindow::addOnAirSpotOfMe(QString const &band,
     if (band.isEmpty() || call.isEmpty() || grid.size() < 4 ||
         m_myGrid.size() < 4)
         return;
-    auto const vec = Geodesic::vector(m_myGrid, grid);
+    rememberGrid(call, grid); // [gridfine] radio grids feed the
+                              // authority too — the 6-char truth can
+                              // arrive by RADIO while PSKR only ever
+                              // supplies a 4-char registered locator
+                              // (KJ7VWV: call-list DN52QT vs rl DN52;
+                              // three MQTT-cache-only fixes failed)
+    QString const gridF = refinedGrid(call, grid);
+    auto const vec = Geodesic::vector(m_myGrid, gridF);
     if (!vec.azimuth().isValid() || !vec.distance().isValid())
         return;
     Spot spot;
+    spot.reportsMe = true; // [allsuper]
     spot.when = DriftingDateTime::currentDateTimeUtc();
     spot.receiverCall = call.toUpper();
-    spot.receiverGrid = grid;
+    spot.receiverGrid = gridF;
     // [hbdots] A frame with no report value must not ERASE a known
     // report: fall back to (1) this call's previous my-view spot,
     // (2) the SNR it stamped into the hearing store (SNR reply that
@@ -396,7 +442,11 @@ void SpotMapWindow::addOnAirSpotOfMe(QString const &band,
             hearers.value(spot.receiverCall).snr > -99)
             effSnr = hearers.value(spot.receiverCall).snr;
     }
-    spot.snr = effSnr > -99 ? effSnr : 0;
+    // [snrwho] Keep the -99 sentinel in the store — collapsing it
+    // to 0 made "no report" indistinguishable from a real 0 dB
+    // (operator 2026-08-15). Paint is safe: monitorOnly renders
+    // hollow, never heat-colored.
+    spot.snr = effSnr;
     spot.monitorOnly = (effSnr <= -99);
     spot.azimuth = vec.azimuth();
     spot.distance = vec.distance();
@@ -439,10 +489,12 @@ void SpotMapWindow::addHearingReport(QString const &band,
     bool const isNew = !m_hearingByBand[band].contains(hearer.toUpper());
     // [gridtrim] Frame grid fields arrive space-prefixed (" EM38",
     // field 2026-08-15 W0MQD) — trim before resolving.
-    QString hearerGridT = hearerGrid.trimmed();
-    // [mqttgrid] Final fallback: locator harvested from the MQTT feed.
-    if (hearerGridT.isEmpty())
-        hearerGridT = m_gridByCall.value(hearer.toUpper());
+    // [gridfine] Feed then refine: the authority holds the most
+    // precise grid seen from ANY source (also serves as the
+    // empty-grid fallback).
+    rememberGrid(hearer, hearerGrid.trimmed());
+    QString const hearerGridT =
+        refinedGrid(hearer, hearerGrid.trimmed());
     HearingEntry &e = m_hearingByBand[band][hearer.toUpper()];
     e.lastSeen = now;
     // [placelog] Attribute every FIRST placement of an on-air station
@@ -464,11 +516,11 @@ void SpotMapWindow::addHearingReport(QString const &band,
             continue;
         HeardEdge &edge = e.heard[call];
         edge.when = now;
-        QString g =
+        QString const gRaw =
             (i < heardGrids.size() ? heardGrids.at(i) : QString())
                 .trimmed();
-        if (g.isEmpty())
-            g = m_gridByCall.value(call); // [mqttgrid]
+        rememberGrid(call, gRaw); // [gridfine] feed then refine
+        QString const g = refinedGrid(call, gRaw);
         if (!g.isEmpty() || edge.grid.isEmpty()) {
             edge.grid = g;
             resolve(g, &edge.az, &edge.dist);
@@ -476,6 +528,23 @@ void SpotMapWindow::addHearingReport(QString const &band,
     }
     if (band == m_currentBand && isVisible() && m_showConnections)
         requestReplot();
+}
+
+QString SpotMapWindow::refinedGrid(QString const &call,
+                                   QString const &grid) const {
+    // [gridfine] Precision cure for stations jumping between views:
+    // a 4-char square from call-list/on-air text can sit ~35 km
+    // from the 6-char PSKR locator of the SAME square. If the MQTT
+    // cache holds a longer grid in the same square, use it — every
+    // source then projects to identical coordinates. Different
+    // square = station genuinely moved; keep the supplied grid.
+    QString const cached = m_gridByCall.value(call.toUpper());
+    if (cached.size() > grid.size() &&
+        (grid.isEmpty() ||
+         cached.left(4).compare(grid.left(4),
+                                Qt::CaseInsensitive) == 0))
+        return cached;
+    return grid;
 }
 
 void SpotMapWindow::rememberGrid(QString const &call,
@@ -488,8 +557,14 @@ void SpotMapWindow::rememberGrid(QString const &call,
     if (call.isEmpty() || grid.size() < 4)
         return;
     QString const key = call.toUpper();
-    if (m_gridByCall.value(key) == grid)
+    QString const known = m_gridByCall.value(key);
+    if (known == grid)
         return; // already known — nothing to backfill
+    // [gridfine] Never downgrade precision: a shorter grid in the
+    // same square keeps the cached long form.
+    if (known.size() > grid.size() &&
+        known.left(4).compare(grid.left(4), Qt::CaseInsensitive) == 0)
+        return;
     m_gridByCall.insert(key, grid);
     if (m_myGrid.size() < 4)
         return;
@@ -497,10 +572,20 @@ void SpotMapWindow::rememberGrid(QString const &call,
     if (!v.azimuth().isValid() || !v.distance().isValid())
         return;
     bool touched = false;
+    // [gridfine] Upgrade covers unplaced entries AND ones placed on
+    // a same-square shorter grid — existing dots snap to the precise
+    // position instead of straddling two spots across views.
+    auto const upgradable = [&](QString const &g, float dist) {
+        if (dist < 0.0f)
+            return true;
+        return grid.size() > g.size() &&
+               grid.left(4).compare(g.left(4),
+                                    Qt::CaseInsensitive) == 0;
+    };
     for (auto b = m_hearingByBand.begin(); b != m_hearingByBand.end();
          ++b) {
         auto he = b.value().find(key);
-        if (he != b.value().end() && he->dist < 0.0f) {
+        if (he != b.value().end() && upgradable(he->grid, he->dist)) {
             he->grid = grid;
             he->az = v.azimuth();
             he->dist = v.distance();
@@ -508,7 +593,8 @@ void SpotMapWindow::rememberGrid(QString const &call,
         }
         for (auto &entry : b.value()) {
             auto ed = entry.heard.find(key);
-            if (ed != entry.heard.end() && ed->dist < 0.0f) {
+            if (ed != entry.heard.end() &&
+                upgradable(ed->grid, ed->dist)) {
                 ed->grid = grid;
                 ed->az = v.azimuth();
                 ed->dist = v.distance();
@@ -516,9 +602,40 @@ void SpotMapWindow::rememberGrid(QString const &call,
             }
         }
     }
+    // [gridfine] The SPOT datasets hold their birth grid until the
+    // station transmits again — upgrade them too, or a my-view dot
+    // sits on the 4-char square while the All-view anchor has
+    // snapped (field 2026-08-15: KJ7VWV at DN52 vs DN52QT).
+    auto const upgradeSpots = [&](QHash<QString, QVector<Spot>> &byBand) {
+        for (auto &vec : byBand)
+            for (Spot &sp : vec) {
+                if (sp.receiverCall == key &&
+                    grid.size() > sp.receiverGrid.size() &&
+                    grid.left(4).compare(sp.receiverGrid.left(4),
+                                         Qt::CaseInsensitive) == 0) {
+                    sp.receiverGrid = grid;
+                    sp.azimuth = v.azimuth();
+                    sp.distance = v.distance();
+                    touched = true;
+                }
+                if (sp.heardBy == key &&
+                    (sp.heardByDist < 0.0f ||
+                     (grid.size() > sp.heardByGrid.size() &&
+                      grid.left(4).compare(sp.heardByGrid.left(4),
+                                           Qt::CaseInsensitive) ==
+                          0))) {
+                    sp.heardByGrid = grid;
+                    sp.heardByAz = v.azimuth();
+                    sp.heardByDist = v.distance();
+                    touched = true;
+                }
+            }
+    };
+    upgradeSpots(m_spotsByBand);
+    upgradeSpots(m_allSpotsByBand);
     if (touched) {
         qCWarning(mqttclient_js8)
-            << "[SPOTMAP] on-air station placed via MQTT locator:"
+            << "[SPOTMAP] station position refined:"
             << key << "grid=" << grid; // [placelog]
         if (isVisible())
             requestReplot();
@@ -613,7 +730,12 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     // the heard SENDER (payload sl = sender locator), with the
     // reporting station kept for hover detail.
     QString plottedCall = receiverCall.toUpper();
-    QString plottedGrid = receiverGrid;
+    // [gridfine] Raw payload locators go through the same refinement
+    // as every on-air source — a station whose PSKR-REGISTERED
+    // locator is 4-char must not re-degrade a precise position on
+    // every report it files (field 2026-08-15: KJ7VWV DN52 vs
+    // DN52QT, my-view spot re-clobbered per report).
+    QString plottedGrid = refinedGrid(plottedCall, receiverGrid);
     QString heardBy;
     if (!senderIsMe) {
         QString const senderGrid = o.value(QStringLiteral("sl")).toString();
@@ -622,7 +744,7 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
             return;
         }
         plottedCall = sender.toUpper();
-        plottedGrid = senderGrid;
+        plottedGrid = refinedGrid(plottedCall, senderGrid); // [gridfine]
         heardBy = receiverCall.toUpper();
         // Country of the plotted (sender) station for hover.
         country = m_countryLookup ? m_countryLookup(plottedCall)
@@ -633,8 +755,10 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     // chart center, no extra data needed).
     float heardByAz = 0.0f;
     float heardByDist = -1.0f;
-    if (!heardBy.isEmpty() && receiverGrid.size() >= 4) {
-        if (auto const rvec = Geodesic::vector(m_myGrid, receiverGrid);
+    QString const reporterGrid =
+        refinedGrid(receiverCall.toUpper(), receiverGrid); // [gridfine]
+    if (!heardBy.isEmpty() && reporterGrid.size() >= 4) {
+        if (auto const rvec = Geodesic::vector(m_myGrid, reporterGrid);
             rvec.azimuth().isValid() && rvec.distance().isValid()) {
             heardByAz = rvec.azimuth();
             heardByDist = rvec.distance();
@@ -648,6 +772,8 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     }
 
     Spot spot;
+    spot.pskr = true;             // [pskrtoggle]
+    spot.reportsMe = senderIsMe;  // [allsuper] my-view = reporter of me
     spot.receiverCall = plottedCall;
     spot.receiverGrid = plottedGrid;
     spot.country = country;
@@ -655,7 +781,7 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     spot.heardByAz = heardByAz;
     spot.heardByDist = heardByDist;
     if (!heardBy.isEmpty())
-        spot.heardByGrid = receiverGrid; // [mondots] for the hover
+        spot.heardByGrid = reporterGrid; // [mondots] for the hover
     spot.freqHz = spotFreqHz;
     spot.snr = snr;
     spot.azimuth = vec.azimuth();
@@ -687,6 +813,17 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     // by spotter; the All view keys by heard sender.
     auto &spots =
         senderIsMe ? m_spotsByBand[band] : m_allSpotsByBand[band];
+    // [pskrtoggle] On-air provenance SURVIVES the replace: if the
+    // station's existing spot was radio-evidenced, the merged spot
+    // stays visible with PSKR display off (field 2026-08-15:
+    // KJ7VWV's fresh on-air spot clobbered by his own PSKR report
+    // → station vanished from the my-view inside its window).
+    for (Spot const &old : spots)
+        if (old.receiverCall == spot.receiverCall) {
+            if (!old.pskr)
+                spot.pskr = false;
+            break;
+        }
     spots.erase(std::remove_if(spots.begin(), spots.end(),
                                [&](Spot const &s) {
                                    return s.receiverCall ==
@@ -960,9 +1097,46 @@ void SpotMapWindow::redraw() {
         // [viewall] Dataset per the view buttons: my spotters, or
         // every heard station on the band.
         auto const &source = m_viewAll ? m_allSpotsByBand : m_spotsByBand;
-        for (Spot const &s : source.value(m_currentBand))
-            if (s.when >= cutoff)
+        // [posauth 2026-08-15] The hearing store is the ONE position
+        // source: when it has placed a station, its grid/az/dist
+        // override the spot's own — the two views can no longer
+        // disagree about where a station sits (4 fixes failed while
+        // position lived in two models).
+        auto const &posAuth = m_hearingByBand.value(m_currentBand);
+        for (Spot s : source.value(m_currentBand)) {
+            if (s.when < cutoff || !(m_showPskr || !s.pskr))
+                continue;
+            if (auto const it = posAuth.constFind(s.receiverCall);
+                it != posAuth.constEnd() && it->dist >= 0.0f) {
+                s.receiverGrid = it->grid;
+                s.azimuth = it->az;
+                s.distance = it->dist;
+            }
+            visible.append(s);
+        }
+        // [allsuper 2026-08-15] The All view is a SUPERSET of the
+        // my view by construction: stations known only as reporters
+        // of MY signal (PSKR rc / on-air spotters) get their my-view
+        // spot appended unless already plotted as senders (field:
+        // KN6ZOM, W7YSB/7 on the my map, absent from All).
+        if (m_viewAll) {
+            QSet<QString> present;
+            for (Spot const &s : visible)
+                present.insert(s.receiverCall);
+            for (Spot s : m_spotsByBand.value(m_currentBand)) {
+                if (s.when < cutoff || !(m_showPskr || !s.pskr) ||
+                    present.contains(s.receiverCall))
+                    continue;
+                if (auto const it = posAuth.constFind(s.receiverCall);
+                    it != posAuth.constEnd() && it->dist >= 0.0f) {
+                    s.receiverGrid = it->grid;
+                    s.azimuth = it->az;
+                    s.distance = it->dist;
+                }
+                present.insert(s.receiverCall);
                 visible.append(s);
+            }
+        }
     }
     // [relaykeep] Selected relay hops are pinned to the map while
     // relay-select is active: any hop whose live dot aged out of the
@@ -1035,13 +1209,21 @@ void SpotMapWindow::redraw() {
     // [onairscale] On-air stations render as anchors AFTER the scale
     // is fixed, so auto-zoom must count their distances here or they
     // clip off-ring (nomqtt field 2026-08-15).
-    if (m_viewAll) {
+    {
         auto const cutoffH = now.addSecs(-m_viewWindowSecs);
         auto const &hz = m_hearingByBand.value(m_currentBand);
+        QString const myUpS = m_myCall.toUpper();
         for (auto h = hz.constBegin(); h != hz.constEnd(); ++h) {
+            // [posauth] MY view fits only stations that hear ME.
+            bool const hearsMe =
+                h.value().snr > -99 || h.value().heard.contains(myUpS);
+            if (!m_viewAll && !hearsMe)
+                continue;
             if (h.value().lastSeen.isValid() &&
                 h.value().lastSeen >= cutoffH && h.value().dist > 0.0f)
                 maxDist = std::max(maxDist, h.value().dist);
+            if (!m_viewAll)
+                continue; // heard-endpoints are the All view's business
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed)
                 if (ed.value().when >= cutoffH && ed.value().dist > 0.0f)
@@ -1091,14 +1273,9 @@ void SpotMapWindow::redraw() {
         p.drawPolyline(poly);
     p.restore();
 
-    // Outer boundary circle (always) + azimuth ticks.
-    p.setPen(QPen{QColor(70, 70, 90), 1});
-    p.drawEllipse(center, R, R);
-    for (int az = 0; az < 360; az += 30) {
-        double const rad = az * DEG2RAD;
-        QPointF const dir{std::sin(rad), -std::cos(rad)};
-        p.drawLine(center + dir * (R * 0.97), center + dir * R);
-    }
+    // [scalebar 2026-08-15] Outer boundary circle, azimuth ticks and
+    // compass dropped (operator) — scale now reads from the bar above
+    // the SNR legend.
 
     // Distance rings: on-map option, default off (operator choice;
     // toggle UI to follow).
@@ -1139,24 +1316,6 @@ void SpotMapWindow::redraw() {
                 return e.mi;
         return qRound(scaleKm * 0.621371f);
     };
-    p.setPen(QColor(140, 140, 160));
-    p.drawText(QPointF{center.x() + 4,
-                       center.y() - R + p.fontMetrics().ascent() + 1},
-               QStringLiteral("%1 %2")
-                   .arg(scaleLabelValue())
-                   .arg(unitLabel));
-    p.setPen(QColor(190, 190, 210));
-    auto const cardinal = [&](int az, QString const &txt) {
-        double const rad = az * DEG2RAD;
-        QPointF const pos = center + QPointF{std::sin(rad), -std::cos(rad)} *
-                                         (R + MARGIN_PX / 2.0);
-        QRectF box{pos.x() - 10, pos.y() - 8, 20, 16};
-        p.drawText(box, Qt::AlignCenter, txt);
-    };
-    cardinal(0, QStringLiteral("N"));
-    cardinal(90, QStringLiteral("E"));
-    cardinal(180, QStringLiteral("S"));
-    cardinal(270, QStringLiteral("W"));
 
     // Center marker (my station).
     // [hometri] My station: small point-up triangle (TODO #145) —
@@ -1209,9 +1368,14 @@ void SpotMapWindow::redraw() {
     // Heat-colored solid dot when WE have decoded them (our own
     // last-heard SNR); hollow gray only when position is relay-
     // learned and we've never copied them ourselves.
-    if (m_viewAll) {
+    {
         auto const cutoffH = now.addSecs(-m_viewWindowSecs);
         auto const &hearers = m_hearingByBand.value(m_currentBand);
+        // [posauth 2026-08-15] The store renders in BOTH views now:
+        // All = everything; MY = stations that hear me (field:
+        // KL7UT/W7LPN/KN6OEH heard me on-air yet appeared only in
+        // All — their evidence lives solely in the hearing store,
+        // whose dot pass was All-gated).
         // [hbdots] On-air station dots. Operator rules 2026-08-14:
         //  - every on-air sender with a resolvable grid (heartbeats
         //    carry theirs in the message) gets a dot — hollow;
@@ -1234,12 +1398,21 @@ void SpotMapWindow::redraw() {
             m.receiverGrid = grid;
             m.azimuth = az;
             m.distance = dist;
-            m.snr = snr > -99 ? snr : 0;
+            // [snrwho] Keep the -99 no-report sentinel — collapsing
+            // to 0 made hover claim "hears me at 0 dB" for stations
+            // that never reported (KB7ITU, 2026-08-15). Paint is
+            // safe: monitorOnly renders hollow.
+            m.snr = snr;
             m.monitorOnly = (snr <= -99);
             ordered.append(m);
             posByCall.insert(call, project(az, dist));
         };
+        QString const myUpA = m_myCall.toUpper();
         for (auto h = hearers.constBegin(); h != hearers.constEnd(); ++h) {
+            bool const hearsMe = h.value().snr > -99 ||
+                                 h.value().heard.contains(myUpA);
+            if (!m_viewAll && !hearsMe)
+                continue; // MY view: hearers of me only
             if (h.value().lastSeen.isValid() &&
                 h.value().lastSeen >= cutoffH)
                 addAnchor(h.key(), h.value().az, h.value().dist,
@@ -1252,14 +1425,66 @@ void SpotMapWindow::redraw() {
                 addAnchor(h.key(), h.value().az, h.value().dist,
                           h.value().grid, h.value().snr,
                           ed.value().when);
-                addAnchor(ed.key(), ed.value().az, ed.value().dist,
-                          ed.value().grid, -99, ed.value().when);
+                if (m_viewAll) // heard-endpoints: All view only
+                    addAnchor(ed.key(), ed.value().az, ed.value().dist,
+                              ed.value().grid, -99, ed.value().when);
             }
         }
     }
 
     if (m_showConnections) {
-        p.setPen(QPen{QColor(144, 238, 144, 150), 1});
+        // [heararrow] Mid-line arrowhead POINTING AT THE HEARING
+        // station. Operator rules 2026-08-15: heads on the ALL map
+        // only, and only on lines that connect to ME (either
+        // direction), PSKR-sourced included. Head color follows the
+        // active pen.
+        auto const heardLine = [&p](QPointF const &hearer,
+                                    QPointF const &heard) {
+            p.drawLine(heard, hearer);
+            double const len = QLineF(heard, hearer).length();
+            if (len < 24.0)
+                return; // too short for a legible head
+            double const ang = std::atan2(hearer.y() - heard.y(),
+                                          hearer.x() - heard.x());
+            QPointF const dir{std::cos(ang), std::sin(ang)};
+            double const sz = 8.0; // head length (operator: larger)
+            // Tip offset hearer-ward of the midpoint by 3 head
+            // lengths: a bidirectional pair (each head drawn by its
+            // own edge, each offset toward ITS hearer) lands
+            // back-to-back with a 4-head-size space between them
+            // (operator 2026-08-15). Short lines center the head.
+            double const off = len >= 2.0 * (3.0 * sz) + 6.0
+                                   ? 3.0 * sz
+                                   : sz * 0.4;
+            QPointF const tip = (hearer + heard) / 2.0 + dir * off;
+            QPainterPath head(tip);
+            head.lineTo(tip - QPointF(std::cos(ang - 0.45),
+                                      std::sin(ang - 0.45)) * sz);
+            head.lineTo(tip - QPointF(std::cos(ang + 0.45),
+                                      std::sin(ang + 0.45)) * sz);
+            head.closeSubpath();
+            p.save();
+            p.setBrush(p.pen().color());
+            p.setPen(Qt::NoPen);
+            p.drawPath(head);
+            p.restore();
+        };
+        // [pskrline] Dark yellow (operator 2026-08-15; was light
+        // green) — distinct from blue on-air mesh and red relay path.
+        p.setPen(QPen{QColor(200, 170, 25, 170), 1});
+        // [melineall 2026-08-15] "Reports me" is a fact about the
+        // STATION, not about whichever spot object owns its dot: a
+        // reporter of my signal that also TRANSMITS is plotted from
+        // the sender dataset in the All view, and its line to me was
+        // lost with the skipped append (field: ND7M/NT5DF/K1KWC
+        // lined in my view, bare in All).
+        QSet<QString> meReporters;
+        if (m_viewAll) {
+            auto const cutoffR = now.addSecs(-m_viewWindowSecs);
+            for (Spot const &s : m_spotsByBand.value(m_currentBand))
+                if (s.when >= cutoffR && (m_showPskr || !s.pskr))
+                    meReporters.insert(s.receiverCall);
+        }
         for (Spot const &s : ordered) {
             QPointF const from = posByCall.value(s.receiverCall);
             // [connfix 2026-08-14] Branch on the VIEW, not on
@@ -1271,10 +1496,15 @@ void SpotMapWindow::redraw() {
             // their own; their edges come from each sender's spot.
             if (!m_viewAll) {
                 p.drawLine(center, from); // my view: center = me
-            } else if (!s.monitorOnly &&
-                       posByCall.contains(s.heardBy)) {
-                p.drawLine(from, posByCall.value(s.heardBy));
+                continue;
             }
+            if (!s.monitorOnly && posByCall.contains(s.heardBy))
+                p.drawLine(from, posByCall.value(s.heardBy));
+            // [melineall] Line to me for EVERY station that reported
+            // my signal, whatever dataset drew its dot. [heararrow]
+            // Connects to me → arrowhead at the hearing reporter.
+            if (meReporters.contains(s.receiverCall))
+                heardLine(from, center);
         }
         // [hearlines] On-air heard-mesh edges: 1 px BLUE, drawn after
         // (over) the green MQTT mesh — visual priority per operator
@@ -1295,13 +1525,22 @@ void SpotMapWindow::redraw() {
                     continue;
                 if (!m_viewAll) {
                     // MY view: X heard ME → X's dot to my triangle.
+                    // [heararrow] No heads here — every line
+                    // connects to me by definition.
                     if (ed.key() != myUp ||
                         !posByCall.contains(h.key()))
                         continue;
                     p.drawLine(posByCall.value(h.key()), center);
                 } else {
-                    if (posByCall.contains(h.key()) &&
-                        posByCall.contains(ed.key()))
+                    if (!posByCall.contains(h.key()) ||
+                        !posByCall.contains(ed.key()))
+                        continue;
+                    // [heararrow] All view: head only when I am an
+                    // endpoint; third-party edges stay bare.
+                    if (h.key() == myUp || ed.key() == myUp)
+                        heardLine(posByCall.value(h.key()),
+                                  posByCall.value(ed.key()));
+                    else
                         p.drawLine(posByCall.value(h.key()),
                                    posByCall.value(ed.key()));
                 }
@@ -1341,14 +1580,20 @@ void SpotMapWindow::redraw() {
         // their own to heat-color.
         bool hollow = s.monitorOnly;
         int paintSnr = s.snr;
-        if (m_viewAll) {
+        if (m_viewAll && !s.reportsMe) {
             // [allhollow] Override per the color-authority rule.
+            // [allsuper] reportsMe spots are exempt — their SNR IS
+            // a report of my signal, the very thing the authority
+            // exists to isolate.
             int const rep =
                 colorAuthority.contains(s.receiverCall)
                     ? colorAuthority.value(s.receiverCall).snr
                     : -99;
             hollow = (rep <= -99);
             paintSnr = rep;
+        } else if (m_viewAll) {
+            hollow = s.monitorOnly || s.snr <= -99;
+            paintSnr = s.snr;
         }
         if (hollow) {
             p.setPen(QPen{QColor(170, 170, 185,
@@ -1366,17 +1611,15 @@ void SpotMapWindow::redraw() {
     // Callsign labels: on-map option, default off (hover tooltip
     // provides identity; toggle UI to follow).
     if (m_showCallsigns) {
+        // [callsbtn] White on transparent, to the RIGHT of the dot,
+        // clear of it (operator 2026-08-15; both views).
+        p.setPen(Qt::white);
+        p.setBrush(Qt::NoBrush);
         for (auto const &ss : m_screenSpots) {
-            QString const label = ss.spot.receiverCall;
-            QRectF box = p.fontMetrics().boundingRect(label);
-            box.moveCenter(
-                QPointF{ss.pos.x(), ss.pos.y() - DOT_RADIUS_PX - 8});
-            box.adjust(-2, -1, 2, 1);
-            p.setPen(Qt::NoPen);
-            p.setBrush(QColor(0, 0, 0, 150));
-            p.drawRect(box);
-            p.setPen(Qt::white);
-            p.drawText(box, Qt::AlignCenter, label);
+            p.drawText(QRectF{ss.pos.x() + DOT_RADIUS_PX + 5.0,
+                              ss.pos.y() - 9.0, 140.0, 18.0},
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       ss.spot.receiverCall);
         }
     }
 
@@ -1428,21 +1671,24 @@ void SpotMapWindow::redraw() {
         accumMin < viewMin
             ? tr("last %1 of %2 min").arg(accumMin).arg(viewMin)
             : tr("last %1 min").arg(viewMin);
+    QString headline =
+        m_viewAll
+            // [viewall] All view counts heard stations, not
+            // spotters of me.
+            ? tr("All stations — %1 — %2 heard / %3")
+                  .arg(bandText)
+                  .arg(ordered.size())
+                  .arg(windowText)
+            : tr("%1 @ %2 — %3 — %4 spotters / %5")
+                  .arg(m_myCall, m_myGrid, bandText)
+                  .arg(ordered.size()) // [posauth] anchors count too
+                  .arg(windowText);
+    // [pskrtoggle] The MQTT connection state is only relevant while
+    // internet-sourced spots are shown.
+    if (m_showPskr && !m_stateText.isEmpty())
+        headline += QStringLiteral(" — ") + m_stateText;
     p.drawText(QRectF{0, 0, static_cast<qreal>(w), TITLE_STRIP_PX},
-               Qt::AlignCenter,
-               m_viewAll
-                   // [viewall] All view counts heard stations, not
-                   // spotters of me.
-                   ? tr("All stations — %1 — %2 heard / %3 — %4")
-                         .arg(bandText)
-                         .arg(ordered.size())
-                         .arg(windowText)
-                         .arg(m_stateText)
-                   : tr("%1 @ %2 — %3 — %4 spotters / %5 — %6")
-                         .arg(m_myCall, m_myGrid, bandText)
-                         .arg(visible.size())
-                         .arg(windowText)
-                         .arg(m_stateText));
+               Qt::AlignCenter, headline);
 
     if (ordered.isEmpty()) { // [onairscale] anchors count as spots
         p.setPen(QColor(150, 150, 170));
@@ -1462,9 +1708,28 @@ void SpotMapWindow::redraw() {
                           static_cast<qreal>(w),
                           static_cast<qreal>(LEGEND_STRIP_PX)},
                    QColor(16, 16, 24));
-        qreal const barW = std::min(280.0, w * 0.6);
+        // [scalebar] Bar width = the chart radius in pixels, so the
+        // scale legend above it IS the radius length (operator
+        // 2026-08-15); SNR bar matches it.
+        qreal const barW = static_cast<qreal>(R);
         QRectF bar{(w - barW) / 2.0,
                    static_cast<qreal>(h - LEGEND_STRIP_PX + 8), barW, 10};
+        {
+            qreal const yLine = h - LEGEND_STRIP_PX - 10.0;
+            p.setPen(QPen{QColor(190, 190, 210), 1});
+            p.drawLine(QPointF{bar.left(), yLine},
+                       QPointF{bar.right(), yLine});
+            p.drawLine(QPointF{bar.left(), yLine - 4},
+                       QPointF{bar.left(), yLine + 4}); // end ticks
+            p.drawLine(QPointF{bar.right(), yLine - 4},
+                       QPointF{bar.right(), yLine + 4});
+            p.setPen(QColor(190, 190, 210));
+            p.drawText(QRectF{bar.left(), yLine - 20.0, barW, 16.0},
+                       Qt::AlignHCenter | Qt::AlignBottom,
+                       QStringLiteral("%1 %2")
+                           .arg(scaleLabelValue())
+                           .arg(unitLabel));
+        }
         QLinearGradient lg{bar.topLeft(), bar.topRight()};
         for (int i = 0; i <= 10; ++i) {
             float const t = i / 10.0f;
@@ -1489,7 +1754,9 @@ void SpotMapWindow::redraw() {
     // PSKReporter MQTT. Solid 1 px swatches, right-aligned; subtle
     // backdrop so the labels read over busy map areas. Shown only
     // while the Connections overlay is on (operator 2026-08-15).
-    if (m_showConnections) {
+    // [pskrtoggle] Legend shown only with Connections on AND PSKR
+    // spots added in (operator 2026-08-15: hide BOTH lines otherwise).
+    if (m_showConnections && m_showPskr) {
         QFont lf = p.font();
         lf.setPointSize(8);
         p.setFont(lf);
@@ -1498,7 +1765,7 @@ void SpotMapWindow::redraw() {
             {QColor(90, 160, 255),
              tr("Heard by %1").arg(m_myCall.isEmpty() ? tr("me")
                                                       : m_myCall)},
-            {QColor(144, 238, 144), tr("Heard by PSKR")}};
+            {QColor(200, 170, 25), tr("Heard by PSKR")}};
         int const rowH = 11;
         qreal const ascent = p.fontMetrics().ascent();
         qreal maxW = 0;
@@ -1538,7 +1805,8 @@ void SpotMapWindow::positionWindowButtons() {
     if (!m_win15Btn) return;
     int const x = width() - 36 - 6; // right-aligned, mirrors zoom stack
     int y = TITLE_STRIP_PX + 6;
-    for (QToolButton *b : {m_win15Btn, m_win30Btn, m_win60Btn}) {
+    for (QToolButton *b :
+         {m_win5Btn, m_win15Btn, m_win30Btn, m_win60Btn}) {
         b->move(x, y);
         y += 22;
     }
@@ -1556,46 +1824,58 @@ void SpotMapWindow::positionWindowButtons() {
         m_viewAllBtn->setText(allText);
         // Width from the buttons' OWN sizeHint — the style knows
         // its true padding; hand-added fontMetrics constants don't.
-        int const wBtn = std::max({36, m_viewMineBtn->sizeHint().width(),
-                                   m_viewAllBtn->sizeHint().width()});
+        int const wBtn = std::max(
+            {36, m_viewMineBtn->sizeHint().width(),
+             m_viewAllBtn->sizeHint().width(),
+             m_pskrBtn ? m_pskrBtn->sizeHint().width() : 0});
         m_viewMineBtn->setFixedSize(wBtn, 20);
         m_viewAllBtn->setFixedSize(wBtn, 20);
         // One font height (~16 px) above the old position so the
         // bottom-center toast can't overlap the stack (operator,
         // 2026-08-14).
-        int vy = height() - LEGEND_STRIP_PX - 24 - 42; // 20+22 stack
+        // [pskrtoggle] Third row: one button height (20 px) of air
+        // below the view pair — separate function group.
+        int vy = height() - LEGEND_STRIP_PX - 24 - 42 - 42;
         for (QToolButton *b : {m_viewMineBtn, m_viewAllBtn}) {
             b->move(6, vy);
             vy += 22;
+        }
+        if (m_pskrBtn) {
+            m_pskrBtn->setFixedSize(wBtn, 20); // same length as pair
+            m_pskrBtn->move(6, vy + 20);
         }
     }
     // [connlines] Lower right, bottom-aligned with the view stack;
     // [relaysel] the relay rows stack directly above it.
     if (m_connBtn) {
-        int const wConn = std::max(
-            36,
-            m_connBtn->fontMetrics().horizontalAdvance(m_connBtn->text()) +
-                14);
+        // One shared width for the right-hand column (operator
+        // 2026-08-15): Show connections, Show call signs,
+        // Select relay(s) — widest sizeHint wins.
+        int wConn = std::max(36, m_connBtn->sizeHint().width());
+        if (m_callsBtn)
+            wConn = std::max(wConn, m_callsBtn->sizeHint().width());
+        if (m_relaySelBtn)
+            wConn = std::max(wConn, m_relaySelBtn->sizeHint().width());
         int const yConn = height() - LEGEND_STRIP_PX - 24 - 20;
         m_connBtn->setFixedSize(wConn, 20);
         m_connBtn->move(width() - wConn - 6, yConn);
+        // [callsbtn] Directly above Show connections.
+        if (m_callsBtn) {
+            m_callsBtn->setFixedSize(wConn, 20);
+            m_callsBtn->move(width() - wConn - 6, yConn - 22);
+        }
         if (m_relaySelBtn) {
-            // Row 2 (Done | Undo) shares the Connections column width.
+            // Row 2 (Done | Undo) shares the column width.
             int const half = (wConn - 4) / 2;
             m_relayDoneBtn->setFixedSize(half, 20);
             m_relayUndoBtn->setFixedSize(wConn - 4 - half, 20);
-            // One button height of air above Connections — the relay
-            // rows are a separate function group (operator,
-            // 2026-08-14).
-            int const yRow2 = yConn - 44;
+            // Relay rows lifted one button height above the calls
+            // button (operator 2026-08-15) — separate function group.
+            int const yRow2 = yConn - 66;
             m_relayDoneBtn->move(width() - wConn - 6, yRow2);
             m_relayUndoBtn->move(width() - wConn - 6 + half + 4, yRow2);
-            int const wSel = std::max(
-                wConn, m_relaySelBtn->fontMetrics().horizontalAdvance(
-                           m_relaySelBtn->text()) +
-                           14);
-            m_relaySelBtn->setFixedSize(wSel, 20);
-            m_relaySelBtn->move(width() - wSel - 6, yRow2 - 22);
+            m_relaySelBtn->setFixedSize(wConn, 20);
+            m_relaySelBtn->move(width() - wConn - 6, yRow2 - 22);
         }
     }
 }
@@ -1653,22 +1933,50 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         double const dist = best->spot.distance * (miles ? 0.621371 : 1.0);
         qint64 const ageSecs = best->spot.when.secsTo(
             DriftingDateTime::currentDateTimeUtc());
-        QString tip =
-            best->spot.rxOnly
-                // [mondots] Receive-only reporter — no SNR of its own.
-                ? tr("%1 (%2)\nmonitor · %3 %4 · %5 min ago")
+        QString tip;
+        if (best->spot.rxOnly) {
+            // [mondots] Receive-only reporter — no SNR of its own.
+            tip = tr("%1 (%2)\nmonitor · %3 %4 · %5 min ago")
                       .arg(best->spot.receiverCall,
                            best->spot.receiverGrid)
-                      .arg(qRound(dist))
-                      .arg(miles ? tr("mi") : tr("km"))
-                      .arg(ageSecs / 60)
-                : tr("%1 (%2)\n%3 dB · %4 %5 · %6 min ago")
-                      .arg(best->spot.receiverCall,
-                           best->spot.receiverGrid)
-                      .arg(best->spot.snr)
                       .arg(qRound(dist))
                       .arg(miles ? tr("mi") : tr("km"))
                       .arg(ageSecs / 60);
+        } else {
+            // [snrwho] A dB value is shown ONLY when it is a report
+            // of MY signal; -99 is the no-report sentinel, a real
+            // 0 dB report still shows (operator 2026-08-15). All
+            // view: third-party PSKR SNRs never display — only the
+            // hearing store's reported-to-me value qualifies. My
+            // view: the spot's snr IS their copy of me (sentinel
+            // possible on position-only on-air spots).
+            int reportedToMe = -99;
+            if (m_viewAll) {
+                auto const &ca = m_hearingByBand.value(m_currentBand);
+                if (auto const it =
+                        ca.constFind(best->spot.receiverCall);
+                    it != ca.constEnd())
+                    reportedToMe = it->snr;
+                // [allsuper] Internet reporters of me qualify too.
+                if (reportedToMe <= -99 && best->spot.reportsMe)
+                    reportedToMe = best->spot.snr;
+            } else {
+                reportedToMe = best->spot.snr;
+            }
+            // No-report spots carry no SNR line at all — the
+            // hollow circle already tells the story (operator
+            // 2026-08-15).
+            QString const snrPart =
+                reportedToMe > -99
+                    ? tr("hears me at %1 dB · ").arg(reportedToMe)
+                    : QString();
+            tip = tr("%1 (%2)\n%3%4 %5 · %6 min ago")
+                      .arg(best->spot.receiverCall,
+                           best->spot.receiverGrid, snrPart)
+                      .arg(qRound(dist))
+                      .arg(miles ? tr("mi") : tr("km"))
+                      .arg(ageSecs / 60);
+        }
         // [viewall] All-view spots: who reported hearing this station.
         if (!best->spot.heardBy.isEmpty()) {
             tip += tr("\nheard by %1").arg(best->spot.heardBy);
@@ -1855,16 +2163,9 @@ void SpotMapWindow::showEvent(QShowEvent *) {
         // Every (re)open starts in Auto — manual zoom/pan are
         // per-viewing gestures (operator directive 2026-08-02).
         zoomAuto();
-        // [viewall] Every open shows MY spots; "All" is a
-        // per-viewing gesture.
-        if (m_viewAll) {
-            m_viewAll = false;
-            m_viewMineBtn->setChecked(true);
-        }
-        // [connlines] Reopen starts with the overlay off.
-        if (m_connBtn && m_connBtn->isChecked())
-            m_connBtn->setChecked(false);
-        // [relaysel] And with relay-select off (clears the path).
+        // [persistui 2026-08-15] View type, Connections, and PSKR
+        // toggle PERSIST across reopen and sessions — only the
+        // relay builder resets (its path is a per-use gesture).
         if (m_relaySelBtn && m_relaySelBtn->isChecked())
             m_relaySelBtn->setChecked(false);
     }

@@ -170,12 +170,31 @@ void UI_Constructor::processCommandActivity() {
         // actual report of MY signal; other frames are position-only.
         if (m_spotMapWindow && toMe) {
             int reportedSnr = -99;
-            if (d.cmd == QStringLiteral(" SNR")) {
+            // [snrextra] HB ACKs report my signal too ("ACK -12"):
+            // the signed value rides in EXTRA. Subspace ARQ chunk
+            // acks ("ACK 1") carry their number in d.text with EXTRA
+            // empty, so parsing extra alone cannot mistake a chunk
+            // number for a dB value (field 2026-08-15, K6NLX).
+            if (d.cmd == QStringLiteral(" ACK") ||
+                d.cmd == QStringLiteral(" HEARTBEAT SNR")) {
                 bool ok = false;
-                if (int const v = d.text.trimmed()
-                                      .section(QLatin1Char(' '), 0, 0)
-                                      .toInt(&ok);
-                    ok)
+                if (int const v = d.extra.trimmed().toInt(&ok); ok)
+                    reportedSnr = v;
+            }
+            if (d.cmd == QStringLiteral(" SNR")) {
+                // [snrwho] The SNR value rides in the frame's EXTRA
+                // field ("+06" via formatSNR) — d.text is the BODY
+                // ONLY and is empty for SNR replies, so the old
+                // d.text parse NEVER succeeded (field 2026-08-15:
+                // fresh AC7WY/KJ7VWV replies hovered as "no signal
+                // report"). Text parse kept as fallback.
+                bool ok = false;
+                int v = d.extra.trimmed().toInt(&ok);
+                if (!ok)
+                    v = d.text.trimmed()
+                            .section(QLatin1Char(' '), 0, 0)
+                            .toInt(&ok);
+                if (ok)
                     reportedSnr = v;
             }
             m_spotMapWindow->addOnAirSpotOfMe(
@@ -235,6 +254,16 @@ void UI_Constructor::processCommandActivity() {
                         break;
                     rt = rt.mid(m.capturedLength());
                 }
+                // Overheard INTERMEDIATE hop: the payload is
+                // "DEST HEARING ..." — bare destination call, no '>'
+                // and no *DE* yet (field 2026-08-15: AC7WY's
+                // KI4HDU/K1KWC list lost when its final delivery
+                // never arrived). The frame's sender is the hearer.
+                static QRegularExpression const kDestHeadRe(
+                    QStringLiteral(R"(^(?<dest>[A-Z0-9/]+)\s+HEARING)"),
+                    QRegularExpression::CaseInsensitiveOption);
+                if (auto const dm = kDestHeadRe.match(rt); dm.hasMatch())
+                    rt = rt.mid(dm.capturedEnd("dest")).trimmed();
                 if (rt.toUpper().startsWith(QStringLiteral("HEARING")))
                     hearText = rt.mid(7); // drop "HEARING"
             }

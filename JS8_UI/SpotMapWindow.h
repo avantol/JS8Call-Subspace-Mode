@@ -147,7 +147,13 @@ class SpotMapWindow final : public QWidget {
         // operator 2026-08-15).
         bool monitorOnly = false;
         bool rxOnly = false;
-        int snr = 0;            // dB as reported by the spotter
+        bool pskr = false;      // [pskrtoggle] internet-sourced spot
+        // [allsuper] Spot's SNR is a report of MY signal (my-view
+        // datasets) — exempt from the All-view color override.
+        bool reportsMe = false;
+        int snr = -99;          // dB as reported by the spotter;
+                                // -99 = NO REPORT sentinel — never
+                                // default to a claimable real value
         qint64 freqHz = 0;      // exact RF Hz the spotter logged us at
         float azimuth = 0.0f;   // degrees true, from my grid
         float distance = 0.0f;  // km or miles per Configuration::miles()
@@ -222,6 +228,7 @@ class SpotMapWindow final : public QWidget {
     // [spotwin] Accumulation-window buttons (15/30/60 min, upper
     // right). Session-only; every open defaults to 60 (no
     // persistence, operator directive 2026-08-03).
+    class QToolButton *m_win5Btn = nullptr;
     class QToolButton *m_win15Btn = nullptr;
     class QToolButton *m_win30Btn = nullptr;
     class QToolButton *m_win60Btn = nullptr;
@@ -291,7 +298,11 @@ class SpotMapWindow final : public QWidget {
     // on-air stations the sanctioned text sources haven't placed.
     QHash<QString, QString> m_gridByCall;
     int m_wheelAccum = 0; // [wheelzoom] trackpad delta accumulator
+    QToolButton *m_pskrBtn = nullptr; // [pskrtoggle]
+    QToolButton *m_callsBtn = nullptr; // [callsbtn]
+    bool m_showPskr = true;
     void rememberGrid(QString const &call, QString const &grid);
+    QString refinedGrid(QString const &call, QString const &grid) const;
     void showRelayPathToast();
     QHash<QString, QVector<Spot>> m_allSpotsByBand;
 
