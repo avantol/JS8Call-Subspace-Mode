@@ -1189,7 +1189,7 @@ void UI_Constructor::on_actionShow_Spots_Map_triggered(bool checked) {
         m_spotMapWindow->raise();
         m_spotMapWindow->activateWindow();
     } else {
-        m_spotMapWindow->close();
+        m_spotMapWindow->userClose(); // [visrace] user intent
     }
 }
 

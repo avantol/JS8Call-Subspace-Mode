@@ -45,7 +45,18 @@ void UI_Constructor::processRxActivity() {
             ((m_messageBuffer[prevOffset].cmd.to == m_config.my_callsign()) ||
              // (isAllCallIncluded(m_messageBuffer[prevOffset].cmd.to))     ||
              // // uncomment this if we want to incrementally print allcalls
-             (isGroupCallIncluded(m_messageBuffer[prevOffset].cmd.to)))) {
+             (isGroupCallIncluded(m_messageBuffer[prevOffset].cmd.to)) ||
+             // [onfreqhdr2 2026-08-16] Overheard buffered traffic ON
+             // OUR OFFSET displays incrementally exactly like to-me
+             // traffic — header frame included (field: "N0JLO:
+             // KB1JCU" showed in band activity while the convo got
+             // orphaned payloads; the isDirected skip below killed
+             // the header, and assembly — the only other display
+             // path — is cleared by the station's next header).
+             // Single-frame commands never open a buffer and stay
+             // with processCommandActivity's gate — no duplicates.
+             (std::abs(d.offset - freqOffset) <=
+              JS8::Submode::rxThreshold(d.submode)))) {
             d.isBuffered = true;
             shouldDisplay = true;
 

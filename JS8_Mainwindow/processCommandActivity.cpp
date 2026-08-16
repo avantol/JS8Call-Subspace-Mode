@@ -708,16 +708,26 @@ void UI_Constructor::processCommandActivity() {
         // we're only responding to allcall, groupcalls, and our callsign at
         // this point, so we'll end after logging the callsigns we've heard
         if (!isAllCall && !toMe && !isGroupCall) {
-            // [onfreqhdr 2026-08-15] DISPLAY-ONLY exception: overheard
-            // directed traffic ON OUR OFFSET already shows its payload
-            // frames in the conversation window (processRxActivity's
-            // on-frequency rule) — without this, the FROM/TO header is
-            // the one piece that never prints, leaving orphaned
-            // payloads ("BELL *DE* WM8Q VHY" with no addressing;
-            // operator question 2026-08-15). Print the full header
-            // line; all processing/handling still skipped.
-            if (std::abs(d.offset - freq()) <=
-                JS8::Submode::rxThreshold(d.submode)) {
+            // [onfreqhdr 2026-08-15, reworked 2026-08-16]
+            // DISPLAY-ONLY exception for on-offset traffic to other
+            // stations. BUFFERED commands (multi-frame freetext,
+            // relays) are EXCLUDED here: their header now displays
+            // live at decode time (processDecodeEvent [onfreqhdr2])
+            // and their payload frames via the stock on-frequency
+            // rule — printing the assembled text again would
+            // duplicate everything the operator already watched.
+            // Single-frame commands are the remaining case: they
+            // never display anywhere else. Discriminator is the
+            // entry's OWN isBuffered flag (assembled arrivals are
+            // marked at re-enqueue; direct-queued frames are
+            // zero-init false) — NOT Varicode::isCommandBuffered(),
+            // which is true for nearly every directed cmd (leading
+            // space!) and would have silenced single-frame commands
+            // entirely (caught in the side-effect sweep,
+            // 2026-08-16).
+            if (!d.isBuffered &&
+                std::abs(d.offset - freq()) <=
+                    JS8::Submode::rxThreshold(d.submode)) {
                 displayTextForFreq(text, d.offset, d.utcTimestamp, false,
                                    true, false, d.submode);
             }

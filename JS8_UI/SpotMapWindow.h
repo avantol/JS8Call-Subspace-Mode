@@ -47,6 +47,9 @@ class SpotMapWindow final : public QWidget {
 
     void saveSettings();
     bool wasVisibleAtShutdown() const; // for startup restore
+    // [visrace] User-intent close (menu toggle): clears the
+    // restore-at-startup flag, unlike a shutdown-driven close.
+    void userClose();
     // Transient toast overlay (bottom-center, auto-hides ~2.5 s) —
     // feedback for click actions, e.g. "Copied K9AVT to outgoing
     // message".
@@ -151,12 +154,16 @@ class SpotMapWindow final : public QWidget {
         // [allsuper] Spot's SNR is a report of MY signal (my-view
         // datasets) — exempt from the All-view color override.
         bool reportsMe = false;
+        // [radioage] Last RADIO evidence for this station; `when`
+        // may be refreshed by internet reports, so PSKR-off aging
+        // must use this clock (dot-without-line gap, 2026-08-15).
+        QDateTime radioWhen;
         int snr = -99;          // dB as reported by the spotter;
                                 // -99 = NO REPORT sentinel — never
                                 // default to a claimable real value
         qint64 freqHz = 0;      // exact RF Hz the spotter logged us at
         float azimuth = 0.0f;   // degrees true, from my grid
-        float distance = 0.0f;  // km or miles per Configuration::miles()
+        float distance = 0.0f;  // ALWAYS km (unit conversion at paint)
     };
 
     // [spotwin] STORAGE horizon: spots are retained in memory per
@@ -240,15 +247,15 @@ class SpotMapWindow final : public QWidget {
     // my call over "All"). My view = spots of MY signal (spotters
     // plotted, as always). All view = every JS8 spot on the band
     // (the heard SENDER plotted, hover shows who reported it).
-    // Session-only; every open reverts to my view. NOTE: these two
-    // must NOT use autoExclusive — that would join the win15/30/60
-    // sibling group (autoExclusive groups by parent) — they use a
-    // QButtonGroup instead.
+    // Persists ([persistui]). NOTE: these two must NOT use
+    // autoExclusive — that would join the win5/15/30/60 sibling
+    // group (autoExclusive groups by parent) — QButtonGroup instead.
     class QToolButton *m_viewMineBtn = nullptr;
     class QToolButton *m_viewAllBtn = nullptr;
     bool m_viewAll = false;
-    // [connlines] "Connections" toggle (lower right): draw 1 px light
-    // green lines between stations hearing each other. Session-only.
+    // [connlines] "Show connections" toggle (lower right): 1 px
+    // lines — dark yellow = PSKR-sourced, blue = on-air mesh.
+    // Persists ([persistui]).
     class QToolButton *m_connBtn = nullptr;
     bool m_showConnections = false;
     // [relaysel] Relay-path builder. "Select relay(s)" toggles click-
@@ -267,11 +274,11 @@ class SpotMapWindow final : public QWidget {
     // 2026-08-14). Parallel to m_relayPath.
     QVector<Spot> m_relayPathSpots;
     void updateRelayButtons();
-    // [showfix] The session-only resets (view -> mine, Auto zoom,
-    // relay off) apply ONLY to a genuine open (first show, or show
-    // after close). Minimize-restore and desktop-switch also fire
-    // showEvent and were spontaneously reverting the map (operator,
-    // 2026-08-15, twice).
+    // [showfix] Genuine-open detection (first show, or show after
+    // close): only the relay builder resets there — everything else
+    // persists. Minimize-restore and desktop-switch also fire
+    // showEvent and must not reset anything (operator, 2026-08-15,
+    // twice).
     bool m_resetOnNextShow = true;
 
     // [hearlines] On-air heard-mesh storage: band → hearer →
@@ -298,15 +305,24 @@ class SpotMapWindow final : public QWidget {
     // on-air stations the sanctioned text sources haven't placed.
     QHash<QString, QString> m_gridByCall;
     int m_wheelAccum = 0; // [wheelzoom] trackpad delta accumulator
+    // [zoomkeepcenter] Auto-fit pan applied at the last redraw —
+    // baked into m_panPx when the operator leaves Auto so manual
+    // zoom keeps the same center point.
+    QPointF m_autoPanPx;
     QToolButton *m_pskrBtn = nullptr; // [pskrtoggle]
     QToolButton *m_callsBtn = nullptr; // [callsbtn]
     bool m_showPskr = true;
     void rememberGrid(QString const &call, QString const &grid);
     QString refinedGrid(QString const &call, QString const &grid) const;
     void showRelayPathToast();
+    void stepZoom(int dir); // [zoomkeepcenter]
+    // [radioage] THE presence/age clock; [snrwho] THE reported-to-me
+    // SNR rule — single definitions, every consumer reads these.
+    QDateTime effectiveWhen(Spot const &s) const;
+    int reportedToMeSnr(Spot const &s) const;
     QHash<QString, QVector<Spot>> m_allSpotsByBand;
 
-    // Drag-to-pan (session-only, like manual zoom; Auto recenters).
+    // Drag-to-pan (persists, [persistui]; the Auto button zeroes it).
     // m_panPx = chart-center offset from the geometric center, in
     // logical px. Spots draw at TRUE radial position (no outer-ring
     // clamp) so a zoomed-in view can pan out to distant clusters.
@@ -316,10 +332,7 @@ class SpotMapWindow final : public QWidget {
     QPointF m_pressPos;
     QPointF m_panAtPress;
 
-    // On-map display options (defaults per operator, 2026-07-14;
-    // on-map toggle UI to follow — details TBD).
-    bool m_showRings = false;
-    bool m_showCallsigns = false;
+    bool m_showCallsigns = false; // [callsbtn] persisted toggle
 
     // Projected world-outline cache (azimuthal equidistant around my
     // grid, clipped to the current scale) — rebuilt only when the
