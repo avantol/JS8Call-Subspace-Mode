@@ -231,6 +231,10 @@ class SpotMapWindow final : public QWidget {
     class QToolButton *m_zoomOutBtn = nullptr;
     float m_manualScaleKm = 0.0f;
     float m_lastScaleKm = 0.0f; // effective scale of the last redraw
+    // [fitdamp] Last AUTO-computed scale — the shrink hysteresis
+    // compares only against this (manual scales polluted the damper:
+    // Auto after "−" refused to re-fit). 0 = no damping (fresh fit).
+    float m_lastAutoScaleKm = 0.0f;
 
     // [spotwin] Accumulation-window buttons (15/30/60 min, upper
     // right). Session-only; every open defaults to 60 (no

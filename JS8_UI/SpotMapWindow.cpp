@@ -202,8 +202,10 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     // field: "failed to re-scale" once, unreproducible (needed a
     // prior drag). Manual zoom keeps pan as deliberate framing.
     auto const viewSwitchPan = [this]() {
-        if (m_manualScaleKm <= 0.0f)
+        if (m_manualScaleKm <= 0.0f) {
             m_panPx = QPointF{};
+            m_lastAutoScaleKm = 0.0f; // [fitdamp] new dataset = fresh fit
+        }
     };
     connect(m_viewMineBtn, &QToolButton::clicked, this,
             [this, viewSwitchPan]() {
@@ -323,9 +325,12 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     updateRelayButtons();
 
     positionWindowButtons();
-    // [persistui] Auto button doubles as the mode indicator
-    // (disabled = auto active); a persisted manual zoom re-arms it.
-    m_zoomAutoBtn->setEnabled(m_manualScaleKm > 0.0f);
+    // [autochk 2026-08-16] Auto shows as SELECTED while auto zoom is
+    // in effect — same checked styling as every other toggle, not
+    // disabled-looking (operator). Always clickable: re-fit/recenter.
+    m_zoomAutoBtn->setCheckable(true);
+    m_zoomAutoBtn->setAutoExclusive(false);
+    m_zoomAutoBtn->setChecked(m_manualScaleKm <= 0.0f);
     connect(m_zoomInBtn, &QToolButton::clicked,
             this, &SpotMapWindow::zoomIn);
     connect(m_zoomAutoBtn, &QToolButton::clicked,
@@ -1128,7 +1133,7 @@ void SpotMapWindow::stepZoom(int const dir) {
         m_panPx += m_autoPanPx; // leaving Auto: keep its framing
     m_manualScaleKm = stepScale(oldScale, dir);
     m_panPx *= oldScale / m_manualScaleKm;
-    m_zoomAutoBtn->setEnabled(true);
+    m_zoomAutoBtn->setChecked(false); // [autochk] manual now
     requestReplot();
 }
 
@@ -1139,7 +1144,8 @@ void SpotMapWindow::zoomOut() { stepZoom(+1); }
 void SpotMapWindow::zoomAuto() {
     m_manualScaleKm = 0.0f;
     m_panPx = QPointF{}; // recenter — Auto = fit all, centered
-    m_zoomAutoBtn->setEnabled(false);
+    m_lastAutoScaleKm = 0.0f; // [fitdamp] explicit press = fresh fit
+    m_zoomAutoBtn->setChecked(true); // [autochk] auto in effect
     requestReplot();
 }
 
@@ -1391,10 +1397,16 @@ void SpotMapWindow::redraw() {
     // the need falls well under the current scale — a far station
     // blinking at the view-window age boundary was flapping the
     // auto zoom 5000↔4000 every few seconds (viewlog, 02:06Z).
-    if (m_manualScaleKm <= 0.0f && m_lastScaleKm > 0.0f &&
-        autoScaleKm < m_lastScaleKm &&
-        needKm > 0.7f * m_lastScaleKm)
-        autoScaleKm = m_lastScaleKm;
+    // Damps ONLY against the last AUTO scale: comparing against
+    // m_lastScaleKm let MANUAL scales pollute the damper (viewlog
+    // 03:13Z — Auto after "−" refused to re-fit from 6000 to 5000).
+    if (m_manualScaleKm <= 0.0f) {
+        if (m_lastAutoScaleKm > 0.0f &&
+            autoScaleKm < m_lastAutoScaleKm &&
+            needKm > 0.7f * m_lastAutoScaleKm)
+            autoScaleKm = m_lastAutoScaleKm;
+        m_lastAutoScaleKm = autoScaleKm;
+    }
     float const scaleKm =
         m_manualScaleKm > 0.0f ? m_manualScaleKm : autoScaleKm;
     m_lastScaleKm = scaleKm;
@@ -2044,7 +2056,7 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         }
         if (m_dragging) {
             m_panPx = m_panAtPress + d;
-            m_zoomAutoBtn->setEnabled(true); // Auto now recenters too
+            m_zoomAutoBtn->setChecked(false); // [autochk] drag = manual
             redraw();
             return;
         }
