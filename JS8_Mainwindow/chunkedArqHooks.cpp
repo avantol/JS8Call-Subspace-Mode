@@ -24,6 +24,7 @@
  */
 
 #include "JS8_UI/mainwindow.h"
+#include "JS8_UI/ICS213Dialog.h"
 
 #include <QAbstractButton>
 #include <QDateTime>
@@ -38,6 +39,9 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QPlainTextEdit>
+#include <QVBoxLayout>
+#include <QPushButton>
 
 namespace {
 
@@ -906,19 +910,59 @@ void UI_Constructor::promptAndSaveReceivedFile(
     // and connect to its finished() signal for the save/discard
     // decision. Operator can keep using the rest of JS8Call while
     // the dialog sits; the dialog stays open until clicked.
+    // [ICS213 2026-08-18] Detection first — the prompt itself says
+    // "ICS-213 form" for a recognized form. Our filename convention,
+    // or the form banner in the decoded bytes (V2/V3; V1 payload is
+    // still base32 here, so the name prefix carries V1 detection).
+    bool const isIcs213Form =
+        header.name.startsWith(QStringLiteral("ICS213_"),
+                               Qt::CaseInsensitive) ||
+        payloadBytes.contains("GENERAL MESSAGE (ICS-213)");
+    // A _REPLY form completes the exchange — no reply-to-reply.
+    bool const isReplyForm =
+        header.name.contains(QStringLiteral("_REPLY"),
+                             Qt::CaseInsensitive);
     auto const msg = QStringLiteral(
-        "Incoming file from %1\n\n"
-        "    Name:  %2\n"
-        "    Size:  %3 bytes\n\n"
-        "Save to file storage?").arg(fromCall, header.name).arg(header.bytes);
+        "Incoming %1 from %2\n\n"
+        "    Name:  %3\n"
+        "    Size:  %4 bytes\n\n"
+        "Save to file storage?")
+        .arg(isIcs213Form ? QStringLiteral("ICS-213 form")
+                          : QStringLiteral("file"),
+             fromCall, header.name).arg(header.bytes);
     auto *box = new QMessageBox(this);
-    box->setWindowTitle(QStringLiteral("Incoming file"));
+    box->setWindowTitle(isIcs213Form
+                            ? QStringLiteral("Incoming ICS-213 form")
+                            : QStringLiteral("Incoming file"));
     box->setText(msg);
     box->setIcon(QMessageBox::Question);
     box->setStandardButtons(QMessageBox::Save | QMessageBox::Discard);
     box->setDefaultButton(QMessageBox::Save);
     box->setWindowModality(Qt::NonModal);
     box->setAttribute(Qt::WA_DeleteOnClose);
+    QPushButton *showBtn =
+        isIcs213Form
+            ? box->addButton(QStringLiteral("Save && Show now"),
+                             QMessageBox::AcceptRole)
+            : nullptr;
+    // [ICS213 reply] "Reply" = save + open the form in reply mode.
+    // Gated by the shared interpretability probe — if the bytes
+    // don't parse (foreign layout, or a V1 payload still in base32
+    // at this point), the button shows but stays disabled.
+    QPushButton *replyBtn = nullptr;
+    if (isIcs213Form && !isReplyForm) {
+        replyBtn = box->addButton(QStringLiteral("Reply"),
+                                  QMessageBox::AcceptRole);
+        if (ICS213Dialog::probeFormat(payloadBytes) < 0) {
+            replyBtn->setEnabled(false);
+            replyBtn->setToolTip(
+                QStringLiteral("Unable to interpret the form"));
+        } else {
+            replyBtn->setToolTip(QStringLiteral(
+                "The form will be saved, and you may reply "
+                "immediately"));
+        }
+    }
 
     // Capture by value — payloadBase32 / fromCall / header / msgId
     // need to survive the dialog's lifetime even if the original
@@ -934,12 +978,15 @@ void UI_Constructor::promptAndSaveReceivedFile(
 
     connect(box, &QMessageBox::finished, this,
             [this, box, payloadCopy, bytesCopy, verCopy, fromCopy,
-             headerCopy, msgIdCopy]
+             headerCopy, msgIdCopy, showBtn, replyBtn]
             (int result) {
-        Q_UNUSED(box);  // WA_DeleteOnClose handles cleanup.
         QMessageBox::StandardButton const choice =
             static_cast<QMessageBox::StandardButton>(result);
-        if (choice != QMessageBox::Save) {
+        bool const wantShow =
+            showBtn && box->clickedButton() == showBtn;
+        bool const wantReply =
+            replyBtn && box->clickedButton() == replyBtn;
+        if (choice != QMessageBox::Save && !wantShow && !wantReply) {
             qCWarning(chunkedarq_js8)
                 << "[FT-RX] operator declined save — peer=" << fromCopy
                 << "msgId=" << msgIdCopy
@@ -991,6 +1038,35 @@ void UI_Constructor::promptAndSaveReceivedFile(
                            /*isNewLine=*/true,
                            /*isLast=*/true,
                            m_nSubMode);
+
+        // [ICS213 reply] Save is done — open the reply form wired
+        // back to the original sender.
+        if (wantReply)
+            openIcs213Reply(savedPath, fromCopy);
+
+        // [ICS213] "Show now": open the saved form in a modeless
+        // read-only viewer.
+        if (wantShow) {
+            QFile vf{savedPath};
+            if (vf.open(QIODevice::ReadOnly)) {
+                auto *view = new QDialog(this);
+                view->setWindowTitle(
+                    QStringLiteral("ICS-213 — from %1").arg(fromCopy));
+                view->setAttribute(Qt::WA_DeleteOnClose);
+                auto *lay = new QVBoxLayout(view);
+                auto *txt = new QPlainTextEdit(view);
+                txt->setReadOnly(true);
+                QFont mono{QStringLiteral("Monospace")};
+                mono.setStyleHint(QFont::TypeWriter);
+                txt->setFont(mono);
+                txt->setPlainText(
+                    QString::fromUtf8(vf.readAll()));
+                lay->addWidget(txt);
+                view->resize(560, 620);
+                view->show();
+                view->raise();
+            }
+        }
 
         // [BUILD 337 TODO #95] If the received file is TEXT and
         // contains http(s) URLs, show them in the confirmation

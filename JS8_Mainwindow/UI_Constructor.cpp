@@ -2111,6 +2111,18 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 // waterfall-watching humans. Disabled during ARQ
                 // transfers and while another audio-visual HAIL is
                 // already in flight.
+                // [ICS213 2026-08-18] Form-entry replaces the file
+                // picker; everything downstream is the ordinary ARQ
+                // file transfer (operator constraint: no new wire
+                // format, V1-compatible).
+                m_sendIcs213Action = menu->addAction(
+                    QStringLiteral("Send ICS-213 form…"));
+                m_sendIcs213Action->setToolTip(
+                    "Compose a standard ICS-213 General Message form "
+                    "and send it as an ARQ file transfer.");
+                connect(m_sendIcs213Action, &QAction::triggered, this,
+                        &UI_Constructor::on_sendIcs213FormAction_triggered);
+
                 m_sendVisibleHailAction = menu->addAction(
                     QStringLiteral("Send audio-visual HAIL"));
                 m_sendVisibleHailAction->setToolTip(

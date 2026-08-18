@@ -463,6 +463,9 @@ class UI_Constructor : public QMainWindow {
     void decodeBusy(bool b);
     void decodeDone();
     void on_startTxButton_toggled(bool checked);
+    // [ICS213] Compose-and-send dialog (chevron menu) — the file
+    // picker of an ordinary ARQ file transfer replaced by a form.
+    void on_sendIcs213FormAction_triggered();
     // [#148 split Send] The WIDGET stays enabled full-time so the
     // arrow half (send-options menu) is always reachable — build-367
     // chevron convention: "chevron enabled full-time; the menu
@@ -897,6 +900,12 @@ class UI_Constructor : public QMainWindow {
     // swapped only on TRANSITIONS — Build 309 proved per-frame
     // styling on this button lags.
     bool m_sendChevronRed{false};
+    QAction *m_sendIcs213Action{nullptr}; // [ICS213]
+    QPointer<class ICS213Dialog> m_ics213Dialog; // [ICS213] open form
+    QPointer<class ICS213Dialog> m_ics213ReplyDialog; // [ICS213] reply
+    void syncIcs213ArqGate(); // [ICS213] gate = m_sendFileAction state
+    void openIcs213Reply(QString const &savedPath,
+                         QString const &fromCall); // [ICS213]
     bool m_sendSideOn{true}; // [#148] see setSendSideEnabled
     void dispatchArqBody(QString const &body, QString const &peer,
                          int peerLevel);

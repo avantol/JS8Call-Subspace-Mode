@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ICS213Dialog</class>
+ <widget class="QDialog" name="ICS213Dialog">
+  <property name="windowTitle">
+   <string>Send ICS-213 Form</string>
+  </property>
+  <property name="minimumSize">
+   <size><width>520</width><height>560</height></size>
+  </property>
+  <layout class="QVBoxLayout" name="outerLayout">
+   <item>
+    <layout class="QFormLayout" name="formLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="incidentLabel"><property name="text"><string>1. Incident name (optional)</string></property></widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QLineEdit" name="incidentEdit"><property name="maxLength"><number>40</number></property></widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="toLabel"><property name="text"><string>2. To (name and position)</string></property></widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QLineEdit" name="toEdit"><property name="maxLength"><number>40</number></property></widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="fromLabel"><property name="text"><string>3. From (name and position)</string></property></widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QLineEdit" name="fromEdit"><property name="maxLength"><number>40</number></property></widget>
+     </item>
+     <item row="3" column="0">
+      <widget class="QLabel" name="subjectLabel"><property name="text"><string>4. Subject</string></property></widget>
+     </item>
+     <item row="3" column="1">
+      <widget class="QLineEdit" name="subjectEdit"><property name="maxLength"><number>40</number></property></widget>
+     </item>
+     <item row="4" column="0">
+      <widget class="QLabel" name="precedenceLabel"><property name="text"><string>Precedence</string></property></widget>
+     </item>
+     <item row="4" column="1">
+      <widget class="QComboBox" name="precedenceCombo">
+       <item><property name="text"><string>Routine</string></property></item>
+       <item><property name="text"><string>Priority</string></property></item>
+       <item><property name="text"><string>Immediate</string></property></item>
+      </widget>
+     </item>
+     <item row="5" column="0">
+      <widget class="QLabel" name="dateLabel"><property name="text"><string>5. Date (UTC)</string></property></widget>
+     </item>
+     <item row="5" column="1">
+      <widget class="QLineEdit" name="dateEdit"><property name="maxLength"><number>10</number></property></widget>
+     </item>
+     <item row="6" column="0">
+      <widget class="QLabel" name="timeLabel"><property name="text"><string>6. Time (UTC)</string></property></widget>
+     </item>
+     <item row="6" column="1">
+      <widget class="QLineEdit" name="timeEdit"><property name="maxLength"><number>5</number></property></widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="messageLabel"><property name="text"><string>7. Message</string></property></widget>
+   </item>
+   <item>
+    <widget class="QPlainTextEdit" name="messageEdit"/>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="approvedLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="approvedLabel"><property name="text"><string>8. Approved by (name)</string></property></widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QLineEdit" name="approvedEdit"><property name="maxLength"><number>40</number></property></widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="positionLabel"><property name="text"><string>Position / title</string></property></widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QLineEdit" name="positionEdit"><property name="maxLength"><number>40</number></property></widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="formatLabel"><property name="text"><string>File format</string></property></widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QComboBox" name="formatCombo">
+       <item><property name="text"><string>Standard form layout (.txt)</string></property></item>
+       <item><property name="text"><string>Compact KEY: value (.txt)</string></property></item>
+       <item><property name="text"><string>Winlink-compatible (.xml)</string></property></item>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="replyLabel">
+     <property name="text"><string>9. Reply (By Recipient):</string></property>
+     <property name="visible"><bool>false</bool></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QPlainTextEdit" name="replyEdit">
+     <property name="visible"><bool>false</bool></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="replyFormLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="repliedByLabel">
+       <property name="text"><string>10. Replied by (name)</string></property>
+       <property name="visible"><bool>false</bool></property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QLineEdit" name="repliedByEdit">
+       <property name="maxLength"><number>40</number></property>
+       <property name="visible"><bool>false</bool></property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="replyPositionLabel">
+       <property name="text"><string>Position / title</string></property>
+       <property name="visible"><bool>false</bool></property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QLineEdit" name="replyPositionEdit">
+       <property name="maxLength"><number>40</number></property>
+       <property name="visible"><bool>false</bool></property>
+      </widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="replyDateTimeLabel">
+       <property name="text"><string>Date/Time (UTC)</string></property>
+       <property name="visible"><bool>false</bool></property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QLineEdit" name="replyDateTimeEdit">
+       <property name="maxLength"><number>20</number></property>
+       <property name="visible"><bool>false</bool></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="footerLabel">
+     <property name="text"><string>0 characters</string></property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonRow">
+     <item>
+      <widget class="QPushButton" name="clearButton">
+       <property name="text"><string>Clear draft</string></property>
+       <property name="toolTip"><string>Clear this form and delete the draft</string></property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QLabel" name="arqBusyLabel">
+       <property name="text"><string>(ARQ in progress)</string></property>
+       <property name="visible"><bool>false</bool></property>
+       <property name="styleSheet"><string notr="true">color: #b06000;</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="saveButton">
+       <property name="text"><string>Save as file</string></property>
+       <property name="toolTip"><string>The form will be saved as a file, to be sent later using 'Send file'</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="sendButton">
+       <property name="text"><string>Send via ARQ</string></property>
+       <property name="toolTip"><string>The form will be saved as a file, and sent to the recipient immediately</string></property>
+       <property name="default"><bool>true</bool></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="cancelButton">
+       <property name="text"><string>Save as draft</string></property>
+       <property name="toolTip"><string>This form will be opened the next time you select &quot;Send ICS-213 form…&quot;</string></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

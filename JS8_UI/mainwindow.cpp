@@ -12,7 +12,9 @@
 
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 #include "JS8_Main/FileTransfer.h"
+#include "JS8_UI/ICS213Dialog.h"
 #include "JS8_Main/NativeBinary.h"
+#include "JS8_Include/SettingsGroup.h"
 
 #include <QFile>
 #include <QFileDialog>
@@ -1534,6 +1536,10 @@ void UI_Constructor::setSubmode(int submode) {
     if (ui->modeBtnTurbo)  { ui->modeBtnTurbo->blockSignals(true);  ui->modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   ui->modeBtnTurbo->blockSignals(false); }
     if (ui->modeBtnSlow)   { ui->modeBtnSlow->blockSignals(true);   ui->modeBtnSlow->setChecked(submode == Varicode::JS8CallSlow);     ui->modeBtnSlow->blockSignals(false); }
     if (ui->modeBtnFT2)    { ui->modeBtnFT2->blockSignals(true);    ui->modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       ui->modeBtnFT2->blockSignals(false); }
+
+    // [ICS213] Speed change reprices the form's airtime estimate.
+    if (m_ics213Dialog) m_ics213Dialog->refreshEstimate();
+    if (m_ics213ReplyDialog) m_ics213ReplyDialog->refreshEstimate();
 
     setupJS8();
     Q_EMIT submodeChanged(Varicode::intToSubmode(submode));
@@ -7011,16 +7017,70 @@ QString UI_Constructor::resolveArqFilePeer() {
     return peer;
 }
 
+// [ICS213] See ICS213Dialog.h. Peer resolved up front (same flow as
+// Send file); the dialog is MODELESS so RX/operation continue while
+// composing — the draft autosave covers interrupts.
+void UI_Constructor::on_sendIcs213FormAction_triggered() {
+    QString const peer = resolveArqFilePeer();
+    if (peer.isEmpty())
+        return;
+    if (m_ics213Dialog) { // single instance
+        m_ics213Dialog->raise();
+        m_ics213Dialog->activateWindow();
+        return;
+    }
+    auto *dlg = new ICS213Dialog(
+        m_settings, m_config.my_callsign(),
+        QDir{FileTransfer::receiveDirectory()},
+        [this](int const chars) {
+            // Rough transfer estimate at the current speed: ~10
+            // payload chars per frame plus handshake overhead.
+            double const period =
+                JS8::Submode::periodMS(m_nSubMode) / 1000.0;
+            return (std::ceil(chars / 10.0) + 6.0) * period;
+        },
+        this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    m_ics213Dialog = dlg;
+    connect(dlg, &QObject::destroyed, this,
+            [this]() { syncIcs213ArqGate(); });
+    connect(dlg, &ICS213Dialog::sendRequested, this,
+            [this, peer](QString const &path) {
+                startFileTransferViaArq(path, peer);
+            });
+    syncIcs213ArqGate(); // disables the menu item; seeds dialog busy state
+    dlg->show();
+    dlg->raise();
+}
+
 void UI_Constructor::on_sendFileButton_clicked() {
     QString const peer = resolveArqFilePeer();
     if (peer.isEmpty()) return;
 
+    // [ICS213-era 2026-08-18] Default = the FILE STORAGE folder;
+    // the last folder the operator picked from persists as the new
+    // default, falling back to storage if it no longer exists.
+    QString startDir;
+    {
+        SettingsGroup g{m_settings, "FileTransfer"};
+        startDir = m_settings
+                       ->value("SendFileLastDir",
+                               FileTransfer::receiveDirectory())
+                       .toString();
+    }
+    if (startDir.isEmpty() || !QDir{startDir}.exists())
+        startDir = FileTransfer::receiveDirectory();
     QString const filePath = QFileDialog::getOpenFileName(
         this,
         QStringLiteral("Pick a file to send via ARQ"),
-        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        startDir,
         QStringLiteral("Any file (*)"));
     if (filePath.isEmpty()) return;  // user cancelled
+    {
+        SettingsGroup g{m_settings, "FileTransfer"};
+        m_settings->setValue("SendFileLastDir",
+                             QFileInfo{filePath}.absolutePath());
+    }
 
     startFileTransferViaArq(filePath, peer);
 }
@@ -9201,6 +9261,7 @@ void UI_Constructor::updateTextDisplay() {
                              m_chunkedArq->hasActiveRxWindow());
         m_sendFileAction->setEnabled(canTransmit && !isTransmitting &&
                                      !arqSessionBusy);
+        syncIcs213ArqGate(); // [ICS213]
         if (m_sendWebLinkAction)
             m_sendWebLinkAction->setEnabled(
                 canTransmit && !isTransmitting && !arqSessionBusy);
@@ -9407,6 +9468,7 @@ void UI_Constructor::updateTxButtonDisplay() {
         // menu action mirrors Send's disabled state (no TX while
         // queued / transmitting).
         if (m_sendFileAction) m_sendFileAction->setEnabled(false);
+        syncIcs213ArqGate(); // [ICS213]
         if (m_sendWebLinkAction) m_sendWebLinkAction->setEnabled(false);
     } else {
         QString const buttonText =
@@ -9426,9 +9488,63 @@ void UI_Constructor::updateTxButtonDisplay() {
         // full-time for discoverability.
         if (m_sendFileAction)
             m_sendFileAction->setEnabled(canTransmit && !arqRxBusy);
+        syncIcs213ArqGate(); // [ICS213]
         if (m_sendWebLinkAction)
             m_sendWebLinkAction->setEnabled(canTransmit && !arqRxBusy);
     }
+}
+
+// [ICS213 2026-08-17] ONE authority for the ICS-213 ARQ gate: the
+// "Send file" action's enabled state (operator: interlock applies
+// "exactly when the ARQ other menu items are disabled"). Called
+// after every site that sets m_sendFileAction, and when the form
+// closes. Menu item additionally stays disabled while the form is
+// OPEN (single instance, re-enables only when the form closes).
+void UI_Constructor::syncIcs213ArqGate() {
+    bool const busy = m_sendFileAction && !m_sendFileAction->isEnabled();
+    // One form window at a time: the menu stays disabled while EITHER
+    // the compose form or a reply form is open.
+    if (m_sendIcs213Action)
+        m_sendIcs213Action->setEnabled(!busy && !m_ics213Dialog &&
+                                       !m_ics213ReplyDialog);
+    if (m_ics213Dialog) m_ics213Dialog->setArqBusy(busy);
+    if (m_ics213ReplyDialog) m_ics213ReplyDialog->setArqBusy(busy);
+}
+
+// [ICS213 reply] Open the received form in reply mode. Peer is the
+// ORIGINAL SENDER (from the transfer), not the selected callsign —
+// the reply goes back to whoever sent the form.
+void UI_Constructor::openIcs213Reply(QString const &savedPath,
+                                     QString const &fromCall) {
+    if (m_ics213ReplyDialog) {
+        m_ics213ReplyDialog->raise();
+        m_ics213ReplyDialog->activateWindow();
+        return;
+    }
+    auto *dlg = new ICS213Dialog(
+        m_settings, m_config.my_callsign(),
+        QDir{FileTransfer::receiveDirectory()},
+        [this](int const chars) {
+            double const period =
+                JS8::Submode::periodMS(m_nSubMode) / 1000.0;
+            return (std::ceil(chars / 10.0) + 6.0) * period;
+        },
+        this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    if (!dlg->enterReplyMode(savedPath, fromCall)) {
+        delete dlg; // warning already shown by enterReplyMode
+        return;
+    }
+    m_ics213ReplyDialog = dlg;
+    connect(dlg, &QObject::destroyed, this,
+            [this]() { syncIcs213ArqGate(); });
+    connect(dlg, &ICS213Dialog::sendRequested, this,
+            [this, fromCall](QString const &path) {
+                startFileTransferViaArq(path, fromCall);
+            });
+    syncIcs213ArqGate(); // menu off while open; seed busy state
+    dlg->show();
+    dlg->raise();
 }
 
 QString UI_Constructor::callsignSelected(bool) {

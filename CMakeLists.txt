@@ -315,6 +315,9 @@ target_sources(
   JS8_UI/SpotMapGeoData.cpp
   JS8_UI/SpotMapWindow.cpp
   JS8_UI/mainwindow.cpp
+  JS8_UI/ICS213Dialog.cpp
+  JS8_UI/ICS213Dialog.h
+  JS8_UI/ICS213Dialog.ui
   JS8_UI/MessageReplyDialog.cpp
   JS8_UI/MessagePanel.cpp
   JS8_UI/SpeechBalloon.cpp
