@@ -345,6 +345,16 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                 if (existingIsFT2 != incomingIsFT2)
                                     continue;
                             }
+                            // [BANDROW] The bucket-slosh suspect
+                            // (#156 investigation 2026-08-16): log
+                            // every migration so render-state
+                            // anomalies are attributable.
+                            qCWarning(mainwindow_js8)
+                                << "[BANDROW] migrate" << prevOffset
+                                << "->" << offset << "items="
+                                << m_bandActivity[prevOffset].size()
+                                << "trigger="
+                                << decodedtext.message().left(20);
                             m_bandActivity[offset] = m_bandActivity[prevOffset];
                             m_bandActivity.remove(prevOffset);
                             break;
@@ -499,6 +509,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                     }
 
                     m_rxActivityQueue.append(d);
+                    // [BANDROW] one line per band-activity append —
+                    // decodes are sparse, warn-level is fine.
+                    qCWarning(mainwindow_js8)
+                        << "[BANDROW] append" << offset
+                        << "bits=" << d.bits
+                        << "buffered=" << d.isBuffered
+                        << "text=" << d.text.left(24);
                     m_bandActivity[offset].append(d);
                     // Build 145: cap by submode class. Subspace and
                     // Standard each keep an independent 10-frame

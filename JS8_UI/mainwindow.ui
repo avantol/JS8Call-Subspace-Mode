@@ -1418,6 +1418,9 @@ QTextEdit[transmitting=&quot;true&quot;] {
        </widget>
       </widget>
       <widget class="QWidget" name="macroHorizonalWidget" native="true">
+       <property name="styleSheet">
+        <string notr="true">QPushButton, QToolButton { padding: 2px 3px; }</string>
+       </property>
        <property name="sizePolicy">
         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
          <horstretch>0</horstretch>
@@ -1427,7 +1430,7 @@ QTextEdit[transmitting=&quot;true&quot;] {
        <property name="minimumSize">
         <size>
          <width>0</width>
-         <height>40</height>
+         <height>30</height>
         </size>
        </property>
        <property name="maximumSize">
@@ -1436,69 +1439,20 @@ QTextEdit[transmitting=&quot;true&quot;] {
          <height>30</height>
         </size>
        </property>
-       <layout class="QGridLayout" name="gridLayout">
-        <property name="leftMargin">
-         <number>0</number>
-        </property>
-        <property name="topMargin">
-         <number>0</number>
-        </property>
-        <property name="rightMargin">
-         <number>0</number>
-        </property>
-        <property name="bottomMargin">
-         <number>0</number>
-        </property>
-        <item row="1" column="13">
-         <widget class="QPushButton" name="queryButton">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>30</height>
-           </size>
+       <layout class="QHBoxLayout" name="actionRowLayout">
+<property name="spacing"><number>2</number></property>
+<property name="leftMargin"><number>0</number></property>
+<property name="topMargin"><number>0</number></property>
+<property name="rightMargin"><number>0</number></property>
+<property name="bottomMargin"><number>0</number></property>
+<item>
+<widget class="QPushButton" name="hbMacroButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send a directed message to another station&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
-          <property name="text">
-           <string>Directed</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="4">
-         <widget class="QPushButton" name="snrMacroButton">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>30</height>
-           </size>
-          </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send an signal report&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
-          <property name="text">
-           <string>SNR</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="8">
-         <spacer name="horizontalSpacer_11">
-          <property name="orientation">
-           <enum>Qt::Orientation::Horizontal</enum>
-          </property>
-          <property name="sizeType">
-           <enum>QSizePolicy::Policy::Preferred</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>20</width>
-            <height>10</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item row="1" column="0">
-         <widget class="QPushButton" name="hbMacroButton">
           <property name="minimumSize">
            <size>
             <width>0</width>
@@ -1524,41 +1478,15 @@ QTextEdit[transmitting=&quot;true&quot;] {
            <bool>true</bool>
           </property>
          </widget>
-        </item>
-        <item row="1" column="9">
-         <widget class="QPushButton" name="macrosMacroButton">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>30</height>
-           </size>
+</item>
+<item>
+<widget class="QPushButton" name="cqMacroButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send a saved message&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
-          <property name="text">
-           <string>Saved</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="5">
-         <widget class="QPushButton" name="infoMacroButton">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>30</height>
-           </size>
-          </property>
-          <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send your station information message&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
-          <property name="text">
-           <string>INFO</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="1">
-         <widget class="QPushButton" name="cqMacroButton">
           <property name="minimumSize">
            <size>
             <width>0</width>
@@ -1587,11 +1515,14 @@ QTextEdit[transmitting=&quot;true&quot;] {
            <bool>false</bool>
           </property>
          </widget>
-        </item>
-        <item row="1" column="17">
-         <widget class="QPushButton" name="startTxButton">
-          <property name="enabled">
-           <bool>false</bool>
+</item>
+<item>
+<widget class="QPushButton" name="replyMacroButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
           <property name="minimumSize">
            <size>
@@ -1600,33 +1531,181 @@ QTextEdit[transmitting=&quot;true&quot;] {
            </size>
           </property>
           <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Start transmitting&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-          </property>
-          <property name="autoFillBackground">
-           <bool>false</bool>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">QPushButton:checked {
-background-color: #22FF22;
-color:#222;
-}
-QPushButton[transmitting=&quot;true&quot;]{
-background:#FF2222;
-color:#222;
-}</string>
+           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Reply to a CQ&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
           </property>
           <property name="text">
-           <string>Send</string>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
+           <string>REPLY</string>
           </property>
          </widget>
-        </item>
-        <item row="1" column="14">
-         <widget class="QPushButton" name="deselectButton">
+</item>
+<item>
+<widget class="QPushButton" name="snrMacroButton">
           <property name="sizePolicy">
-           <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send an signal report&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          </property>
+          <property name="text">
+           <string>SNR</string>
+          </property>
+         </widget>
+</item>
+<item>
+<widget class="QPushButton" name="infoMacroButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send your station information message&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          </property>
+          <property name="text">
+           <string>INFO</string>
+          </property>
+         </widget>
+</item>
+<item>
+<widget class="QPushButton" name="statusMacroButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Send your station status message</string>
+          </property>
+          <property name="text">
+           <string>STATUS</string>
+          </property>
+         </widget>
+</item>
+<item>
+<widget class="QPushButton" name="typingMacroButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Send typing indicator (Subspace mode only). Fastest when callsign deselected but still on callsign frequency.</string>
+          </property>
+          <property name="text">
+           <string>TYPING...</string>
+          </property>
+         </widget>
+</item>
+<item>
+<spacer name="horizontalSpacer_11">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Policy::Preferred</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>10</height>
+           </size>
+          </property>
+         </spacer>
+</item>
+<item>
+<widget class="QPushButton" name="macrosMacroButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send a saved message&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          </property>
+          <property name="text">
+           <string>Saved</string>
+          </property>
+         </widget>
+</item>
+<item>
+<spacer name="horizontalSpacerSavedDirected">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Policy::Preferred</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>10</height>
+           </size>
+          </property>
+         </spacer>
+</item>
+<item>
+<widget class="QPushButton" name="queryButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>30</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Send a directed message to another station&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          </property>
+          <property name="text">
+           <string>Directed</string>
+          </property>
+         </widget>
+</item>
+<item>
+<widget class="QPushButton" name="deselectButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
             <horstretch>0</horstretch>
             <verstretch>0</verstretch>
            </sizepolicy>
@@ -1644,9 +1723,9 @@ color:#222;
            <string>Deselect</string>
           </property>
          </widget>
-        </item>
-        <item row="1" column="16">
-         <spacer name="horizontalSpacer_5">
+</item>
+<item>
+<spacer name="horizontalSpacer_5">
           <property name="orientation">
            <enum>Qt::Orientation::Horizontal</enum>
           </property>
@@ -1660,25 +1739,80 @@ color:#222;
            </size>
           </property>
          </spacer>
-        </item>
-        <item row="1" column="10">
-         <spacer name="horizontalSpacerSavedDirected">
-          <property name="orientation">
-           <enum>Qt::Orientation::Horizontal</enum>
+</item>
+<item>
+ <widget class="QPushButton" name="modeBtnSlow">
+  <property name="sizePolicy"><sizepolicy hsizetype="Fixed" vsizetype="Fixed"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property>
+  <property name="minimumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="maximumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="toolTip"><string>Slow mode</string></property>
+  <property name="styleSheet"><string notr="true">QPushButton:checked { background-color: #6699ff; font-weight: bold; }</string></property>
+  <property name="text"><string>S</string></property>
+  <property name="checkable"><bool>true</bool></property>
+ </widget>
+</item>
+<item>
+ <widget class="QPushButton" name="modeBtnNormal">
+  <property name="sizePolicy"><sizepolicy hsizetype="Fixed" vsizetype="Fixed"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property>
+  <property name="minimumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="maximumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="toolTip"><string>Normal mode</string></property>
+  <property name="styleSheet"><string notr="true">QPushButton:checked { background-color: #6699ff; font-weight: bold; }</string></property>
+  <property name="text"><string>N</string></property>
+  <property name="checkable"><bool>true</bool></property>
+ </widget>
+</item>
+<item>
+ <widget class="QPushButton" name="modeBtnFast">
+  <property name="sizePolicy"><sizepolicy hsizetype="Fixed" vsizetype="Fixed"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property>
+  <property name="minimumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="maximumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="toolTip"><string>Fast mode</string></property>
+  <property name="styleSheet"><string notr="true">QPushButton:checked { background-color: #6699ff; font-weight: bold; }</string></property>
+  <property name="text"><string>F</string></property>
+  <property name="checkable"><bool>true</bool></property>
+ </widget>
+</item>
+<item>
+ <widget class="QPushButton" name="modeBtnTurbo">
+  <property name="sizePolicy"><sizepolicy hsizetype="Fixed" vsizetype="Fixed"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property>
+  <property name="minimumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="maximumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="toolTip"><string>Turbo mode</string></property>
+  <property name="styleSheet"><string notr="true">QPushButton:checked { background-color: #6699ff; font-weight: bold; }</string></property>
+  <property name="text"><string>T</string></property>
+  <property name="checkable"><bool>true</bool></property>
+ </widget>
+</item>
+<item>
+ <widget class="QPushButton" name="modeBtnFT2">
+  <property name="sizePolicy"><sizepolicy hsizetype="Fixed" vsizetype="Fixed"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property>
+  <property name="minimumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="maximumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="toolTip"><string>Subspace mode</string></property>
+  <property name="styleSheet"><string notr="true">QPushButton { font-size: 16px; font-weight: bold; } QPushButton:checked { background-color: #6699ff; font-size: 16px; font-weight: bold; }</string></property>
+  <property name="text"><string>⚡</string></property>
+  <property name="checkable"><bool>true</bool></property>
+ </widget>
+</item>
+<item>
+ <spacer name="modeSendSpacer">
+  <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+  <property name="sizeType"><enum>QSizePolicy::Policy::Fixed</enum></property>
+  <property name="sizeHint" stdset="0"><size><width>4</width><height>0</height></size></property>
+ </spacer>
+</item>
+<item>
+<widget class="QToolButton" name="startTxButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
-          <property name="sizeType">
-           <enum>QSizePolicy::Policy::Preferred</enum>
+          <property name="enabled">
+           <bool>false</bool>
           </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>20</width>
-            <height>10</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-        <item row="1" column="3">
-         <widget class="QPushButton" name="replyMacroButton">
           <property name="minimumSize">
            <size>
             <width>0</width>
@@ -1686,18 +1820,88 @@ color:#222;
            </size>
           </property>
           <property name="toolTip">
-           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Reply to a CQ&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+           <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Start transmitting. The arrow opens send options: ARQ, file, web link, AV HAIL.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          </property>
+          <property name="styleSheet">
+           <string notr="true">QToolButton {
+border: 1px solid #8f8f91;
+border-radius: 3px;
+background-color: #e1e1e1;
+color: #222;
+padding-right: 32px;
+}
+QToolButton:disabled { color: #9f9f9f; }
+QToolButton[sendOff=&quot;true&quot;] {
+background-color: #e1e1e1;
+color: #9f9f9f;
+}
+QToolButton[sendOff=&quot;true&quot;]::menu-button {
+background: #dbe7ff;
+border: 1px solid #8f8f91;
+border-top-right-radius: 3px;
+border-bottom-right-radius: 3px;
+}
+QToolButton[sendOff=&quot;true&quot;]::menu-button:hover {
+background: #c4d9ff;
+}
+QToolButton:checked {
+background-color: #22FF22;
+color:#222;
+}
+QToolButton[transmitting=&quot;true&quot;]{
+background:#FF2222;
+color:#222;
+}
+QToolButton::menu-button {
+border-left: 1px solid #8f8f91;
+border-top-right-radius: 3px;
+border-bottom-right-radius: 3px;
+width: 32px;
+}
+QToolButton::menu-arrow {
+image: url(&quot;:/images/artwork/down-black.png&quot;);
+}
+QToolButton[arqInvalid=&quot;true&quot;]::menu-button {
+background: #fff9c4;
+border: 1px solid #8f8f91;
+border-top-right-radius: 3px;
+border-bottom-right-radius: 3px;
+}</string>
           </property>
           <property name="text">
-           <string>REPLY</string>
+           <string>Send</string>
+          </property>
+          <property name="checkable">
+           <bool>true</bool>
+          </property>
+          <property name="popupMode">
+           <enum>QToolButton::ToolButtonPopupMode::MenuButtonPopup</enum>
+          </property>
+          <property name="toolButtonStyle">
+           <enum>Qt::ToolButtonStyle::ToolButtonTextOnly</enum>
           </property>
          </widget>
-        </item>
-        <item row="1" column="18">
-         <widget class="QPushButton" name="stopTxButton">
+</item>
+
+<item>
+ <spacer name="sendHaltSpacer">
+  <property name="orientation"><enum>Qt::Orientation::Horizontal</enum></property>
+  <property name="sizeType"><enum>QSizePolicy::Policy::Fixed</enum></property>
+  <property name="sizeHint" stdset="0"><size><width>8</width><height>0</height></size></property>
+ </spacer>
+</item>
+
+<item>
+<widget class="QPushButton" name="stopTxButton">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
           <property name="minimumSize">
            <size>
-            <width>75</width>
+            <width>0</width>
             <height>30</height>
            </size>
           </property>
@@ -1708,40 +1912,8 @@ color:#222;
            <string>Halt</string>
           </property>
          </widget>
-        </item>
-        <item row="1" column="6">
-         <widget class="QPushButton" name="statusMacroButton">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>30</height>
-           </size>
-          </property>
-          <property name="toolTip">
-           <string>Send your station status message</string>
-          </property>
-          <property name="text">
-           <string>STATUS</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="7">
-         <widget class="QPushButton" name="typingMacroButton">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>30</height>
-           </size>
-          </property>
-          <property name="toolTip">
-           <string>Send typing indicator (Subspace mode only). Fastest when callsign deselected but still on callsign frequency.</string>
-          </property>
-          <property name="text">
-           <string>TYPING...</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
+</item>
+</layout>
       </widget>
       <widget class="QFrame" name="frame_5">
        <property name="sizePolicy">

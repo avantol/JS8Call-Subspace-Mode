@@ -1529,11 +1529,11 @@ void UI_Constructor::setSubmode(int submode) {
     mode_label.setText(modeText);
 
     // Update mode switch buttons — block signals to prevent re-triggering
-    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); }
-    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false); }
-    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false); }
-    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(submode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false); }
-    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false); }
+    if (ui->modeBtnNormal) { ui->modeBtnNormal->blockSignals(true); ui->modeBtnNormal->setChecked(submode == Varicode::JS8CallNormal); ui->modeBtnNormal->blockSignals(false); }
+    if (ui->modeBtnFast)   { ui->modeBtnFast->blockSignals(true);   ui->modeBtnFast->setChecked(submode == Varicode::JS8CallFast);     ui->modeBtnFast->blockSignals(false); }
+    if (ui->modeBtnTurbo)  { ui->modeBtnTurbo->blockSignals(true);  ui->modeBtnTurbo->setChecked(submode == Varicode::JS8CallTurbo);   ui->modeBtnTurbo->blockSignals(false); }
+    if (ui->modeBtnSlow)   { ui->modeBtnSlow->blockSignals(true);   ui->modeBtnSlow->setChecked(submode == Varicode::JS8CallSlow);     ui->modeBtnSlow->blockSignals(false); }
+    if (ui->modeBtnFT2)    { ui->modeBtnFT2->blockSignals(true);    ui->modeBtnFT2->setChecked(submode == Varicode::JS8CallFT2);       ui->modeBtnFT2->blockSignals(false); }
 
     setupJS8();
     Q_EMIT submodeChanged(Varicode::intToSubmode(submode));
@@ -1653,6 +1653,12 @@ void UI_Constructor::displayDialFrequency() {
 void UI_Constructor::statusChanged() { statusUpdate(); }
 
 bool UI_Constructor::eventFilter(QObject *object, QEvent *event) {
+    // [#148] Action-row buttons expand AS the window width grows.
+    if (object == ui->macroHorizonalWidget &&
+        event->type() == QEvent::Resize) {
+        distributeActionRowWidths();
+        return false;
+    }
     switch (event->type()) {
     case QEvent::KeyPress:
         // fall through
@@ -3816,11 +3822,11 @@ void UI_Constructor::guiUpdate() {
         // [TODO #112] Single definition — see canChangeSpeedNow().
         bool const canChangeSpeed = canChangeSpeedNow();
         bool const canChangeMode = canChangeSpeed && !arqBusy;
-        if (m_modeBtnNormal && m_modeBtnNormal->isEnabled() != canChangeSpeed) m_modeBtnNormal->setEnabled(canChangeSpeed);
-        if (m_modeBtnFast && m_modeBtnFast->isEnabled() != canChangeSpeed) m_modeBtnFast->setEnabled(canChangeSpeed);
-        if (m_modeBtnTurbo && m_modeBtnTurbo->isEnabled() != canChangeSpeed) m_modeBtnTurbo->setEnabled(canChangeSpeed);
-        if (m_modeBtnSlow && m_modeBtnSlow->isEnabled() != canChangeSpeed) m_modeBtnSlow->setEnabled(canChangeSpeed);
-        if (m_modeBtnFT2 && m_modeBtnFT2->isEnabled() != canChangeSpeed) m_modeBtnFT2->setEnabled(canChangeSpeed);
+        if (ui->modeBtnNormal && ui->modeBtnNormal->isEnabled() != canChangeSpeed) ui->modeBtnNormal->setEnabled(canChangeSpeed);
+        if (ui->modeBtnFast && ui->modeBtnFast->isEnabled() != canChangeSpeed) ui->modeBtnFast->setEnabled(canChangeSpeed);
+        if (ui->modeBtnTurbo && ui->modeBtnTurbo->isEnabled() != canChangeSpeed) ui->modeBtnTurbo->setEnabled(canChangeSpeed);
+        if (ui->modeBtnSlow && ui->modeBtnSlow->isEnabled() != canChangeSpeed) ui->modeBtnSlow->setEnabled(canChangeSpeed);
+        if (ui->modeBtnFT2 && ui->modeBtnFT2->isEnabled() != canChangeSpeed) ui->modeBtnFT2->setEnabled(canChangeSpeed);
 
         // [BUILD 298] m_arqButton enable gate REMOVED — button deleted.
         // The canChangeMode rule still applies to the underlying
@@ -4768,8 +4774,18 @@ void UI_Constructor::displayTextForFreq(QString text, int freq, QDateTime date,
 
     // never cache tx or last lines
     if (/*isTx || */ isLast) {
-        // reset the cache so we're always progressing forward
-        m_rxFrameBlockNumbers.clear();
+        // [#156 blockclear 2026-08-16] End THIS offset's continuation
+        // only. The old whole-map clear() ("always progressing
+        // forward" — single-conversation-era design) wiped every
+        // other in-progress message's line state, so in a
+        // multi-station pile-up (@SUBSPACE GRID?) only the FIRST
+        // tail processed — frequency order, i.e. the lowest-offset
+        // station — composed onto its header line; every station
+        // above fragmented to a standalone line. Log-proven
+        // 2026-08-16 21:19Z (band activity clean, convo fragmented).
+        m_rxFrameBlockNumbers.remove(freq);
+        m_rxFrameBlockNumbers.remove(lowFreq);
+        m_rxFrameBlockNumbers.remove(highFreq);
     } else {
         m_rxFrameBlockNumbers.insert(freq, block);
         m_rxFrameBlockNumbers.insert(lowFreq, block);
@@ -5732,7 +5748,28 @@ void UI_Constructor::prepareHeartbeat(){
 }
 #endif
 
+// [#148 split Send] See header. Widget enabled full-time (arrow
+// half must stay reachable); Send side grayed via [sendOff] and
+// click-guarded below.
+void UI_Constructor::setSendSideEnabled(bool const on) {
+    if (m_sendSideOn == on)
+        return;
+    m_sendSideOn = on;
+    ui->startTxButton->setEnabled(true); // whole widget stays live
+    ui->startTxButton->setProperty("sendOff", !on);
+    ui->startTxButton->style()->unpolish(ui->startTxButton);
+    ui->startTxButton->style()->polish(ui->startTxButton);
+}
+
 void UI_Constructor::on_startTxButton_toggled(bool checked) {
+    // [#148 split Send] Send-side disabled: swallow the click (the
+    // arrow half remains live — its menu actions carry their own
+    // enable states, build-367 chevron convention).
+    if (checked && !m_sendSideOn) {
+        QSignalBlocker const block(ui->startTxButton);
+        ui->startTxButton->setChecked(false);
+        return;
+    }
     if (checked) {
         startTx();
     } else {
@@ -6214,11 +6251,11 @@ void UI_Constructor::setupJS8() {
     // touch the ARQ button.
     bool const canChangeSpeed = !m_transmitting && !m_tune &&
                                 m_txFrameCount == 0 && m_txFrameQueue.isEmpty();
-    if (m_modeBtnNormal) { m_modeBtnNormal->blockSignals(true); m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); m_modeBtnNormal->blockSignals(false); m_modeBtnNormal->setEnabled(canChangeSpeed); }
-    if (m_modeBtnFast)   { m_modeBtnFast->blockSignals(true);   m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     m_modeBtnFast->blockSignals(false);   m_modeBtnFast->setEnabled(canChangeSpeed); }
-    if (m_modeBtnTurbo)  { m_modeBtnTurbo->blockSignals(true);  m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   m_modeBtnTurbo->blockSignals(false);  m_modeBtnTurbo->setEnabled(canChangeSpeed); }
-    if (m_modeBtnSlow)   { m_modeBtnSlow->blockSignals(true);   m_modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);     m_modeBtnSlow->blockSignals(false);   m_modeBtnSlow->setEnabled(canChangeSpeed); }
-    if (m_modeBtnFT2)    { m_modeBtnFT2->blockSignals(true);    m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       m_modeBtnFT2->blockSignals(false);    m_modeBtnFT2->setEnabled(canChangeSpeed); }
+    if (ui->modeBtnNormal) { ui->modeBtnNormal->blockSignals(true); ui->modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal); ui->modeBtnNormal->blockSignals(false); ui->modeBtnNormal->setEnabled(canChangeSpeed); }
+    if (ui->modeBtnFast)   { ui->modeBtnFast->blockSignals(true);   ui->modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);     ui->modeBtnFast->blockSignals(false);   ui->modeBtnFast->setEnabled(canChangeSpeed); }
+    if (ui->modeBtnTurbo)  { ui->modeBtnTurbo->blockSignals(true);  ui->modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);   ui->modeBtnTurbo->blockSignals(false);  ui->modeBtnTurbo->setEnabled(canChangeSpeed); }
+    if (ui->modeBtnSlow)   { ui->modeBtnSlow->blockSignals(true);   ui->modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);     ui->modeBtnSlow->blockSignals(false);   ui->modeBtnSlow->setEnabled(canChangeSpeed); }
+    if (ui->modeBtnFT2)    { ui->modeBtnFT2->blockSignals(true);    ui->modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);       ui->modeBtnFT2->blockSignals(false);    ui->modeBtnFT2->setEnabled(canChangeSpeed); }
 
     updateTextDisplay();
     refreshTextDisplay();
@@ -8907,24 +8944,27 @@ void UI_Constructor::updateButtonDisplay() {
         // testing aid): chevron RED when the box text classifies as
         // a directed command (ARQ would refuse it), black otherwise.
         // Stylesheet swapped only on state transitions.
-        if (m_sendMenuButton) {
-            bool const red =
-                hasText && gate == ArqGateState::NotArmed_DirectedCmd;
-            if (red != m_sendChevronRed) {
-                m_sendChevronRed = red;
-                m_sendMenuButton->setStyleSheet(
-                    red ? QStringLiteral(
-                              "QToolButton { border: none; "
-                              "  background: transparent; "
-                              "  color: #cc0000; } "
-                              "QToolButton::menu-indicator "
-                              "{ image: none; }")
-                        : QStringLiteral(
-                              "QToolButton { border: none; "
-                              "  background: transparent; "
-                              "  color: #222; } "
-                              "QToolButton::menu-indicator "
-                              "{ image: none; }"));
+        {
+            // [#148 split Send] ARQ-validity tint (pale yellow on
+            // the arrow half) is a DEBUG aid only: shown when the
+            // JS8_DEBUG env var is set (same switch charted for the
+            // no-internet test mode, TODO #159), and only while the
+            // Send side is default-colored or disabled — never over
+            // the checked-green / transmitting-red states. In normal
+            // operation the arrow half always tracks the Send side.
+            static bool const dbgTint =
+                qEnvironmentVariableIsSet("JS8_DEBUG");
+            bool const plainState =
+                !ui->startTxButton->isChecked() &&
+                ui->startTxButton->property("transmitting") != true;
+            bool const tint =
+                dbgTint && plainState && hasText &&
+                gate == ArqGateState::NotArmed_DirectedCmd;
+            if (tint != m_sendChevronRed) {
+                m_sendChevronRed = tint;
+                ui->startTxButton->setProperty("arqInvalid", tint);
+                ui->startTxButton->style()->unpolish(ui->startTxButton);
+                ui->startTxButton->style()->polish(ui->startTxButton);
             }
         }
     }
@@ -8950,21 +8990,123 @@ void UI_Constructor::updateButtonDisplay() {
     setDisabledIfChanged(ui->queryButton, isTransmitting || emptyCallsign);
     setDisabledIfChanged(ui->deselectButton, isTransmitting || emptyCallsign);
 
-    auto directedText = emptyCallsign ? "Directed"
+    // [#148] Normal Qt sizing: the button sizes to its text; the
+    // action row's stretch spacers absorb the change.
+    auto directedText = emptyCallsign ? QString("Directed")
                       : QString("Directed to %1").arg(selectedCallsign);
     if (ui->queryButton->text() != directedText) {
         ui->queryButton->setText(directedText);
-        auto fmDir = ui->queryButton->fontMetrics();
-        // Extra "m" of padding: the button has a dropdown arrow on the
-        // right side whose pixel width isn't counted in
-        // horizontalAdvance(text). Without this the arrow gets clipped
-        // when in directed mode with a selected callsign.
-        ui->queryButton->setMinimumWidth(fmDir.horizontalAdvance(directedText)
-                                        + fmDir.horizontalAdvance("m") + 12);
+        distributeActionRowWidths(); // [#148] text changed → re-fit
     }
 
     // update mode button text
     updateModeButtonText();
+}
+
+// [#148] See header. Called from the bar's resize (event filter) and
+// after every dynamic text change. Naturals are the live sizeHints,
+// so countdown/callsign text changes re-enter the algorithm
+// automatically.
+void UI_Constructor::distributeActionRowWidths() {
+    struct Group {
+        std::vector<QAbstractButton *> members;
+    };
+    Group groups[] = {
+        {{ui->hbMacroButton, ui->cqMacroButton, ui->replyMacroButton,
+          ui->snrMacroButton, ui->infoMacroButton,
+          ui->statusMacroButton}},
+        {{ui->typingMacroButton, ui->macrosMacroButton}},
+        {{ui->queryButton, ui->deselectButton}},
+        {{ui->startTxButton}},
+    };
+
+    // Natural width = what the button needs for its current text —
+    // sizeHint, but never let a previously-set cap distort it: query
+    // the hint with the cap lifted.
+    auto const naturalOf = [](QAbstractButton *b) {
+        int const keep = b->maximumWidth();
+        b->setMaximumWidth(QWIDGETSIZE_MAX);
+        int const n = b->sizeHint().width();
+        if (keep != QWIDGETSIZE_MAX)
+            b->setMaximumWidth(keep);
+        return n;
+    };
+
+    // Pin minimums to naturals (the approved minimum-window state)
+    // and measure the row's fixed overhead from the layout itself.
+    int expandableCount = 0;
+    for (auto &g : groups)
+        for (auto *b : g.members) {
+            int n = naturalOf(b);
+            // [#148] Send NEVER changes width with its own text: the
+            // countdown estimate depends on the SPEED selection, so
+            // natural sizing made the speed buttons shift under the
+            // operator's cursor mid-click (field 2026-08-17).
+            // Reserve Send's worst-case text delta on top of the
+            // current natural, so its width is speed-invariant.
+            if (b == ui->startTxButton) {
+                QFontMetrics const fm(b->font());
+                n += std::max(
+                    0, fm.horizontalAdvance(
+                           QStringLiteral("Sending (99m 59s)")) -
+                           fm.horizontalAdvance(b->text()));
+            }
+            // [#148] Directed likewise (operator 2026-08-17):
+            // worst-case for a long compound call even while the
+            // label reads bare "Directed" — selection changes must
+            // not reflow the row. Deselect follows via the group
+            // equalization. HB/CQ stay naturally sized (tolerated).
+            if (b == ui->queryButton) {
+                QFontMetrics const fm(b->font());
+                n += std::max(
+                    0, fm.horizontalAdvance(
+                           QStringLiteral("Directed to WW9WWW/MM")) -
+                           fm.horizontalAdvance(b->text()));
+            }
+            b->setMinimumWidth(n);
+            ++expandableCount;
+        }
+    auto *bar = ui->macroHorizonalWidget;
+    if (!bar->layout())
+        return;
+    int const avail = bar->width();
+    int const minNeeded = bar->layout()->minimumSize().width();
+    int extra = std::max(0, avail - minNeeded);
+
+    // Split the extra across groups proportional to member count.
+    for (auto &g : groups) {
+        int const k = static_cast<int>(g.members.size());
+        int share = extra * k / expandableCount;
+        // Water-fill: find the common width c with
+        // sum(max(natural_i, c)) == sum(natural_i) + share.
+        std::vector<int> nat;
+        nat.reserve(k);
+        int natSum = 0;
+        for (auto *b : g.members) {
+            nat.push_back(b->minimumWidth());
+            natSum += nat.back();
+        }
+        int budget = natSum + share;
+        // Binary search c over a sane range.
+        int lo = *std::min_element(nat.begin(), nat.end());
+        int hi = lo + budget; // generous upper bound
+        while (lo < hi) {
+            int const c = (lo + hi + 1) / 2;
+            long long need = 0;
+            for (int n : nat)
+                need += std::max(n, c);
+            if (need <= budget)
+                lo = c;
+            else
+                hi = c - 1;
+        }
+        int const c = lo;
+        for (size_t i = 0; i < g.members.size(); ++i) {
+            int const target = std::max(nat[i], c);
+            if (g.members[i]->maximumWidth() != target)
+                g.members[i]->setMaximumWidth(target);
+        }
+    }
 }
 
 void UI_Constructor::updateHBButtonDisplay() {
@@ -8992,14 +9134,11 @@ void UI_Constructor::updateHBButtonDisplay() {
             ui->hbMacroButton->setText("HB");
         }
     }
-    // Adjust minimum width to fit current text
-    auto fm = ui->hbMacroButton->fontMetrics();
-    ui->hbMacroButton->setMinimumWidth(fm.horizontalAdvance(ui->hbMacroButton->text()) + 12);
-
     ui->hbMacroButton->setToolTip(
         m_nSubMode == Varicode::JS8CallFT2
         ? "Send hailing message (1 or 2 frames, configurable, no reply)"
         : "Send heartbeat with grid square");
+    distributeActionRowWidths(); // [#148] text changed → re-fit
 }
 
 void UI_Constructor::updateCQButtonDisplay() {
@@ -9021,6 +9160,7 @@ void UI_Constructor::updateCQButtonDisplay() {
         // qCDebug(mainwindow_js8) << "updateCQButtonDisplay while m_cq_loop is
         // off";
     }
+    distributeActionRowWidths(); // [#148] text changed → re-fit
 }
 
 void UI_Constructor::updateTextDisplay() {
@@ -9035,9 +9175,12 @@ void UI_Constructor::updateTextDisplay() {
     // ACKs bypass this button, so responses still flow.
     bool const rxHold =
         m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
-    setDisabledIfChanged(ui->startTxButton,
-                         !canTransmit || isTransmitting || emptyText ||
-                             rxHold);
+    // [#148 split Send] Route through the send-SIDE state, never the
+    // widget: whole-widget disable killed the arrow half's menu
+    // (field 2026-08-17, empty-box case — this was the one disable
+    // site the conversion sweep missed).
+    setSendSideEnabled(!(!canTransmit || isTransmitting || emptyText ||
+                         rxHold));
     // [FILE-XFER build 283] Chevron button stays enabled full-time
     // for discoverability — the operator can always open the menu
     // and see what send-options exist. Gating moves to the menu
@@ -9099,13 +9242,16 @@ void UI_Constructor::updateTextDisplay() {
     // Chevron tooltip reflects current selection state so the
     // operator sees, without opening the menu, why file send is or
     // isn't ready. Cheap string compare avoids needless repaint.
-    if (m_sendMenuButton) {
+    {
         bool const haveCall = !callsignSelected().trimmed().isEmpty();
         QString const tip = haveCall
-            ? QStringLiteral("Send options: send using ARQ, send a file")
-            : QStringLiteral("Send options: send using ARQ, send a file (select call sign first)");
-        if (m_sendMenuButton->toolTip() != tip) {
-            m_sendMenuButton->setToolTip(tip);
+            ? QStringLiteral("Start transmitting. Arrow: send using "
+                             "ARQ, send a file")
+            : QStringLiteral("Start transmitting. Arrow: send using "
+                             "ARQ, send a file (select call sign "
+                             "first)");
+        if (ui->startTxButton->toolTip() != tip) {
+            ui->startTxButton->setToolTip(tip);
         }
     }
 
@@ -9255,8 +9401,8 @@ void UI_Constructor::updateTxButtonDisplay() {
                 m_transmitting ? State::Sending : State::Ready, secs);
         }
         ui->startTxButton->setText(buttonText);
-        ui->startTxButton->setEnabled(false);
-        ui->startTxButton->setFlat(true);
+        setSendSideEnabled(false);
+        ui->startTxButton->setAutoRaise(true); // flat while queued
         // [FILE-XFER build 282] Chevron stays enabled full-time; the
         // menu action mirrors Send's disabled state (no TX while
         // queued / transmitting).
@@ -9271,8 +9417,8 @@ void UI_Constructor::updateTxButtonDisplay() {
         bool const sendEnabled = canTransmit && !arqRxBusy &&
                                  m_txFrameCountEstimate > 0 &&
                                  !ui->extFreeTextMsgEdit->toPlainText().isEmpty();
-        ui->startTxButton->setEnabled(sendEnabled);
-        ui->startTxButton->setFlat(false);
+        setSendSideEnabled(sendEnabled);
+        ui->startTxButton->setAutoRaise(false);
         // [FILE-XFER build 283] File send doesn't read the outgoing
         // widget, so the action's enable gate is just canTransmit —
         // an empty outgoing box is a valid starting state for "pick

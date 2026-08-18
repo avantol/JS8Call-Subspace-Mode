@@ -323,6 +323,16 @@ class UI_Constructor : public QMainWindow {
 
     void updateCQButtonDisplay();
     void updateHBButtonDisplay();
+    // [#148] Expansion distributor: at minimum window width every
+    // button sits at its NATURAL text width with minimum gaps (the
+    // approved btnpad2 state — invariant). Extra window width is
+    // split among the like-button groups, water-filled inside each
+    // group so members CONVERGE to a common width, then grow
+    // together. Enforced via per-button maximum caps; minimums stay
+    // at the naturals, so shrinking always returns to the approved
+    // state.
+    void distributeActionRowWidths();
+
 
   protected:
     void keyPressEvent(QKeyEvent *) override;
@@ -453,6 +463,13 @@ class UI_Constructor : public QMainWindow {
     void decodeBusy(bool b);
     void decodeDone();
     void on_startTxButton_toggled(bool checked);
+    // [#148 split Send] The WIDGET stays enabled full-time so the
+    // arrow half (send-options menu) is always reachable — build-367
+    // chevron convention: "chevron enabled full-time; the menu
+    // actions mirror Send's disabled state". The SEND side's
+    // enabled-ness is this flag: visual gray via the [sendOff]
+    // property, clicks guarded in the toggled handler.
+    void setSendSideEnabled(bool on);
     void toggleTx(bool start);
     void on_logQSOButton_clicked();
     void on_actionModeJS8HB_toggled(bool checked);
@@ -686,11 +703,6 @@ class UI_Constructor : public QMainWindow {
     [[maybe_unused]] bool m_multiple; // Used only in Windows builds
     MultiSettings *m_multi_settings;
     QPushButton *m_configurations_button;
-    QPushButton *m_modeBtnNormal{nullptr};
-    QPushButton *m_modeBtnFast{nullptr};
-    QPushButton *m_modeBtnTurbo{nullptr};
-    QPushButton *m_modeBtnSlow{nullptr};
-    QPushButton *m_modeBtnFT2{nullptr};
     // [BUILD 298] m_arqButton DELETED. The persistent ARQ-on toggle
     // button is gone; ARQ is now opt-in per-message via the Send
     // options menu's "Send using ARQ" action. The internal
@@ -706,9 +718,8 @@ class UI_Constructor : public QMainWindow {
     // The standalone QPushButton "File" from build 276 is gone — file
     // send now lives inside this menu. Built programmatically in
     // UI_Constructor since the Send button itself comes from the .ui.
-    QToolButton *m_sendMenuButton{nullptr};
     // [FILE-XFER build 282] The "Send file…" action inside
-    // m_sendMenuButton's dropdown. Held as a member so the
+    // the Send chevron's dropdown. Held as a member so the
     // updateTextDisplay / updateTxButtonDisplay paths can toggle its
     // enabled state — the chevron button itself stays enabled full-
     // time for discoverability; gating lives on the action.
@@ -886,6 +897,7 @@ class UI_Constructor : public QMainWindow {
     // swapped only on TRANSITIONS — Build 309 proved per-frame
     // styling on this button lags.
     bool m_sendChevronRed{false};
+    bool m_sendSideOn{true}; // [#148] see setSendSideEnabled
     void dispatchArqBody(QString const &body, QString const &peer,
                          int peerLevel);
     // [TODO #107] Binary sibling: raw V3 envelope via sendChunkedBinary.

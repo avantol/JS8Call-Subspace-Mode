@@ -1983,31 +1983,37 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 
     displayActivity(true);
 
-    // Mode switch buttons on the action button panel (left of Send)
+    // [#148] Every action-row widget — including the five
+    // mode-speed buttons and the Send chevron — is DECLARED in the
+    // .ui (actionRowLayout). Code wires behavior only.
     {
-        auto *parentWidget = ui->startTxButton->parentWidget();
-        auto *layout = qobject_cast<QGridLayout *>(parentWidget->layout());
-        if (layout) {
-            auto makeBtn = [this, parentWidget](const QString &label, const QString &tip, int submode) {
-                auto *btn = new QPushButton(label, parentWidget);
-                btn->setCheckable(true);
-                btn->setFixedWidth(30);
-                btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-                btn->setMinimumHeight(30);
-                btn->setToolTip(tip);
-                btn->setStyleSheet("QPushButton:checked { background-color: #6699ff; font-weight: bold; }");
-                connect(btn, &QPushButton::clicked, this, [this, submode]() {
-                    setSubmode(submode);
-                });
-                return btn;
-            };
+        {
+            struct ModeWire { QPushButton *btn; int submode; };
+            for (auto const &mw : {
+                     ModeWire{ui->modeBtnSlow, Varicode::JS8CallSlow},
+                     ModeWire{ui->modeBtnNormal,
+                              Varicode::JS8CallNormal},
+                     ModeWire{ui->modeBtnFast, Varicode::JS8CallFast},
+                     ModeWire{ui->modeBtnTurbo,
+                              Varicode::JS8CallTurbo},
+                     ModeWire{ui->modeBtnFT2, Varicode::JS8CallFT2}})
+                connect(mw.btn, &QPushButton::clicked, this,
+                        [this, submode = mw.submode]() {
+                            setSubmode(submode);
+                        });
 
-            m_modeBtnNormal = makeBtn("N", "Normal mode", Varicode::JS8CallNormal);
-            m_modeBtnFast   = makeBtn("F", "Fast mode",   Varicode::JS8CallFast);
-            m_modeBtnTurbo  = makeBtn("T", "Turbo mode",  Varicode::JS8CallTurbo);
-            m_modeBtnSlow   = makeBtn("S", "Slow mode",   Varicode::JS8CallSlow);
-            m_modeBtnFT2    = makeBtn(QString::fromUtf8("\xe2\x9a\xa1"), "Subspace mode", Varicode::JS8CallFT2);
-            m_modeBtnFT2->setStyleSheet("QPushButton { font-size: 16px; font-weight: bold; } QPushButton:checked { background-color: #6699ff; font-size: 16px; font-weight: bold; }");
+            // [#148] Live width distribution: recompute on every bar
+            // resize (buttons expand AS the window widens) and once
+            // now for the initial state.
+            ui->macroHorizonalWidget->installEventFilter(this);
+            distributeActionRowWidths();
+
+            // [#148 split Send] Widget live from the start; the .ui
+            // enabled=false intent is carried by the sendOff state.
+            ui->startTxButton->setEnabled(true);
+            ui->startTxButton->setProperty("sendOff", true);
+            m_sendSideOn = false;
+
 
             // ARQ enable toggle. Proxies the existing
             // actionModeReplicatorProtocol menu action so the on/off
@@ -2033,49 +2039,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // 276 is gone — operator now reaches file send via
             // Send-button-chevron → "Send file…". Visually the
             // chevron sits flush against startTxButton with no gap
-            // (rightLayout->setSpacing(2) is overridden locally by
-            // adding the chevron in the same logical group).
-            m_sendMenuButton = new QToolButton(parentWidget);
-            // [BUILD 341] Text glyph instead of arrowType: the style-
-            // engine primitive arrow ignores stylesheet `color`, and
-            // the ARQ-validity indicator (red/black) drives the color
-            // via stylesheet swaps.
-            m_sendMenuButton->setText(QStringLiteral("▼"));
-            m_sendMenuButton->setPopupMode(QToolButton::InstantPopup);
-            m_sendMenuButton->setFixedWidth(18);
-            m_sendMenuButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-            // [BUILD 320] setFixedHeight instead of setMinimumHeight
-            // so macOS Aqua-styled QToolButton can't render taller
-            // than 30. On Mac the unbounded height was making the
-            // whole sendCluster oversized vs the rest of the row,
-            // and Cocoa positioned the cluster (Send + chevron) below
-            // the row's intended top edge.
-            m_sendMenuButton->setFixedHeight(30);
-            m_sendMenuButton->setCursor(QCursor(Qt::PointingHandCursor));
-            // [FILE-XFER build 282] Suppress QToolButton's default
-            // menu-indicator glyph (a small triangle Qt overlays on
-            // any tool button that has a QMenu attached). The
-            // arrowType=DownArrow already paints a large arrow as the
-            // button content; the small overlay was duplicative.
-            // [BUILD 309 TODO #70 FINAL] Borderless ghost button:
-            // no border, transparent background (inherits the
-            // action-bar color so it blends in), dark arrow always.
-            // Operator gating happens on the menu items inside the
-            // popup, not on the chevron itself — chevron stays
-            // visually unchanged so the operator's eye doesn't
-            // chase color transitions on it.
-            m_sendMenuButton->setStyleSheet(
-                QStringLiteral(
-                    "QToolButton { border: none; "
-                    "  background: transparent; "
-                    "  color: #222; } "
-                    "QToolButton::menu-indicator { image: none; }"));
-            // [BUILD 298] Initial tooltip; updateTextDisplay rewrites
-            // it dynamically based on whether a call sign is selected.
-            m_sendMenuButton->setToolTip(
-                "Send options: send using ARQ, send a file");
+            // (zero-spacing sendPair layout in the flat row, #148).
+            // [#148] Chevron declared in the .ui; menu wired here.
             {
-                auto *menu = new QMenu(m_sendMenuButton);
+                auto *menu = new QMenu(ui->startTxButton); // [#148] split Send
                 // [BUILD 298] "Send using ARQ" — first menu item,
                 // replaces the standalone ARQ toggle button. Enabling
                 // ARQ is now opt-in per-message: this action turns
@@ -2157,84 +2124,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 // enable the standard tooltips role so the hover
                 // delay surfaces the text.
                 menu->setToolTipsVisible(true);
-                m_sendMenuButton->setMenu(menu);
+                ui->startTxButton->setMenu(menu); // MenuButtonPopup arrow opens it
             }
-
-            // Build a single container for mode buttons + Send + Halt
-            auto *rightContainer = new QWidget(parentWidget);
-            auto *rightLayout = new QHBoxLayout(rightContainer);
-            rightLayout->setContentsMargins(0, 0, 0, 0);
-            rightLayout->setSpacing(2);
-            // [BUILD 298] m_arqButton removed from layout. The 8 px
-            // spacing that separated it from the mode-selection group
-            // is also gone — the bar reverts to pre-Build-228 layout.
-            rightLayout->addWidget(m_modeBtnSlow, 0);
-            rightLayout->addWidget(m_modeBtnNormal, 0);
-            rightLayout->addWidget(m_modeBtnFast, 0);
-            rightLayout->addWidget(m_modeBtnTurbo, 0);
-            rightLayout->addWidget(m_modeBtnFT2, 0);
-            rightLayout->addSpacing(4);
-
-            // Move Send and Halt into the same container
-            int sendRow = -1, sendCol = -1, rSpan, cSpan;
-            layout->getItemPosition(layout->indexOf(ui->startTxButton), &sendRow, &sendCol, &rSpan, &cSpan);
-            layout->removeWidget(ui->startTxButton);
-            layout->removeWidget(ui->stopTxButton);
-            // Set minimum width to longest typical text to prevent layout jumps
-            auto fmSend = ui->startTxButton->fontMetrics();
-            ui->startTxButton->setMinimumWidth(fmSend.horizontalAdvance("Sending (1m 30s)") + 12);
-            ui->stopTxButton->setMinimumWidth(40);
-            // [BUILD 323] Abandoned the sendCluster sub-widget plan.
-            // Builds 281-322 wrapped startTxButton + chevron in a
-            // sub-container QWidget to enforce 0-px spacing between
-            // them. On macOS that wrapper's reported size confused
-            // the parent layout and pushed the cluster half-button-
-            // height below the rest of the action-bar row. The wins
-            // (visual zero-gap) weren't worth the cross-platform
-            // layout instability. Send and chevron are now siblings
-            // in rightLayout — rightLayout->setSpacing(2) gives them
-            // a 2-px gap (acceptable per operator), and rightLayout's
-            // native vertical-centering handles macOS correctly the
-            // same way it always handled other siblings.
-            rightLayout->addWidget(ui->startTxButton, 2);
-            rightLayout->addWidget(m_sendMenuButton,  0);
-            // [BUILD 298] Extra spacing between the Send-options
-            // chevron and the Halt button so they read as visually
-            // distinct controls rather than one button group.
-            rightLayout->addSpacing(8);
-            rightLayout->addWidget(ui->stopTxButton, 2);
-            // [BUILD 322] Minimum (not Fixed) vertical policy so the
-            // container can grow to fit macOS Aqua native button
-            // chrome — long-standing issue where mode-speed button
-            // "selected" indicators were clipped at the bottom 5-7px.
-            rightContainer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-
-            // Place the combined container in the grid
-            layout->addWidget(rightContainer, sendRow, sendCol, 1, 3);
-
-            // Allow the first action buttons to shrink proportionally
-            // Set minimum width based on text content + padding
-            for (auto *btn : {ui->hbMacroButton, ui->cqMacroButton,
-                              ui->macrosMacroButton,
-                              ui->queryButton, ui->deselectButton}) {
-                auto fm = btn->fontMetrics();
-                btn->setMinimumWidth(fm.horizontalAdvance(btn->text()) + 12);
-                btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-            }
-
-            // [BUILD 298] Width-squeeze REMOVED. The build 228
-            // pinScaled block trimmed REPLY/SNR/INFO to 90% and
-            // STATUS/TYPING to 95% of their natural width "to free
-            // horizontal space for the new ARQ button on the mode
-            // bar." Now that the ARQ button is gone, the buttons
-            // return to their natural text+padding widths.
 
             // Set initial checked state
-            m_modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);
-            m_modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);
-            m_modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);
-            m_modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);
-            m_modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);
+            ui->modeBtnNormal->setChecked(m_nSubMode == Varicode::JS8CallNormal);
+            ui->modeBtnFast->setChecked(m_nSubMode == Varicode::JS8CallFast);
+            ui->modeBtnTurbo->setChecked(m_nSubMode == Varicode::JS8CallTurbo);
+            ui->modeBtnSlow->setChecked(m_nSubMode == Varicode::JS8CallSlow);
+            ui->modeBtnFT2->setChecked(m_nSubMode == Varicode::JS8CallFT2);
         }
     }
 
@@ -2269,13 +2167,13 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // Priority 1: ARQ / Send-chevron discovery (Build 314).
             if (!self->m_settings->value("FirstRunArqHintShown", false)
                      .toBool() &&
-                self->m_sendMenuButton) {
+                self->ui->startTxButton) {
                 auto *balloon = new SpeechBalloon(
                     tr("\xf0\x9f\x91\x8b  Click here to to use the ARQ protocol "
                        "(reliable delivery) to send or relay a message or to send a file. "
                        "Use '@ALLCALL QUERY ARQ?' to find ARQ-ready stations. "
                        "Click anywhere to dismiss."),
-                    self->m_sendMenuButton);
+                    self->ui->startTxButton);
                 balloon->setTailSide(SpeechBalloon::TailSide::Bottom);
                 balloon->setAutoDismissMs(45000);
                 balloon->showAtTarget();

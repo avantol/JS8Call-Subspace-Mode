@@ -156,6 +156,25 @@ void UI_Constructor::displayBandActivity() {
             }
 
             filtered[key] = items;
+            // [BANDROW] Render-state trace (#156): one compact line
+            // per bucket whose COMPOSITION changed since the last
+            // render — closes the "header absent at paint" open link
+            // by showing exactly what each row was built from.
+            {
+                QString sig;
+                for (auto const &it : items)
+                    sig += QStringLiteral("|%1 b%2 %3 '%4'")
+                               .arg(it.utcTimestamp.toString("hhmmss"))
+                               .arg(it.bits)
+                               .arg(it.shouldDisplay ? "v" : "h")
+                               .arg(it.text.left(14));
+                static QHash<int, QString> lastSig;
+                if (lastSig.value(key) != sig) {
+                    lastSig[key] = sig;
+                    qCWarning(mainwindow_js8)
+                        << "[BANDROW] render" << key << sig;
+                }
+            }
 
             // last visible = newest item where shouldDisplay == true
             for (int i = items.size() - 1; i >= 0; --i) {
