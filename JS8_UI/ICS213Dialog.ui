@@ -170,7 +170,7 @@
      <item>
       <widget class="QPushButton" name="saveButton">
        <property name="text"><string>Save as file</string></property>
-       <property name="toolTip"><string>The form will be saved as a file, to be sent later using 'Send file'</string></property>
+       <property name="toolTip"><string>The form is complete, and will be saved as a file, to be sent later using 'Send file'</string></property>
       </widget>
      </item>
      <item>

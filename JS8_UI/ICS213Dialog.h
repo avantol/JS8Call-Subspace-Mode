@@ -66,6 +66,28 @@ class ICS213Dialog final : public QDialog {
     // button; enterReplyMode uses it to pick the parser.
     static int probeFormat(QByteArray const &bytes);
 
+    // Sparse reply wire file ("FORM: ICS-213-REPLY/1"): the reply
+    // sends ONLY the new 9/10 data; the original sender rejoins it
+    // with their retained copy of the form (airtime optimization,
+    // operator decision 2026-08-18).
+    static bool isSparseReply(QByteArray const &bytes);
+    // Merge a sparse reply into the ORIGINAL form's content. Returns
+    // the completed form, or an empty string if the original doesn't
+    // match the expected shape (caller keeps the sparse file).
+    static QString mergeReply(QString const &originalContent,
+                              QString const &sparseContent);
+
+    // [ARQ level 4] Level-aware WIRE shape. The LOCAL file is always
+    // the complete traditional document; a level-4 peer gets a
+    // trimmed copy (empty 9/10 section stripped) written to a temp
+    // dir under the SAME filename. Returns the temp path, or
+    // fullPath unchanged when the section isn't present (Compact/
+    // XML/already-trimmed) or the copy can't be written.
+    static QString writeTrimmedWireCopy(QString const &fullPath);
+    // Sparse wire packet path written by the last reply Send (empty
+    // in compose mode) — dispatched to level-4 original senders.
+    QString sparseWirePath() const { return m_sparseWirePath; }
+
     // THE one save-as-draft exit: "Save as draft" button, Esc, and
     // the window X all land here (QDialog::closeEvent → reject).
     // Flushes the draft immediately — the debounce can't eat
@@ -80,9 +102,14 @@ class ICS213Dialog final : public QDialog {
     void setArqBusy(bool busy);
 
   signals:
-    // Emitted on "Send": the form file has been written; the main
-    // window hands it to the ordinary ARQ file-transfer path.
-    void sendRequested(QString const &filePath);
+    // Emitted on "Send": files are written; the main window hands
+    // them to the ARQ transfer path, choosing the wire shape by the
+    // peer's ARQ level. sparsePath is EMPTY for compose sends; for
+    // replies it names the sparse packet (level-4 wire), while
+    // filePath names the complete filled form (level-3 wire and the
+    // local archive either way).
+    void sendRequested(QString const &filePath,
+                       QString const &sparsePath);
 
   private slots:
     void onFieldChanged();
@@ -91,15 +118,15 @@ class ICS213Dialog final : public QDialog {
     void onClearClicked();
 
   private:
-    QString renderStandard() const;
+    QString renderStandard(QString const &serial) const;
+    QString renderReplySparse() const;
     void parseStandard(QString const &content);
     void parseCompact(QString const &content);
     void parseWinlinkXml(QString const &content);
-    QString renderCompact() const;
+    QString renderCompact(QString const &serial) const;
     QString renderWinlinkXml(QString const &serial) const;
     QString nextSerial(); // bumps + persists (yearly reset)
     QString peekSerial() const; // what nextSerial() WILL return
-    QString subjectSlug() const;
     bool validateRequired();
     bool writeFormFile(QString *outPath); // render + write, serialised
     void saveDraft();
@@ -121,6 +148,7 @@ class ICS213Dialog final : public QDialog {
     std::function<double(int)> m_airtimeSecs;
     QTimer m_draftTimer;
     QString m_writtenPath;
+    QString m_sparseWirePath; // reply mode: sparse packet (temp dir)
 };
 
 #endif

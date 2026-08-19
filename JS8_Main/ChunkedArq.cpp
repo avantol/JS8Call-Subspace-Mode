@@ -1592,15 +1592,24 @@ void Manager::handleNativeMarker(QString const &peer, RxState &rx,
                 ? (nBytes + NativeBinary::FRAME_PAYLOAD_BYTES - 1) /
                       NativeBinary::FRAME_PAYLOAD_BYTES
                 : 8;
-        // (frames - 1) slots, floor 1: the schedule anchor is the
-        // MARKER DECODE, which already lags the marker's last frame
-        // by ~1-2 slots — (frames + 1) overshot the sender's 16 s
-        // post-burst listen window by seconds (bench 2026-07-19,
-        // 22:50:05 keyup vs ~22:50:03-06 re-ACK decode). This path is
-        // now the FALLBACK for a lost last frame; the frame-triggered
-        // re-ACK above handles the common case precisely.
-        int const delayMs =
-            (frames > 1 ? frames - 1 : 1) * m_nativeFrameMs;
+        // [BUILD 368 reAckAnchor 2026-08-18] (frames + 1) slots, NOT
+        // (frames - 1). The 2026-07-19 (frames - 1) tuning predates
+        // binMarker (BUILD 344, 2026-07-20), which moved the marker
+        // from a 3-frame TEXT tail near the burst END to a single
+        // binary frame at the burst HEAD — the decode anchor jumped
+        // a whole chunk-length earlier, and the old delay landed the
+        // re-ACK 1-2 slots BEFORE the sender's retry burst ended.
+        // Half-duplex collision, DETERMINISTIC: field 2026-08-18
+        // (msgId 71), three straight re-ACK 6 keyups at :46.0/:29.0/
+        // :12.0 with the sender's frames still arriving at :47.2/
+        // :29.4/:13.3 — a delivered transfer declared FAILED by the
+        // sender. Delivered sessions orphan their data frames ("no
+        // active window"), so the precise frame-triggered re-ACK
+        // can never fire here — this timer is the ONLY answer path.
+        // It must outwait the full data burst behind the marker
+        // (frames slots) plus marker decode-lag variance (+1); it
+        // then lands ~4-7 s into the sender's 17.25 s listen window.
+        int const delayMs = (frames + 1) * m_nativeFrameMs;
         qCWarning(chunkedarq_js8)
             << "[V3-RX] re-ACK scheduled post-burst: peer=" << peer
             << "msgId=" << msgId << "chunk=" << cc

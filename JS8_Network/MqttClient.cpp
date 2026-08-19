@@ -49,6 +49,24 @@ void MqttClient::setTopics(QStringList const &topicFilters) {
 }
 
 void MqttClient::start() {
+    // [TODO #159 2026-08-18] No-internet TESTING switch, scoped by
+    // operator decision to MQTT only: JS8_NO_MQTT=1 simulates the
+    // broker being unreachable. start() is the ONE entry to any
+    // connection attempt (beginConnect/reconnect all sit behind
+    // m_started), so gating here means no MQTT data enters the app
+    // anywhere - exactly a true offline session. Deliberately NOT
+    // JS8_DEBUG: that switch gates debug VISUALS, and debugging
+    // visuals must not silently dry up map data (one fact, one
+    // variable).
+    static bool const noMqtt =
+        qEnvironmentVariableIsSet("JS8_NO_MQTT");
+    if (noMqtt) {
+        qCWarning(mqttclient_js8)
+            << "[NET] MQTT DISABLED (JS8_NO_MQTT test switch) - "
+               "simulating broker unavailable";
+        setState(State::Idle, QStringLiteral("off (JS8_NO_MQTT)"));
+        return;
+    }
     m_started = true;
     if (m_state == State::Idle)
         beginConnect();

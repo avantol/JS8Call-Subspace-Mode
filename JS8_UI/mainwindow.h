@@ -778,8 +778,21 @@ class UI_Constructor : public QMainWindow {
     // pre-flight peer resolution (dialogs shown inside; empty return
     // = abort) and the transfer pipeline from a file path onward.
     QString resolveArqFilePeer();
+    // requireLevel2: ICS-213 form sends refuse V1 outright — the
+    // transfer aborts (with a notice) instead of falling back when
+    // the peer is cached as V1, answers YES 1, or never answers.
+    // formSparsePath: reply sends carry the sparse packet path; the
+    // wire shape is chosen by the peer's answered level (>= 4 sparse/
+    // trimmed, == 3 the complete document — graceful fallback).
     void startFileTransferViaArq(QString const &filePath,
-                                 QString const &peer);
+                                 QString const &peer,
+                                 bool requireLevel2 = false,
+                                 QString const &formSparsePath =
+                                     QString());
+    QString formWirePath(QString const &fullPath,
+                         QString const &sparsePath, int level) const;
+    void notifyFormTransferAborted(QString const &peer,
+                                   QString const &why); // [ICS213]
     // [BUILD 339 TODO #103] Session cache of peers' advertised ARQ
     // protocol levels, populated from "YES <level>" replies to
     // QUERY ARQ?. Key = FULL callsign (uppercased). A level >= 2
@@ -798,6 +811,8 @@ class UI_Constructor : public QMainWindow {
     // skip the query entirely. FILE TRANSFERS ONLY (plain ARQ text
     // is format-agnostic).
     QString m_pendingFilePath;
+    bool m_pendingRequiresV2{false}; // [ICS213] form send: V1 refused
+    QString m_pendingFormSparsePath; // [ICS213] parked reply's packet
     QString m_pendingLinkUrl;   // set INSTEAD of path for link sends
     QString m_pendingFilePeer;
     int m_capQueryRetries{0};
@@ -820,7 +835,10 @@ class UI_Constructor : public QMainWindow {
     //   abort — drop the payload and close the phase (Halt / callsign)
     void beginCapabilityNegotiation(QString const &peer,
                                     QString const &filePath,
-                                    QString const &linkUrl);
+                                    QString const &linkUrl,
+                                    bool requireLevel2 = false,
+                                    QString const &formSparsePath =
+                                        QString());
     // keepPhaseOpen: the resume path defers 1.5 s before it starts the
     // transfer. Closing the phase at take() time would drop every lock
     // for exactly that gap — the same hole this fix closes, in

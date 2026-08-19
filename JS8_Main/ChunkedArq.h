@@ -71,7 +71,18 @@ namespace ChunkedArq {
 // native-binary F/V3 transfers (raw 72-bit Subspace frames, sparse
 // markers). Advertised via the existing "YES <level>" reply; V3 TX is
 // gated on peer >= 3 AND Subspace mode (silent V2 fallback otherwise).
-constexpr int    ARQ_PROTOCOL_LEVEL      = 3;
+// [ICS213 2026-08-18] Level 4 = level 3 wire UNCHANGED (no V4 framing
+// exists) PLUS the ICS-213 form capability: understands the trimmed
+// sender-half form shape and the sparse "FORM: ICS-213-REPLY/1"
+// packet (merge-on-receipt). The FIRST capability-only rung. Form
+// senders shape the WIRE by the peer's answer: >= 4 gets the trimmed
+// form / sparse reply; == 3 gets the complete traditional document
+// (empty 9/10 blocks) or the complete filled reply — self-contained
+// files a shipped level-3 build simply saves. All fielded level
+// consumers are >=/< comparisons (audited 2026-08-18), so
+// advertising 4 is transparent to every shipped build.
+constexpr int    ARQ_PROTOCOL_LEVEL      = 4;
+constexpr int    ARQ_LEVEL_ICS213        = 4; // form-aware rung
 
 constexpr int    MSG_ID_MIN              = 1;
 constexpr int    MSG_ID_MAX              = 99;

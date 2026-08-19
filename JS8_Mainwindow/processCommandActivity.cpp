@@ -651,30 +651,57 @@ void UI_Constructor::processCommandActivity() {
                 if (toMe && capabilityNegotiationPending() &&
                     d.from.compare(m_pendingFilePeer,
                                    Qt::CaseInsensitive) == 0) {
+                    bool const requiredV2 = m_pendingRequiresV2;
+                    QString const formSparse = m_pendingFormSparsePath;
                     QString path, link, pr;
                     // Hold the phase open across the 1.5 s defer below
                     // — see takeCapabilityNegotiation()'s declaration.
                     takeCapabilityNegotiation(&path, &link, &pr, true);
-                    qWarning() << "[FT-TX] capability received — "
-                                  "resuming pending transfer to"
-                               << pr << "level=" << level
-                               << (link.isEmpty() ? "(file)" : "(link)");
-                    QPointer<UI_Constructor> const self(this);
-                    QTimer::singleShot(1500, this,
-                        [self, path, link, pr, level]() {
-                            if (!self) return;
-                            if (!link.isEmpty()) {
-                                // Cache now holds the level; sendWebLink
-                                // proceeds directly.
-                                self->sendWebLink(link, pr);
-                            } else {
-                                self->startFileTransferWithFormat(
-                                    path, pr, level);
-                            }
-                            // Transfer now owns the lock via m_sends
-                            // (or failed to start) — close the phase.
-                            self->endCapabilityNegotiationPhase();
-                        });
+                    // [ICS213 v1gate] Parked FORM send + an actual
+                    // "YES 1": the peer is definitively V1 — abort
+                    // now (no V1 fallback for forms). The level IS
+                    // cached above, so a retry aborts instantly at
+                    // the cache-hit gate.
+                    if (requiredV2 && level < 2 && link.isEmpty()) {
+                        // NO return — we're inside the command-queue
+                        // while loop; later queued commands must
+                        // still process.
+                        qWarning() << "[FT-TX] form transfer aborted"
+                                      " — peer" << pr
+                                   << "answered YES" << level;
+                        notifyFormTransferAborted(
+                            pr, QStringLiteral("peer answered YES 1"));
+                        endCapabilityNegotiationPhase();
+                    } else {
+                        qWarning() << "[FT-TX] capability received — "
+                                      "resuming pending transfer to"
+                                   << pr << "level=" << level
+                                   << (link.isEmpty() ? "(file)"
+                                                      : "(link)");
+                        // [ARQ level 4] Wire shape decided HERE —
+                        // the first moment the peer's level is known.
+                        QString const wirePath =
+                            (requiredV2 && link.isEmpty())
+                                ? formWirePath(path, formSparse, level)
+                                : path;
+                        QPointer<UI_Constructor> const self(this);
+                        QTimer::singleShot(1500, this,
+                            [self, wirePath, link, pr, level]() {
+                                if (!self) return;
+                                if (!link.isEmpty()) {
+                                    // Cache now holds the level;
+                                    // sendWebLink proceeds directly.
+                                    self->sendWebLink(link, pr);
+                                } else {
+                                    self->startFileTransferWithFormat(
+                                        wirePath, pr, level);
+                                }
+                                // Transfer now owns the lock via
+                                // m_sends (or failed to start) —
+                                // close the phase.
+                                self->endCapabilityNegotiationPhase();
+                            });
+                    }
                 }
             } else if (toMe &&
                        (!m_pendingFilePath.isEmpty() ||

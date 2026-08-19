@@ -37,6 +37,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QPlainTextEdit>
@@ -922,18 +923,50 @@ void UI_Constructor::promptAndSaveReceivedFile(
     bool const isReplyForm =
         header.name.contains(QStringLiteral("_REPLY"),
                              Qt::CaseInsensitive);
+    // [ICS213] Form format shown on the prompt — it can bear on the
+    // chosen disposition. Sparse replies label as reply data; V1
+    // payload (still base32 here) probes as unrecognized.
+    QString fmtLine;
+    if (isIcs213Form) {
+        QString label;
+        if (ICS213Dialog::isSparseReply(payloadBytes))
+            label = QStringLiteral("Reply data");
+        else switch (ICS213Dialog::probeFormat(payloadBytes)) {
+        case 0: label = QStringLiteral("Standard layout"); break;
+        case 1: label = QStringLiteral("Compact"); break;
+        case 2: label = QStringLiteral("Winlink XML"); break;
+        default: label = QStringLiteral("(unrecognized)"); break;
+        }
+        fmtLine = QStringLiteral("    Format:  %1\n").arg(label);
+    }
+    // [ICS213 2026-08-18] Reply arrivals carry the ORIGINAL form's
+    // serial in the name (ICS213_<serial>_..._REPLY.*) — surface it
+    // in the title (operator spec: "ICS-213 Reply - WM8Q-0006").
+    QString const replySerial =
+        (isIcs213Form && isReplyForm)
+            ? header.name.section(QLatin1Char('_'), 1, 1)
+            : QString();
     auto const msg = QStringLiteral(
         "Incoming %1 from %2\n\n"
         "    Name:  %3\n"
-        "    Size:  %4 bytes\n\n"
+        "    Size:  %4 bytes\n%5\n"
         "Save to file storage?")
-        .arg(isIcs213Form ? QStringLiteral("ICS-213 form")
-                          : QStringLiteral("file"),
-             fromCall, header.name).arg(header.bytes);
+        .arg(isIcs213Form
+                 ? (isReplyForm ? QStringLiteral("ICS-213 reply")
+                                : QStringLiteral("ICS-213 form"))
+                 : QStringLiteral("file"),
+             fromCall, header.name)
+        .arg(header.bytes)
+        .arg(fmtLine);
     auto *box = new QMessageBox(this);
-    box->setWindowTitle(isIcs213Form
-                            ? QStringLiteral("Incoming ICS-213 form")
-                            : QStringLiteral("Incoming file"));
+    box->setWindowTitle(
+        !isIcs213Form ? QStringLiteral("Incoming file")
+        : isReplyForm
+            ? (replySerial.isEmpty()
+                   ? QStringLiteral("ICS-213 Reply")
+                   : QStringLiteral("ICS-213 Reply - %1")
+                         .arg(replySerial))
+            : QStringLiteral("Incoming ICS-213 form"));
     box->setText(msg);
     box->setIcon(QMessageBox::Question);
     box->setStandardButtons(QMessageBox::Save | QMessageBox::Discard);
@@ -1026,12 +1059,81 @@ void UI_Constructor::promptAndSaveReceivedFile(
         qCWarning(chunkedarq_js8)
             << "[FT-RX] saved file — peer=" << fromCopy
             << "msgId=" << msgIdCopy << "path=" << savedPath;
+
+        // [ICS213 sparse merge] A reply wire file carries ONLY the
+        // new 9/10 data — rejoin it with OUR retained copy of the
+        // original form (REF names it; it lives in our ICS213 send
+        // folder). Read the SAVED file, not payloadBytes: this way
+        // V1 (decoded at save) and V2/V3 take the same path. On any
+        // mismatch the sparse file is kept as-is — still readable.
+        QString finalPath = savedPath;
+        if (QFile sf{savedPath}; sf.open(QIODevice::ReadOnly)) {
+            QByteArray const savedBytes = sf.readAll();
+            sf.close();
+            if (ICS213Dialog::isSparseReply(savedBytes)) {
+                QString const sparse = QString::fromUtf8(savedBytes);
+                QString ref;
+                if (int const i =
+                        sparse.indexOf(QStringLiteral("REF: "));
+                    i >= 0) {
+                    int const e =
+                        sparse.indexOf(QLatin1Char('\n'), i);
+                    ref = sparse
+                              .mid(i + 5,
+                                   (e < 0 ? sparse.size() : e) -
+                                       (i + 5))
+                              .trimmed();
+                }
+                QString merged;
+                if (!ref.isEmpty() && !ref.contains(QLatin1Char('/'))) {
+                    QString const origPath =
+                        QDir{FileTransfer::receiveDirectory()}
+                            .filePath(QStringLiteral("ICS213/") + ref);
+                    if (QFile of{origPath};
+                        of.open(QIODevice::ReadOnly)) {
+                        merged = ICS213Dialog::mergeReply(
+                            QString::fromUtf8(of.readAll()), sparse);
+                        if (merged.isEmpty())
+                            qCWarning(chunkedarq_js8)
+                                << "[FT-RX] reply merge shape "
+                                   "mismatch — keeping sparse file;"
+                                << "orig=" << origPath;
+                    } else {
+                        qCWarning(chunkedarq_js8)
+                            << "[FT-RX] reply original not found —"
+                            << "keeping sparse file; ref=" << ref;
+                    }
+                }
+                if (!merged.isEmpty()) {
+                    // Completed form wears the ORIGINAL's extension
+                    // (an .xml form's reply arrives as .txt wire).
+                    QString const outName =
+                        QFileInfo{headerCopy.name}.completeBaseName() +
+                        QLatin1Char('.') + QFileInfo{ref}.suffix();
+                    QString const outPath =
+                        QDir{FileTransfer::receiveDirectory()}
+                            .filePath(outName);
+                    if (QFile out{outPath};
+                        out.open(QIODevice::WriteOnly |
+                                 QIODevice::Truncate)) {
+                        out.write(merged.toUtf8());
+                        out.close();
+                        if (outPath != savedPath)
+                            QFile::remove(savedPath);
+                        finalPath = outPath;
+                        qCWarning(chunkedarq_js8)
+                            << "[FT-RX] sparse reply merged into"
+                            << outPath;
+                    }
+                }
+            }
+        }
         // Surface the save in the conversation panel so it survives
         // panel scrollback (the modeless dialog will be dismissed by
         // the operator at some point).
         auto const summary =
             QStringLiteral("%1: [file received: %2 → %3]")
-                .arg(fromCopy, headerCopy.name, savedPath);
+                .arg(fromCopy, headerCopy.name, finalPath);
         auto const now = DriftingDateTime::currentDateTimeUtc();
         displayTextForFreq(summary, freq(), now,
                            /*isTx=*/false,
@@ -1042,16 +1144,35 @@ void UI_Constructor::promptAndSaveReceivedFile(
         // [ICS213 reply] Save is done — open the reply form wired
         // back to the original sender.
         if (wantReply)
-            openIcs213Reply(savedPath, fromCopy);
+            openIcs213Reply(finalPath, fromCopy);
 
         // [ICS213] "Show now": open the saved form in a modeless
         // read-only viewer.
         if (wantShow) {
-            QFile vf{savedPath};
+            QFile vf{finalPath};
             if (vf.open(QIODevice::ReadOnly)) {
                 auto *view = new QDialog(this);
+                // [ICS213 2026-08-18] Same title style for BOTH
+                // viewer flavors (operator spec): the serial IS the
+                // form's identity — "ICS-213 Form - K9AVT-0006" /
+                // "ICS-213 Reply - K9AVT-0006". Sender-call fallback
+                // only when the name carries no serial.
+                QString const vSerial =
+                    headerCopy.name.startsWith(QStringLiteral("ICS213_"),
+                                               Qt::CaseInsensitive)
+                        ? headerCopy.name.section(QLatin1Char('_'), 1, 1)
+                        : QString();
+                bool const vReply =
+                    headerCopy.name.contains(QStringLiteral("_REPLY"),
+                                             Qt::CaseInsensitive);
                 view->setWindowTitle(
-                    QStringLiteral("ICS-213 — from %1").arg(fromCopy));
+                    vSerial.isEmpty()
+                        ? QStringLiteral("ICS-213 - from %1")
+                              .arg(fromCopy)
+                        : QStringLiteral("ICS-213 %1 - %2")
+                              .arg(vReply ? QStringLiteral("Reply")
+                                          : QStringLiteral("Form"),
+                                   vSerial));
                 view->setAttribute(Qt::WA_DeleteOnClose);
                 auto *lay = new QVBoxLayout(view);
                 auto *txt = new QPlainTextEdit(view);
@@ -1076,7 +1197,7 @@ void UI_Constructor::promptAndSaveReceivedFile(
         // the FULL URL is the link text — the receiver sees exactly
         // where a link goes before clicking. Binary files (NUL in
         // the first 64 KB) are skipped entirely.
-        QFile saved(savedPath);
+        QFile saved(finalPath);
         if (saved.open(QIODevice::ReadOnly)) {
             QByteArray const head = saved.read(64 * 1024);
             saved.close();

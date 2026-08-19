@@ -14,6 +14,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMessageBox>
@@ -24,6 +25,44 @@
 
 namespace {
 constexpr int kBodyCap = 500;
+
+// [ARQ level 4] ONE authority for the Standard form's reply-section
+// text: renderStandard appends it, mergeReply fills/appends it, and
+// writeTrimmedWireCopy strips it. Never restate these strings.
+QString standardBar() { return QString{50, QLatin1Char('=')}; }
+QString standardThin() { return QString{50, QLatin1Char('-')}; }
+QString emptyReplyBlock() {
+    return QStringLiteral("9. Reply (By Recipient):\n\n"
+                          "10. Replied by: \n"
+                          "    Name: \n"
+                          "    Position/Title: \n"
+                          "    Date/Time: \n");
+}
+QString emptyCompactReplySection() {
+    return QStringLiteral("REPLY:\n\n"
+                          "REPLIED-BY: \n"
+                          "REPLY-DATETIME: \n");
+}
+QString filledCompactReplySection(QString const &text,
+                                  QString const &name,
+                                  QString const &pos,
+                                  QString const &dt) {
+    QString out;
+    out += QStringLiteral("REPLY:\n%1\n").arg(text);
+    out += QStringLiteral("REPLIED-BY: %1, %2\n").arg(name, pos);
+    out += QStringLiteral("REPLY-DATETIME: %1\n").arg(dt);
+    return out;
+}
+QString filledReplyBlock(QString const &text, QString const &name,
+                         QString const &pos, QString const &dt) {
+    QString out;
+    out += QStringLiteral("9. Reply (By Recipient):\n%1\n\n").arg(text);
+    out += QStringLiteral("10. Replied by: \n");
+    out += QStringLiteral("    Name: %1\n").arg(name);
+    out += QStringLiteral("    Position/Title: %1\n").arg(pos);
+    out += QStringLiteral("    Date/Time: %1\n").arg(dt);
+    return out;
+}
 QString const kDraftName = QStringLiteral("ics213_draft.json");
 
 QString xmlEscape(QString s) {
@@ -147,7 +186,10 @@ void ICS213Dialog::onFieldChanged() {
 
 void ICS213Dialog::updateFooter() {
     auto *body = m_replyMode ? ui->replyEdit : ui->messageEdit;
-    int const chars = renderStandard().size();
+    // Reply sends only the sparse packet — estimate THAT, not the
+    // full form.
+    int const chars = m_replyMode ? renderReplySparse().size()
+                                  : renderStandard(peekSerial()).size();
     QString est;
     if (m_airtimeSecs) {
         double const s = m_airtimeSecs(chars);
@@ -225,16 +267,6 @@ QString ICS213Dialog::peekSerial() const {
         next, 4, 10, QLatin1Char('0'));
 }
 
-QString ICS213Dialog::subjectSlug() const {
-    QString s = ui->subjectEdit->text().toLower();
-    static QRegularExpression const nonAlnum{
-        QStringLiteral("[^a-z0-9]+")};
-    s.replace(nonAlnum, QStringLiteral("-"));
-    while (s.startsWith(QLatin1Char('-'))) s.remove(0, 1);
-    while (s.endsWith(QLatin1Char('-'))) s.chop(1);
-    return s.left(24);
-}
-
 // Subject with the precedence suffix (Routine = bare) — used by every
 // render so the numbered layout stays structurally standard.
 static QString subjectWithPrecedence(QString const &subject,
@@ -246,17 +278,17 @@ static QString subjectWithPrecedence(QString const &subject,
     }
 }
 
-QString ICS213Dialog::renderStandard() const {
+QString ICS213Dialog::renderStandard(QString const &serial) const {
     // Mirrors the operator's reference template (ICS-213.txt): same
     // banner, same numbered sections; blocks 9/10 rendered as empty
     // headers so the recipient sees the complete familiar form
     // awaiting reply.
     QString const bar{50, QLatin1Char('=')};
-    QString const thin{50, QLatin1Char('-')};
     QString out;
     out += bar + QLatin1Char('\n');
     out += QStringLiteral("GENERAL MESSAGE (ICS-213)\n");
     out += bar + QLatin1Char('\n');
+    out += QStringLiteral("Number: %1\n").arg(serial);
     out += QStringLiteral("1. Incident Name (Optional): %1\n")
                .arg(ui->incidentEdit->text());
     out += QStringLiteral("2. To (Name and Position): %1\n")
@@ -277,31 +309,25 @@ QString ICS213Dialog::renderStandard() const {
                .arg(ui->positionEdit->text());
     out += QStringLiteral("Sender:  [%1]\n\n")
                .arg(m_replyMode ? m_replySenderCall : m_myCall);
-    out += thin + QLatin1Char('\n');
-    if (m_replyMode) {
-        out += QStringLiteral("9. Reply (By Recipient):\n%1\n\n")
-                   .arg(ui->replyEdit->toPlainText());
-        out += QStringLiteral("10. Replied by: \n");
-        out += QStringLiteral("    Name: %1\n")
-                   .arg(ui->repliedByEdit->text());
-        out += QStringLiteral("    Position/Title: %1\n")
-                   .arg(ui->replyPositionEdit->text());
-        out += QStringLiteral("    Date/Time: %1\n")
-                   .arg(ui->replyDateTimeEdit->text());
-    } else {
-        out += QStringLiteral("9. Reply (By Recipient):\n\n");
-        out += QStringLiteral("10. Replied by: \n");
-        out += QStringLiteral("    Name: \n");
-        out += QStringLiteral("    Position/Title: \n");
-        out += QStringLiteral("    Date/Time: \n");
-    }
+    // [ARQ level 4] The LOCAL file is always the complete document
+    // (printable, hand-fillable — the level-3 interop shape). The
+    // level-4 wire trim happens in writeTrimmedWireCopy at dispatch,
+    // once the peer's answer is known.
+    out += standardThin() + QLatin1Char('\n');
+    out += m_replyMode
+               ? filledReplyBlock(ui->replyEdit->toPlainText(),
+                                  ui->repliedByEdit->text(),
+                                  ui->replyPositionEdit->text(),
+                                  ui->replyDateTimeEdit->text())
+               : emptyReplyBlock();
     out += bar + QLatin1Char('\n');
     return out;
 }
 
-QString ICS213Dialog::renderCompact() const {
+QString ICS213Dialog::renderCompact(QString const &serial) const {
     QString out;
     out += QStringLiteral("FORM: ICS-213/1\n");
+    out += QStringLiteral("NUMBER: %1\n").arg(serial);
     out += QStringLiteral("INCIDENT: %1\n").arg(ui->incidentEdit->text());
     out += QStringLiteral("TO: %1\n").arg(ui->toEdit->text());
     out += QStringLiteral("FROM: %1\n").arg(ui->fromEdit->text());
@@ -317,15 +343,17 @@ QString ICS213Dialog::renderCompact() const {
                .arg(m_replyMode ? m_replySenderCall : m_myCall);
     out += QStringLiteral("MSG:\n%1\n")
                .arg(ui->messageEdit->toPlainText());
-    if (m_replyMode) {
-        out += QStringLiteral("REPLY:\n%1\n")
-                   .arg(ui->replyEdit->toPlainText());
-        out += QStringLiteral("REPLIED-BY: %1, %2\n")
-                   .arg(ui->repliedByEdit->text(),
-                        ui->replyPositionEdit->text());
-        out += QStringLiteral("REPLY-DATETIME: %1\n")
-                   .arg(ui->replyDateTimeEdit->text());
-    }
+    // [level3 placeholders] Compose carries EMPTY reply keys so a
+    // level-3 recipient can fill them manually in a text editor
+    // (operator report 2026-08-18: Compact had no placeholders at
+    // all). Level-4 wire strips them (writeTrimmedWireCopy).
+    out += m_replyMode
+               ? filledCompactReplySection(
+                     ui->replyEdit->toPlainText(),
+                     ui->repliedByEdit->text(),
+                     ui->replyPositionEdit->text(),
+                     ui->replyDateTimeEdit->text())
+               : emptyCompactReplySection();
     return out;
 }
 
@@ -418,24 +446,50 @@ bool ICS213Dialog::writeFormFile(QString *outPath) {
     QString content;
     QString ext = QStringLiteral("txt");
     switch (fmt) {
-    case 1: content = renderCompact(); break;
+    case 1: content = renderCompact(serial); break;
     case 2:
         content = renderWinlinkXml(serial);
         ext = QStringLiteral("xml");
         break;
-    default: content = renderStandard(); break;
+    default: content = renderStandard(serial); break;
+    }
+    // [ARQ level 4] Reply mode writes TWO artifacts: the complete
+    // filled form (local archive + the level-3 wire shape) rendered
+    // above in the ORIGINAL's format, and the sparse packet (the
+    // level-4 wire shape) in the temp wire dir. Dispatch picks by
+    // the original sender's answered level.
+    m_sparseWirePath.clear();
+    if (m_replyMode) {
+        QString const dir =
+            QStandardPaths::writableLocation(
+                QStandardPaths::TempLocation) +
+            QStringLiteral("/js8call-ics213-wire");
+        if (QDir{}.mkpath(dir)) {
+            QString const sp =
+                dir + QLatin1Char('/') +
+                QFileInfo{m_replySourcePath}.completeBaseName() +
+                QStringLiteral("_REPLY.txt");
+            if (QFile f{sp};
+                f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                f.write(renderReplySparse().toUtf8());
+                f.close();
+                m_sparseWirePath = sp;
+            }
+        }
     }
     int const year =
         DriftingDateTime::currentDateTimeUtc().date().year();
+    // [2026-08-18] No subject slug — serial + year identify the
+    // form and the slug doubled the serial digits on short subjects
+    // (operator report: "..._0006_2026_6666").
     QString const name =
         m_replyMode
             ? QStringLiteral("%1_REPLY.%2")
                   .arg(QFileInfo{m_replySourcePath}.completeBaseName())
                   .arg(ext)
-            : QStringLiteral("ICS213_%1_%2_%3.%4")
+            : QStringLiteral("ICS213_%1_%2.%3")
                   .arg(serial)
                   .arg(year)
-                  .arg(subjectSlug())
                   .arg(ext);
     QString const path = formDir().filePath(name);
     QFile f{path};
@@ -459,7 +513,7 @@ void ICS213Dialog::onSendClicked() {
         return;
     if (!m_replyMode)
         clearDraft(); // reply never touches the compose draft
-    Q_EMIT sendRequested(path);
+    Q_EMIT sendRequested(path, m_sparseWirePath);
     accept();
 }
 
@@ -499,6 +553,133 @@ void ICS213Dialog::reject() {
     if (!m_replyMode)
         saveDraft(); // deletes the draft instead if all-empty
     QDialog::reject();
+}
+
+// Keys first, body LAST — everything after "REPLY:\n" is the reply
+// text verbatim, so the body can contain anything (even lines that
+// look like keys).
+QString ICS213Dialog::renderReplySparse() const {
+    QString out;
+    out += QStringLiteral("FORM: ICS-213-REPLY/1\n");
+    out += QStringLiteral("REF: %1\n")
+               .arg(QFileInfo{m_replySourcePath}.fileName());
+    out += QStringLiteral("REPLIED-BY: %1, %2\n")
+               .arg(ui->repliedByEdit->text(),
+                    ui->replyPositionEdit->text());
+    out += QStringLiteral("REPLY-DATETIME: %1\n")
+               .arg(ui->replyDateTimeEdit->text());
+    out += QStringLiteral("REPLY:\n%1\n")
+               .arg(ui->replyEdit->toPlainText());
+    return out;
+}
+
+QString ICS213Dialog::writeTrimmedWireCopy(QString const &fullPath) {
+    QFile in{fullPath};
+    if (!in.open(QIODevice::ReadOnly)) return fullPath;
+    QString content = QString::fromUtf8(in.readAll());
+    in.close();
+    QString const stdSection =
+        standardThin() + QLatin1Char('\n') + emptyReplyBlock();
+    if (content.count(stdSection) == 1)
+        content.remove(stdSection);
+    else if (content.count(emptyCompactReplySection()) == 1)
+        content.remove(emptyCompactReplySection());
+    else
+        return fullPath; // nothing to trim (XML / already trimmed)
+    QString const dir =
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
+        QStringLiteral("/js8call-ics213-wire");
+    if (!QDir{}.mkpath(dir)) return fullPath;
+    // SAME basename — the transfer header (and the reply REF chain)
+    // key on the filename.
+    QString const outPath =
+        dir + QLatin1Char('/') + QFileInfo{fullPath}.fileName();
+    QFile out{outPath};
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return fullPath;
+    out.write(content.toUtf8());
+    out.close();
+    return outPath;
+}
+
+bool ICS213Dialog::isSparseReply(QByteArray const &bytes) {
+    return bytes.contains("FORM: ICS-213-REPLY/1");
+}
+
+QString ICS213Dialog::mergeReply(QString const &originalContent,
+                                 QString const &sparseContent) {
+    // Parse the sparse packet.
+    QString const by =
+        lineAfter(sparseContent, QStringLiteral("REPLIED-BY: "));
+    QString const dt =
+        lineAfter(sparseContent, QStringLiteral("REPLY-DATETIME: "));
+    int const bi = sparseContent.indexOf(QStringLiteral("REPLY:\n"));
+    if (bi < 0) return {};
+    QString text = sparseContent.mid(bi + 7);
+    if (text.endsWith(QLatin1Char('\n'))) text.chop(1);
+    QString name = by, pos;
+    if (int const comma = by.lastIndexOf(QStringLiteral(", "));
+        comma >= 0) {
+        name = by.left(comma);
+        pos = by.mid(comma + 2);
+    }
+
+    QString out = originalContent;
+    switch (probeFormat(originalContent.toUtf8())) {
+    case 0: {
+        QString const filled = filledReplyBlock(text, name, pos, dt);
+        // Full-shape original (the normal local archive): empty 9/10
+        // block present — fill in place. Block 10's lines are
+        // 4-space indented, block 8's are 3-space; no cross-match.
+        if (out.count(emptyReplyBlock()) == 1) {
+            out.replace(emptyReplyBlock(), filled);
+            return out;
+        }
+        // Trimmed original (a .368.7-era archive, or a received
+        // trimmed wire copy): ends at the bar after Sender — append
+        // the reply section before a closing bar.
+        QString const barLine = standardBar() + QLatin1Char('\n');
+        if (!out.endsWith(barLine)) return {}; // shape mismatch
+        out.chop(barLine.size());
+        out += standardThin() + QLatin1Char('\n');
+        out += filled;
+        out += barLine;
+        return out;
+    }
+    case 1: {
+        QString const filled =
+            filledCompactReplySection(text, name, pos, dt);
+        // Full-shape original: empty placeholders present — fill.
+        if (out.count(emptyCompactReplySection()) == 1) {
+            out.replace(emptyCompactReplySection(), filled);
+            return out;
+        }
+        // Legacy/trimmed original: append after the message.
+        if (!out.endsWith(QLatin1Char('\n')))
+            out += QLatin1Char('\n');
+        out += filled;
+        return out;
+    }
+    case 2: {
+        // Winlink XML: reply variables slot in before </variables>.
+        QString const anchor = QStringLiteral("  </variables>");
+        if (out.count(anchor) != 1) return {};
+        QString vars;
+        vars += QStringLiteral("    <reply>%1</reply>\n")
+                    .arg(xmlEscape(text));
+        vars += QStringLiteral("    <replied_by>%1</replied_by>\n")
+                    .arg(xmlEscape(name));
+        vars += QStringLiteral(
+                    "    <replied_postitle>%1</replied_postitle>\n")
+                    .arg(xmlEscape(pos));
+        vars += QStringLiteral(
+                    "    <replied_datetime>%1</replied_datetime>\n")
+                    .arg(xmlEscape(dt));
+        out.replace(anchor, vars + anchor);
+        return out;
+    }
+    default: return {};
+    }
 }
 
 int ICS213Dialog::probeFormat(QByteArray const &bytes) {
@@ -574,6 +755,11 @@ bool ICS213Dialog::enterReplyMode(QString const &receivedPath,
     ui->replyDateTimeEdit->setText(
         DriftingDateTime::currentDateTimeUtc().toString(
             QStringLiteral("yyyy-MM-dd HH:mm")));
+    // With both message boxes on screen the splitter starved them —
+    // give the read-only original and the reply box real height.
+    ui->messageEdit->setMinimumHeight(110);
+    ui->replyEdit->setMinimumHeight(110);
+    setMinimumSize(520, 700);
 
     // Button set for this phase.
     ui->clearButton->setVisible(false);
@@ -649,6 +835,12 @@ void ICS213Dialog::parseCompact(QString const &content) {
         m_replySenderCall = sc;
     if (mi >= 0) {
         QString msg = content.mid(mi + 6);
+        // Full-shape original: the empty reply placeholders trail
+        // the message — they are form furniture, not body text.
+        if (QString const tail =
+                QLatin1Char('\n') + emptyCompactReplySection();
+            msg.endsWith(tail))
+            msg.chop(tail.size());
         if (msg.endsWith(QLatin1Char('\n')))
             msg.chop(1);
         ui->messageEdit->setPlainText(msg);

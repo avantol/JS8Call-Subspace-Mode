@@ -4429,6 +4429,10 @@ void UI_Constructor::stopTx() {
     // (the only responses that arm this today) are single-frame, so
     // it never bit — but the landmine is now defused uniformly: ALL
     // end-of-TX-only actions in stopTx sit behind this gate.
+    // [#146 lockhold] Sampled BEFORE the arm below clears it: the
+    // general drain unlock further down must not open the box during
+    // the 750 ms restore tail (wire text still displayed there).
+    bool const arqRestoreOwed = m_arqResponseRestorePending;
     if (!shouldContinue && m_arqResponseRestorePending &&
         ui->extFreeTextMsgEdit) {
         QString const saved = m_arqResponseSavedText;
@@ -4502,7 +4506,9 @@ void UI_Constructor::stopTx() {
         if (m_nSubMode != Varicode::JS8CallFT2)
 #endif
         ui->extFreeTextMsgEdit->clear();
-        ui->extFreeTextMsgEdit->setReadOnly(false);
+        // [#146 lockhold] The deferred restore owns the unlock while
+        // a response draft is still owed.
+        ui->extFreeTextMsgEdit->setReadOnly(arqRestoreOwed);
         update_dynamic_property(ui->extFreeTextMsgEdit, "transmitting", false);
         stopTxMechanical();
         tryRestoreFreqOffset();
@@ -5496,7 +5502,14 @@ bool UI_Constructor::prepareNextMessageFrame() {
 
             qCDebug(mainwindow_js8) << "unsent replaced to" << "\n" << newText;
         }
-        ui->extFreeTextMsgEdit->setReadOnly(shouldDisableTypeahead);
+        // [#146 lockhold 2026-08-18] PRESERVE the ARQ-response lock:
+        // the injected ACK/NACK text flows through this very path
+        // (dirty box), and the unconditional restore here unlocked
+        // the box for the whole response TX — the operator could
+        // type into the displayed ACK and queue a new message over
+        // the peer's next chunk (third report of this family).
+        ui->extFreeTextMsgEdit->setReadOnly(shouldDisableTypeahead ||
+                                            m_arqResponseRestorePending);
         ui->extFreeTextMsgEdit->replaceUnsentText(newText, true);
         ui->extFreeTextMsgEdit->setClean();
     }
@@ -7045,8 +7058,9 @@ void UI_Constructor::on_sendIcs213FormAction_triggered() {
     connect(dlg, &QObject::destroyed, this,
             [this]() { syncIcs213ArqGate(); });
     connect(dlg, &ICS213Dialog::sendRequested, this,
-            [this, peer](QString const &path) {
-                startFileTransferViaArq(path, peer);
+            [this, peer](QString const &path, QString const &sparse) {
+                startFileTransferViaArq(path, peer,
+                                        /*requireLevel2=*/true, sparse);
             });
     syncIcs213ArqGate(); // disables the menu item; seeds dialog busy state
     dlg->show();
@@ -7130,10 +7144,14 @@ void UI_Constructor::on_sendWebLinkAction_triggered() {
 // together; that pairing is the whole point.
 void UI_Constructor::beginCapabilityNegotiation(QString const &peer,
                                                 QString const &filePath,
-                                                QString const &linkUrl) {
+                                                QString const &linkUrl,
+                                                bool const requireLevel2,
+                                                QString const &formSparsePath) {
     m_pendingFilePath = filePath;
     m_pendingLinkUrl = linkUrl;
     m_pendingFilePeer = peer;
+    m_pendingRequiresV2 = requireLevel2;
+    m_pendingFormSparsePath = formSparsePath;
     m_capQueryRetries = 0;
     if (m_chunkedArq) m_chunkedArq->beginNegotiation(peer);
     // Locks/banner key off the session phase; refresh them now rather
@@ -7154,6 +7172,8 @@ bool UI_Constructor::takeCapabilityNegotiation(QString *filePath,
     m_pendingFilePath.clear();
     m_pendingLinkUrl.clear();
     m_pendingFilePeer.clear();
+    m_pendingRequiresV2 = false;
+    m_pendingFormSparsePath.clear();
     ++m_capQueryGen;
     if (!keepPhaseOpen && m_chunkedArq) m_chunkedArq->endNegotiation();
     return true;
@@ -7179,6 +7199,8 @@ void UI_Constructor::abortCapabilityNegotiation(char const *why) {
     m_pendingFilePath.clear();
     m_pendingLinkUrl.clear();
     m_pendingFilePeer.clear();
+    m_pendingRequiresV2 = false;
+    m_pendingFormSparsePath.clear();
     ++m_capQueryGen;
     if (m_chunkedArq) m_chunkedArq->endNegotiation();
     updateButtonDisplay();
@@ -7187,19 +7209,51 @@ void UI_Constructor::abortCapabilityNegotiation(char const *why) {
 
 // [BUILD 338] Transfer pipeline from a file path onward — everything
 // "Send file…" did after its file picker.
+// [ARQ level 4] ONE authority for the form wire shape. Level >= 4:
+// the sparse reply packet when there is one, else a trimmed copy of
+// the form (same filename). Level 3: the complete document as-is —
+// the graceful fallback a shipped build simply saves.
+QString UI_Constructor::formWirePath(QString const &fullPath,
+                                     QString const &sparsePath,
+                                     int const level) const {
+    if (level >= ChunkedArq::ARQ_LEVEL_ICS213) {
+        if (!sparsePath.isEmpty() && QFile::exists(sparsePath))
+            return sparsePath;
+        return ICS213Dialog::writeTrimmedWireCopy(fullPath);
+    }
+    return fullPath;
+}
+
 void UI_Constructor::startFileTransferViaArq(QString const &filePath,
-                                             QString const &peer) {
+                                             QString const &peer,
+                                             bool const requireLevel2,
+                                             QString const &formSparsePath) {
     // [BUILD 339 TODO #103] Format auto-negotiation. Cache hit (any
     // level) → send immediately. Unknown peer → stash the transfer,
     // auto-send QUERY ARQ?, resume from the capability-capture hook
     // (processCommandActivity) or fall back to V1 on timeout.
+    // [ICS213 v1gate] Form sends REQUIRE a "YES <2|3>" — a V1-cached
+    // peer aborts here; YES 1 and silence abort at their capture
+    // sites. (V3 is Subspace-only; the existing dispatch drops to V2
+    // at other speeds — this gate is only about refusing V1.)
     QString const key = peer.toUpper();
     if (m_peerArqLevel.contains(key)) {
-        startFileTransferWithFormat(filePath, peer,
-                                    m_peerArqLevel.value(key));
+        int const level = m_peerArqLevel.value(key);
+        if (requireLevel2 && level < 2) {
+            notifyFormTransferAborted(
+                peer,
+                QStringLiteral("peer advertised V1 earlier this "
+                               "session"));
+            return;
+        }
+        startFileTransferWithFormat(
+            requireLevel2 ? formWirePath(filePath, formSparsePath, level)
+                          : filePath,
+            peer, level);
         return;
     }
-    beginCapabilityNegotiation(peer, filePath, QString());
+    beginCapabilityNegotiation(peer, filePath, QString(),
+                               requireLevel2, formSparsePath);
     int const gen = ++m_capQueryGen;
     qCWarning(chunkedarq_js8)
         << "[FT-TX] peer capability unknown — auto-querying" << peer
@@ -7212,6 +7266,28 @@ void UI_Constructor::startFileTransferViaArq(QString const &filePath,
                    nullptr);
     // [BUILD 352 capUnify] Reply window arms at TX-done, not here.
     armCapQueryTimeout(gen);
+}
+
+// [ICS213 v1gate] Modeless notice: the form transfer did NOT start.
+// The form FILE is already saved (writeFormFile ran before the send),
+// so the operator can hand it to a capable station via "Send file…" —
+// deliberately no extra UI for that (operator decision 2026-08-18).
+void UI_Constructor::notifyFormTransferAborted(QString const &peer,
+                                               QString const &why) {
+    auto *box = new QMessageBox(this);
+    box->setWindowTitle(QStringLiteral("ICS-213 form not sent"));
+    box->setText(
+        QStringLiteral(
+            "%1 did not confirm V2/V3 ARQ capability (%2).\n\n"
+            "The form transfer was cancelled.\n"
+            "The form file is saved in the ICS213 folder; "
+            "you can still send it with \"Send file\u2026\".")
+            .arg(peer, why));
+    box->setIcon(QMessageBox::Warning);
+    box->setStandardButtons(QMessageBox::Ok);
+    box->setWindowModality(Qt::NonModal);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->show();
 }
 
 // [BUILD 340] Web-link send with the same capability negotiation as
@@ -7334,8 +7410,20 @@ void UI_Constructor::onCapQueryTimeout(int const gen) {
         armCapQueryTimeout(newGen);
         return;
     }
+    bool const requiredV2 = m_pendingRequiresV2;
     QString path, link, pr;
     takeCapabilityNegotiation(&path, &link, &pr);
+    if (requiredV2) {
+        // [ICS213 v1gate] Form transfer: no "YES 2/3" arrived —
+        // immediate exit, NO V1 fallback. Silence is not cached
+        // (may be QRM), so a later attempt re-queries.
+        qCWarning(chunkedarq_js8)
+            << "[FT-TX] form transfer aborted — no capability reply"
+            << "from" << pr;
+        notifyFormTransferAborted(
+            pr, QStringLiteral("no reply to QUERY ARQ?"));
+        return;
+    }
     qCWarning(chunkedarq_js8)
         << "[FT-TX] no capability reply from" << pr
         << "— proceeding with V1 (not cached; silence may be QRM)";
@@ -9539,8 +9627,10 @@ void UI_Constructor::openIcs213Reply(QString const &savedPath,
     connect(dlg, &QObject::destroyed, this,
             [this]() { syncIcs213ArqGate(); });
     connect(dlg, &ICS213Dialog::sendRequested, this,
-            [this, fromCall](QString const &path) {
-                startFileTransferViaArq(path, fromCall);
+            [this, fromCall](QString const &path,
+                             QString const &sparse) {
+                startFileTransferViaArq(path, fromCall,
+                                        /*requireLevel2=*/true, sparse);
             });
     syncIcs213ArqGate(); // menu off while open; seed busy state
     dlg->show();
