@@ -433,6 +433,7 @@ class UI_Constructor : public QMainWindow {
     void on_actionShow_Call_Activity_triggered(bool checked);
     void on_actionShow_Waterfall_triggered(bool checked);
     void on_actionShow_Spots_Map_triggered(bool checked);
+    void on_actionShow_ARQ_Monitor_triggered(bool checked); // [#153]
     void on_actionShow_Waterfall_Controls_triggered(bool checked);
     void on_actionShow_Waterfall_Time_Drift_Controls_triggered(bool checked);
     void on_actionReset_Window_Sizes_triggered();
@@ -979,6 +980,8 @@ class UI_Constructor : public QMainWindow {
     QScopedPointer<WideGraph> m_wideGraph;
     QScopedPointer<LogQSO> m_logDlg;
     QScopedPointer<SpotMapWindow> m_spotMapWindow; // "Spots Map" view
+    QScopedPointer<class ArqMonitor> m_arqMonitor; // [#153] passive
+    QScopedPointer<class ArqMonitorWindow> m_arqMonitorWindow;
     QScopedPointer<HelpTextWindow> m_shortcuts;
     QScopedPointer<HelpTextWindow> m_prefixes;
     QScopedPointer<HelpTextWindow> m_mouseCmnds;

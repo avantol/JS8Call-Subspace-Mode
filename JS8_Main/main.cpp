@@ -229,6 +229,26 @@ int main(int argc, char *argv[]) {
             multiple = true;
         }
 
+        // [multiinst 2026-08-19] ONE authority for the per-instance
+        // file suffix: "" for the default instance (legacy filenames,
+        // Build 154 continuity), "-<rig>" under --rig-name (spaces
+        // sanitized to '-'; \ / , already rejected above), plus
+        // "-test" in test mode. Feeds BOTH the settings filename and
+        // the instance lock below — the continuity hardcodes had
+        // frozen both to the default names, which broke --rig-name
+        // entirely (second instance hit the shared lock; field
+        // 2026-08-19).
+        {
+            QString suffix;
+            QString rig = parser.value(rig_option);
+            rig.replace(QRegularExpression{R"(\s+)"},
+                        QStringLiteral("-"));
+            if (!rig.isEmpty()) suffix += QLatin1Char('-') + rig;
+            if (parser.isSet(test_option))
+                suffix += QStringLiteral("-test");
+            MultiSettings::setInstanceSuffix(suffix);
+        }
+
         // now we have the application name we can open the settings
         MultiSettings multi_settings{parser.value(cfg_option)};
 
@@ -245,8 +265,8 @@ int main(int argc, char *argv[]) {
         // filename with a space ("Subspace Edition.lock") is a
         // shell-quoting hazard and gives no user-visible benefit
         // (the lock file is purely internal).
-        QLockFile instance_lock{
-            temp_dir.absoluteFilePath("JS8Call.lock")};
+        QLockFile instance_lock{temp_dir.absoluteFilePath(
+            "JS8Call" + MultiSettings::instanceSuffix() + ".lock")};
         instance_lock.setStaleLockTime(0);
         while (!instance_lock.tryLock()) {
             if (QLockFile::LockFailedError == instance_lock.error()) {

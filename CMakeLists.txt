@@ -314,6 +314,8 @@ target_sources(
   JS8_UI/LogQSO.cpp
   JS8_UI/SpotMapGeoData.cpp
   JS8_UI/SpotMapWindow.cpp
+  JS8_UI/ArqMonitorWindow.cpp
+  JS8_Main/ArqMonitor.cpp
   JS8_UI/mainwindow.cpp
   JS8_UI/ICS213Dialog.cpp
   JS8_UI/ICS213Dialog.h

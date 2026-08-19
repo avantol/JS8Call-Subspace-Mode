@@ -2204,6 +2204,7 @@ background-color: #22ff22;
     <addaction name="actionShow_Waterfall_Time_Drift_Controls"/>
     <addaction name="separator"/>
     <addaction name="actionShow_Spots_Map"/>
+    <addaction name="actionShow_ARQ_Monitor"/>
     <addaction name="separator"/>
     <addaction name="actionShow_Fullscreen"/>
     <addaction name="actionShow_Statusbar"/>
@@ -2397,6 +2398,12 @@ background-color: #22ff22;
     <string>Live map of where your signal is being heard (PSK Reporter)</string>
    </property>
   </action>
+ <action name="actionShow_ARQ_Monitor">
+  <property name="checkable"><bool>true</bool></property>
+  <property name="checked"><bool>false</bool></property>
+  <property name="text"><string>Show ARQ Mo&amp;nitor</string></property>
+  <property name="toolTip"><string>Monitor overheard ARQ transfers between other stations (decode-only; never transmits)</string></property>
+ </action>
   <action name="actionReset_Window_Sizes">
    <property name="text">
     <string>Reset Frame Si&amp;zes</string>

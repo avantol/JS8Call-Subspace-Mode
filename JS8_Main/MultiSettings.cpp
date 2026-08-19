@@ -44,6 +44,8 @@ char const *multi_settings_current_group_key =
 char const *multi_settings_current_name_key = "CurrentName";
 char const *multi_settings_place_holder_key = "MultiSettingsPlaceHolder";
 
+QString g_instance_suffix; // [multiinst] see header
+
 QString unescape_ampersands(QString s) { return s.replace("&&", "&"); }
 
 // calculate a useable and unique settings file path
@@ -72,10 +74,21 @@ QString settings_path() {
         throw std::runtime_error{"Cannot find a usable configuration path \"" +
                                  config_path.path().toStdString() + '"'};
     }
-    // Filename also hardcoded to "JS8Call.ini" rather than derived from
-    // applicationName for the same continuity reason.
-    return config_path.absoluteFilePath("JS8Call.ini");
+    // Filename base hardcoded to "JS8Call" rather than derived from
+    // applicationName for the same continuity reason; the instance
+    // suffix ("" for the default instance) restores per-rig settings
+    // under --rig-name ([multiinst], see header).
+    return config_path.absoluteFilePath(
+        "JS8Call" + g_instance_suffix + ".ini");
 }
+} // namespace (reopened below — the statics need external linkage)
+
+void MultiSettings::setInstanceSuffix(QString const &suffix) {
+    g_instance_suffix = suffix;
+}
+QString MultiSettings::instanceSuffix() { return g_instance_suffix; }
+
+namespace {
 
 //
 // Dialog to get a valid new configuration name

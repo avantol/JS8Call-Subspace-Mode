@@ -13,6 +13,8 @@
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 #include "JS8_Main/FileTransfer.h"
 #include "JS8_UI/ICS213Dialog.h"
+#include "JS8_Main/ArqMonitor.h"
+#include "JS8_UI/ArqMonitorWindow.h"
 #include "JS8_Main/NativeBinary.h"
 #include "JS8_Include/SettingsGroup.h"
 
@@ -460,6 +462,8 @@ void UI_Constructor::writeSettings() {
     // window's visibility state is still meaningful (pre-close).
     if (m_spotMapWindow)
         m_spotMapWindow->saveSettings();
+    if (m_arqMonitorWindow) // [#153] same pre-close persistence rule
+        m_arqMonitorWindow->saveSettings();
 
     m_settings->beginGroup("UI_Constructor");
     m_settings->setValue("geometry", saveGeometry());
@@ -1182,6 +1186,17 @@ void UI_Constructor::on_actionShow_Waterfall_triggered(bool checked) {
 
     ui->mainSplitter->setSizes(vsizes);
     ui->bandHorizontalWidget->setVisible(checked);
+}
+
+// [#153] ARQ Monitor toggle — window open = monitoring on.
+void UI_Constructor::on_actionShow_ARQ_Monitor_triggered(bool checked) {
+    if (checked) {
+        m_arqMonitorWindow->show();
+        m_arqMonitorWindow->raise();
+        m_arqMonitorWindow->activateWindow();
+    } else {
+        m_arqMonitorWindow->userClose();
+    }
 }
 
 void UI_Constructor::on_actionShow_Spots_Map_triggered(bool checked) {

@@ -8,6 +8,7 @@
 #include "JS8_UI/mainwindow.h"
 
 #include "JS8_Main/NativeBinary.h"
+#include "JS8_Main/ArqMonitor.h"
 
 void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
 
@@ -222,6 +223,14 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                        << Varicode::JS8CallFT2;
                             setSubmode(Varicode::JS8CallFT2);
                         }
+                        // [#153 ARQMON tee] Passive monitor sees the
+                        // marker too — AFTER the Manager call, so
+                        // `accepted` and the submode switch stay
+                        // byte-identical. Matching is internal
+                        // (peerHash+msgId of monitor sessions only).
+                        if (m_arqMonitor && m_arqMonitor->active())
+                            m_arqMonitor->onMarkerFrame(
+                                mf, static_cast<int>(ev.frequency));
                         return;
                     }
                     int seq = 0, chk4 = 0;
@@ -272,6 +281,14 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                                        << Varicode::JS8CallFT2;
                             setSubmode(Varicode::JS8CallFT2);
                         }
+                        // [#153 ARQMON tee] Data frame to the passive
+                        // monitor, after the Manager call — an open
+                        // monitor window binds it by chk4 exactly as
+                        // the real path would.
+                        if (m_arqMonitor && m_arqMonitor->active())
+                            m_arqMonitor->onDataFrame(
+                                seq, chk4, p8,
+                                static_cast<int>(ev.frequency));
                     }
                     return;
                 }

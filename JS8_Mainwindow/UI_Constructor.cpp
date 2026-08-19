@@ -17,6 +17,8 @@
 
 #include "JS8_UI/mainwindow.h"
 #include "JS8_UI/SpeechBalloon.h"
+#include "JS8_Main/ArqMonitor.h"
+#include "JS8_UI/ArqMonitorWindow.h"
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 
 #include <QAction>
@@ -61,6 +63,13 @@ UI_Constructor::UI_Constructor(QString const &program_info,
       m_logDlg(new LogQSO(program_title(), m_settings, &m_config, nullptr)),
       // no parent so that it has a taskbar icon
       m_spotMapWindow(new SpotMapWindow(m_settings, &m_config, nullptr)),
+      // [#153] Passive overheard-transfer assembler + its window (the
+      // window IS the monitoring switch). No parent = taskbar icon,
+      // same as the map.
+      m_arqMonitor(new ArqMonitor(nullptr)),
+      m_arqMonitorWindow(
+          new ArqMonitorWindow(m_settings, m_arqMonitor.data(),
+                               nullptr)),
       m_lastDialFreq{0},
       m_detector{new Detector{JS8_RX_SAMPLE_RATE, JS8_NTMAX}},
       m_FFTSize{6912 / 2}, // conservative value to avoid buffer overruns
@@ -514,6 +523,13 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(m_spotMapWindow.data(), &SpotMapWindow::closed, this, [this]() {
         ui->actionShow_Spots_Map->setChecked(false);
     });
+    // [#153] ARQ Monitor: same lifecycle trio as the map.
+    connect(this, &UI_Constructor::finished, m_arqMonitorWindow.data(),
+            &ArqMonitorWindow::close);
+    connect(m_arqMonitorWindow.data(), &ArqMonitorWindow::closed, this,
+            [this]() {
+                ui->actionShow_ARQ_Monitor->setChecked(false);
+            });
     m_spotMapWindow->setStation(m_config.my_callsign(), m_config.my_grid());
     // [BUILD 336 TODO #96 first slice] Clicking a spot dot seeds the
     // outgoing text box with that callsign. Rules (Andy 2026-07-16):
@@ -702,6 +718,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         ui->actionShow_Spots_Map->setChecked(true);
         m_spotMapWindow->setBand(m_lastBand);
         m_spotMapWindow->show();
+    }
+    // [#153] Same one-time restore for the ARQ Monitor.
+    if (m_arqMonitorWindow->wasVisibleAtShutdown()) {
+        ui->actionShow_ARQ_Monitor->setChecked(true);
+        m_arqMonitorWindow->show();
     }
 
     // Network message handling

@@ -6,6 +6,7 @@
  */
 
 #include "JS8_UI/mainwindow.h"
+#include "JS8_Main/ArqMonitor.h"
 
 #include "JS8_Main/ChunkedArq.h"
 #include "JS8_Main/NativeBinary.h"
@@ -735,6 +736,19 @@ void UI_Constructor::processCommandActivity() {
         // we're only responding to allcall, groupcalls, and our callsign at
         // this point, so we'll end after logging the callsigns we've heard
         if (!isAllCall && !toMe && !isGroupCall) {
+            // [#153 ARQMON tee] Overheard third-party directed text
+            // was a pure discard here (fact-verified: no other
+            // consumer). Feed the passive monitor — it internally
+            // parses the chunked-DATA form, applies the leadmark
+            // mirror + file/link family + on-frequency rules, and
+            // can never transmit. No-op while the Monitor window is
+            // closed. Existing display behavior below is untouched.
+            if (m_arqMonitor && m_arqMonitor->active() &&
+                d.from.compare(m_config.my_callsign(),
+                               Qt::CaseInsensitive) != 0) {
+                m_arqMonitor->onDirectedText(d.from, d.to, text,
+                                             d.offset, d.submode);
+            }
             // [onfreqhdr 2026-08-15, reworked 2026-08-16]
             // DISPLAY-ONLY exception for on-offset traffic to other
             // stations. BUFFERED commands (multi-frame freetext,
