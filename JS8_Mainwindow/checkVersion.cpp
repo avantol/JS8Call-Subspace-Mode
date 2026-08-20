@@ -194,29 +194,10 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
                            << "newer=" << (runBuild < storeBuild);
 
                 if (runBuild >= 0 && runBuild < storeBuild) {
-                    // Once per new Store build on the silent startup
-                    // check; the manual check always reports.
-                    if (!alertOnUpToDate) {
-                        QString const key =
-                            QStringLiteral("store-%1").arg(storeBuild);
-                        // [TODO #134] App ini, not the bare default
-                        // store (Windows/MSIX never persisted it, so
-                        // the once-per-build suppression was lost on
-                        // every restart there).
-                        if (m_settings
-                                ->value(QStringLiteral(
-                                    "Common/LastUpdateNotifiedVersion"))
-                                .toString() == key) {
-                            qWarning()
-                                << "[UPDATE-CHECK] already notified for"
-                                << key << "— suppressing";
-                            return;
-                        }
-                        m_settings->setValue(
-                            QStringLiteral(
-                                "Common/LastUpdateNotifiedVersion"),
-                            key);
-                    }
+                    // [everyprompt 2026-08-19] Once-per-build
+                    // suppression REMOVED (operator): the new-version
+                    // nudge shows at EVERY startup while the Store
+                    // has a newer build. Manual check unchanged.
                     (new SelfDestructMessageBox(
                          60, tr("New Version Available"),
                          tr("A new version of Subspace Edition is "
@@ -317,22 +298,11 @@ void UI_Constructor::checkVersion(bool const alertOnUpToDate) {
             if (currentVersion < latestVersion) {
                 QString const normStr = latestVersion.toString();
 
-                // Once per new version — but only for the automatic
-                // (startup) check; the Help-menu check always reports.
-                if (!alertOnUpToDate) {
-                    // [TODO #134] App ini, not the bare default store.
-                    if (m_settings
-                            ->value(QStringLiteral(
-                                "Common/LastUpdateNotifiedVersion"))
-                            .toString() == normStr) {
-                        qWarning() << "[UPDATE-CHECK] already notified for"
-                                   << normStr << "— suppressing";
-                        return;
-                    }
-                    m_settings->setValue(
-                        QStringLiteral("Common/LastUpdateNotifiedVersion"),
-                        normStr);
-                }
+                // [everyprompt 2026-08-19] Once-per-version
+                // suppression REMOVED (operator): the new-version
+                // nudge shows at EVERY startup while a newer release
+                // exists. Manual check unchanged.
+                Q_UNUSED(normStr);
 
                 QString const link = htmlUrl.isEmpty()
                                          ? QString::fromLatin1(kReleasesUrl)

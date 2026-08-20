@@ -1272,6 +1272,32 @@ class UI_Constructor : public QMainWindow {
             return QString("now");
     }
 
+    // [#161 querycall] Pending QUERY CALL sent by US. Key = askee
+    // (UPPER; the relay chain's LAST head for relayed forms) or
+    // "@ALLCALL" (wildcard — any responder binds, entry survives the
+    // whole window for multiple YES replies). The wire reply never
+    // names the target, so only this state can bind "YES +snr (age)"
+    // to the station we asked about.
+    // Timing (operator spec 2026-08-20, all at NORMAL speed):
+    //   3 frames per hop, <= 3 hops out + 3 back
+    //   window = 6 hops x 3 frames x 15 s = 270 s (+30 s margin)
+    //   backdate = parsed age + inboundHops x 3 x 15 s
+    struct PendingCallQuery {
+        QString target;
+        int hops{1};     // relay heads outbound (reply retraces them)
+        qint64 sentMs{};
+    };
+    QHash<QString, PendingCallQuery> m_pendingCallQueries;
+    static constexpr int kQCallFrameSecs = 15;   // NORMAL frame
+    static constexpr int kQCallFramesPerHop = 3;
+    static constexpr qint64 kQCallReplyWindowMs =
+        (3 + 3) * kQCallFramesPerHop * kQCallFrameSecs * 1000 + 30000;
+    void captureOutgoingCallQuery(QString const &sentMsg);
+    // Returns true when the reply text bound to a pending query
+    // (age/snr parsed, hearing edge fed backdated).
+    bool bindCallQueryReply(QString const &responder,
+                            QString const &replyText, int dial);
+
     QDateTime m_lastTxStartTime;
     QDateTime m_lastTxStopTime;
     QDateTime m_txQueueStartTime;  // wall-clock when first frame TX began (for countdown)

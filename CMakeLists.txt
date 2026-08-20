@@ -125,7 +125,7 @@ cmake_dependent_option(
 find_package(Boost 1.74 REQUIRED)
 find_package(FFTW3      REQUIRED COMPONENTS single threads)
 find_package(Hamlib     REQUIRED)
-find_package(Qt6    6.4 REQUIRED COMPONENTS Network SerialPort Widgets)
+find_package(Qt6    6.4 REQUIRED COMPONENTS Network SerialPort Sql Widgets)
 
 include_directories(${Boost_INCLUDE_DIRS})
 include_directories(${FFTW3_INCLUDE_DIRS})
@@ -316,6 +316,7 @@ target_sources(
   JS8_UI/SpotMapWindow.cpp
   JS8_UI/ArqMonitorWindow.cpp
   JS8_Main/ArqMonitor.cpp
+  JS8_Main/GridDb.cpp
   JS8_UI/mainwindow.cpp
   JS8_UI/ICS213Dialog.cpp
   JS8_UI/ICS213Dialog.h
@@ -339,6 +340,7 @@ target_link_libraries(
   Hamlib::Hamlib
   Qt::Network
   Qt::SerialPort
+  Qt::Sql
   Qt::Widgets
 )
 

@@ -2260,6 +2260,80 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                     "FirstRunWaterfallDblClickHintShown", true);
                 return; // one balloon per startup
             }
+
+            // [hints 2026-08-19] Feature reminders (operator-specified
+            // wording and priority order a > b > c > d).
+            // (a) Spots Map QSO + Relay Builder — View menu.
+            if (!self->m_settings
+                     ->value("HintSpotsMapRelayShown", false)
+                     .toBool()) {
+                auto *bar = self->menuBar();
+                auto *balloon = new SpeechBalloon(
+                    tr("Click on 'Show Spots Map' to start QSOs and "
+                       "set up message relays between stations.\n"
+                       "Click here to dismiss."),
+                    bar);
+                balloon->setTargetRectOverride(bar->actionGeometry(
+                    self->ui->menuWindow->menuAction()));
+                balloon->setTailSide(SpeechBalloon::TailSide::Top);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("HintSpotsMapRelayShown",
+                                           true);
+                return; // one balloon per startup
+            }
+
+            // (b) ICS-213 forms — the Send button's down arrow.
+            if (!self->m_settings->value("HintIcs213Shown", false)
+                     .toBool() &&
+                self->ui->startTxButton) {
+                auto *balloon = new SpeechBalloon(
+                    tr("Click on the down arrow to compose and send "
+                       "ICS-213 Forms.\n"
+                       "Click here to dismiss."),
+                    self->ui->startTxButton);
+                balloon->setTailSide(SpeechBalloon::TailSide::Bottom);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("HintIcs213Shown", true);
+                return; // one balloon per startup
+            }
+
+            // (c) ARQ Monitor — View menu.
+            if (!self->m_settings->value("HintArqMonitorShown", false)
+                     .toBool()) {
+                auto *bar = self->menuBar();
+                auto *balloon = new SpeechBalloon(
+                    tr("Click on 'Show ARQ Monitor' to view ARQ "
+                       "conversations between other stations.\n"
+                       "Click here to dismiss."),
+                    bar);
+                balloon->setTargetRectOverride(bar->actionGeometry(
+                    self->ui->menuWindow->menuAction()));
+                balloon->setTailSide(SpeechBalloon::TailSide::Top);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("HintArqMonitorShown", true);
+                return; // one balloon per startup
+            }
+
+            // (d) How-to guides — Help menu.
+            if (!self->m_settings->value("HintGuideShown", false)
+                     .toBool()) {
+                auto *bar = self->menuBar();
+                auto *balloon = new SpeechBalloon(
+                    tr("Click on 'Subspace Edition Guide' to view "
+                       "step-by-step 'How-to' guides.\n"
+                       "Click here to dismiss."),
+                    bar);
+                balloon->setTargetRectOverride(bar->actionGeometry(
+                    self->ui->menuHelp->menuAction()));
+                balloon->setTailSide(SpeechBalloon::TailSide::Top);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("HintGuideShown", true);
+                return; // one balloon per startup
+            }
         });
     }
 

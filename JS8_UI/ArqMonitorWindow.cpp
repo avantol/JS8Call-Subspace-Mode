@@ -53,8 +53,8 @@ ArqMonitorWindow::ArqMonitorWindow(QSettings *settings,
 
     auto *lay = new QVBoxLayout(this);
     m_headline = new QLabel(
-        tr("Monitoring overheard ARQ transfers on this audio offset "
-           "(decode-only; never transmits)"),
+        tr("Monitoring overheard ARQ transfers on current audio "
+           "offset (decode-only; never transmits)"),
         this);
     m_headline->setWordWrap(true);
     lay->addWidget(m_headline);

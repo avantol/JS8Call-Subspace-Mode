@@ -95,6 +95,11 @@ void UI_Constructor::processCommandActivity() {
                              Qt::CaseInsensitive) == 0)
                 return m_config.my_grid();
             QString g = m_callActivity.value(call).grid;
+            // [#164] The grid authority (seeded from the persistent
+            // SQLite store at startup) sits between session activity
+            // and the logbook in the fallback chain.
+            if (g.isEmpty() && m_spotMapWindow)
+                g = m_spotMapWindow->knownGrid(call);
             if (g.isEmpty()) {
                 // [gridfall] Same fallback the Call Activity list
                 // uses: the LOGBOOK's grid for previously-worked
@@ -267,6 +272,23 @@ void UI_Constructor::processCommandActivity() {
                     rt = rt.mid(dm.capturedEnd("dest")).trimmed();
                 if (rt.toUpper().startsWith(QStringLiteral("HEARING")))
                     hearText = rt.mid(7); // drop "HEARING"
+                // [#161 querycall] Relayed QUERY CALL reply: after
+                // head-stripping, "YES +08 (15S) *DE* KJ7VWV" — the
+                // *DE* names the true responder (the askee).
+                else if (toMe &&
+                         rt.toUpper().startsWith(
+                             QStringLiteral("YES "))) {
+                    static QRegularExpression const kYesDeRe{
+                        QStringLiteral(
+                            R"(^YES\s+(?<body>.+?)\s*\*DE\*\s+(?<de>[A-Z0-9/]+)\s*$)"),
+                        QRegularExpression::CaseInsensitiveOption};
+                    if (auto const ym = kYesDeRe.match(rt.trimmed());
+                        ym.hasMatch())
+                        bindCallQueryReply(
+                            ym.captured(QStringLiteral("de")).toUpper(),
+                            ym.captured(QStringLiteral("body")),
+                            d.dial);
+                }
             }
             if (!hearText.isEmpty()) {
                 QString hearer = d.from;
@@ -600,6 +622,17 @@ void UI_Constructor::processCommandActivity() {
         // "YES +08 (15S)" (QUERY CALL reply; SNR always sign-prefixed)
         // never count. Passive observer: NO continue — display and
         // downstream processing are unchanged.
+        // [#161 querycall] "YES +08 (15S)" from a station we asked
+        // — bind to the pending query and feed the backdated
+        // third-party edge. Passive: display and every other YES
+        // dialect below are untouched (the binder's sign-prefixed
+        // snr + "(age)" shape is disjoint from the ARQ digits and
+        // "MSG ID n" forms). A "NO" answer clears the pending entry.
+        if (!isAllCall && toMe && d.cmd == QStringLiteral(" YES"))
+            bindCallQueryReply(d.from, d.text, d.dial);
+        if (!isAllCall && toMe && d.cmd == QStringLiteral(" NO"))
+            m_pendingCallQueries.remove(d.from.toUpper());
+
         if (!isAllCall && d.cmd == QStringLiteral(" YES")) {
             static QRegularExpression const kArqLevelReplyRe{
                 QStringLiteral(R"(^(\d{1,3})$)")};

@@ -479,6 +479,12 @@ bool ICS213Dialog::writeFormFile(QString *outPath) {
     }
     int const year =
         DriftingDateTime::currentDateTimeUtc().date().year();
+    // [slashfix 2026-08-20] A portable call's '/' is not filename-
+    // compatible (send side would treat it as a directory; the
+    // receive-side sanitizer truncates at it) — underscore on disk,
+    // slash everywhere else (title, body, wire text).
+    QString fileSerial = serial;
+    fileSerial.replace(QLatin1Char('/'), QLatin1Char('_'));
     // [2026-08-18] No subject slug — serial + year identify the
     // form and the slug doubled the serial digits on short subjects
     // (operator report: "..._0006_2026_6666").
@@ -488,7 +494,7 @@ bool ICS213Dialog::writeFormFile(QString *outPath) {
                   .arg(QFileInfo{m_replySourcePath}.completeBaseName())
                   .arg(ext)
             : QStringLiteral("ICS213_%1_%2.%3")
-                  .arg(serial)
+                  .arg(fileSerial)
                   .arg(year)
                   .arg(ext);
     QString const path = formDir().filePath(name);
@@ -600,6 +606,15 @@ QString ICS213Dialog::writeTrimmedWireCopy(QString const &fullPath) {
     out.write(content.toUtf8());
     out.close();
     return outPath;
+}
+
+QString ICS213Dialog::serialFromFormName(QString const &name) {
+    static QRegularExpression const kSerialRe{
+        QStringLiteral(
+            R"(^ICS213_(.+)_\d{4}(?:_REPLY)?\.[A-Za-z0-9]+$)"),
+        QRegularExpression::CaseInsensitiveOption};
+    auto const m = kSerialRe.match(name);
+    return m.hasMatch() ? m.captured(1) : QString{};
 }
 
 bool ICS213Dialog::isSparseReply(QByteArray const &bytes) {
@@ -721,11 +736,8 @@ bool ICS213Dialog::enterReplyMode(QString const &receivedPath,
     m_replySourcePath = receivedPath;
     m_replySenderCall = fromCall; // parse may refine from the form
 
-    QString const name = QFileInfo{receivedPath}.fileName();
-    m_replySerial = name.startsWith(QStringLiteral("ICS213_"),
-                                    Qt::CaseInsensitive)
-                        ? name.section(QLatin1Char('_'), 1, 1)
-                        : QString();
+    m_replySerial =
+        serialFromFormName(QFileInfo{receivedPath}.fileName());
 
     QString const content = QString::fromUtf8(bytes);
     ui->precedenceCombo->setCurrentIndex(0); // suffix stays in subject

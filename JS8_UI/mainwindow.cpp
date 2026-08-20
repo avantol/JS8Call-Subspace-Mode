@@ -920,6 +920,13 @@ void UI_Constructor::on_actionSubspace_Guide_triggered() {
          "https://groups.io/g/Subspace/message/262"},
         {"How to start a QSO from the Spots Map",
          "https://groups.io/g/Subspace/message/259"},
+        {"How to set up message relays by point-and-click on the "
+         "Spots Map",
+         "https://groups.io/g/Subspace/message/300"},
+        {"How to compose and transmit ICS-213 Forms",
+         "https://groups.io/g/Subspace/message/318"},
+        {"How to view ARQ transfers between other stations",
+         "https://groups.io/g/Subspace/message/321"},
         {"How to use audio-visual HAIL and BELL",
          "https://groups.io/g/Subspace/message/217"},
         {"How to transfer a file",
@@ -4528,6 +4535,10 @@ void UI_Constructor::stopTx() {
         stopTxMechanical();
         tryRestoreFreqOffset();
 
+        // [#161 querycall] Arm the pending-query state the moment
+        // OUR query finishes airing (the reply window starts here).
+        captureOutgoingCallQuery(dt.message());
+
         // Notify API clients that the queued transmission block finished.
         sendNetworkMessage("TX.COMPLETE", dt.message(),
                            {{"_ID", QVariant(-1)},
@@ -7224,6 +7235,116 @@ void UI_Constructor::abortCapabilityNegotiation(char const *why) {
 
 // [BUILD 338] Transfer pipeline from a file path onward — everything
 // "Send file…" did after its file picker.
+// [#161 querycall] Parse OUR just-transmitted message for a
+// QUERY CALL and arm the pending state. Forms:
+//   "KJ7VWV QUERY CALL W1AW?"            direct, hops=1
+//   "AC7WY> KJ7VWV QUERY CALL W1AW?"     relayed, askee=LAST head,
+//                                        hops = head count
+//   "@ALLCALL QUERY CALL W1AW?"          wildcard askee
+void UI_Constructor::captureOutgoingCallQuery(QString const &sentMsg) {
+    QString msg = sentMsg.toUpper().simplified();
+    // Both relay grammars: heads with a bare final addressee
+    // ("A> B QUERY CALL X?") and heads-only with a trailing '>'
+    // ("A>B> QUERY CALL X?" — last head is the executor). The
+    // literal "QUERY CALL" after the optional askee keeps the
+    // command word out of the askee capture.
+    static QRegularExpression const kQueryRe{QStringLiteral(
+        R"(^(?<heads>(?:[A-Z0-9/]+>\s*)*)(?:(?<askee>@?[A-Z0-9/]+)\s+)?QUERY CALL\s+(?<target>[A-Z0-9/]+)\??)")};
+    auto const m = kQueryRe.match(msg);
+    if (!m.hasMatch())
+        return;
+    QString askee = m.captured(QStringLiteral("askee"));
+    QStringList const heads =
+        m.captured(QStringLiteral("heads"))
+            .simplified()
+            .split(QLatin1Char('>'), Qt::SkipEmptyParts);
+    // Outbound legs = every head plus the final leg when the askee
+    // is a separate token. The reply retraces the same count.
+    int hops = heads.size() + (askee.isEmpty() ? 0 : 1);
+    if (askee.isEmpty()) {
+        if (heads.isEmpty())
+            return; // bare "QUERY CALL X?" — no addressee, not ours
+        askee = heads.last().trimmed();
+    }
+    if (hops < 1)
+        hops = 1;
+    qint64 const now = QDateTime::currentMSecsSinceEpoch();
+    // Lazy prune of expired entries while we're here.
+    for (auto it = m_pendingCallQueries.begin();
+         it != m_pendingCallQueries.end();) {
+        if (now - it->sentMs > kQCallReplyWindowMs)
+            it = m_pendingCallQueries.erase(it);
+        else
+            ++it;
+    }
+    m_pendingCallQueries.insert(
+        askee.toUpper(),
+        PendingCallQuery{m.captured(QStringLiteral("target")), hops,
+                         now});
+    qCWarning(chunkedarq_js8)
+        << "[QCALL] pending armed: askee=" << askee
+        << "target=" << m.captured(QStringLiteral("target"))
+        << "hops=" << hops
+        << "windowMs=" << kQCallReplyWindowMs;
+}
+
+// [#161 querycall] Bind a "YES +snr (age)" to the pending query and
+// feed the hearing store with a BACKDATED third-party edge.
+bool UI_Constructor::bindCallQueryReply(QString const &responder,
+                                        QString const &replyText,
+                                        int const dial) {
+    static QRegularExpression const kYesSnrAgeRe{QStringLiteral(
+        R"(^([+-]\d{1,3})\s*\((NOW|\d+[SMHD])\)$)")};
+    auto const m = kYesSnrAgeRe.match(replyText.toUpper().simplified());
+    if (!m.hasMatch())
+        return false;
+    QString const key = responder.toUpper();
+    auto it = m_pendingCallQueries.find(key);
+    bool const wildcard = (it == m_pendingCallQueries.end());
+    if (wildcard)
+        it = m_pendingCallQueries.find(QStringLiteral("@ALLCALL"));
+    if (it == m_pendingCallQueries.end())
+        return false;
+    qint64 const now = QDateTime::currentMSecsSinceEpoch();
+    if (now - it->sentMs > kQCallReplyWindowMs) {
+        m_pendingCallQueries.erase(it); // stale — never bind
+        return false;
+    }
+    int const snr = m.captured(1).toInt();
+    QString const age = m.captured(2);
+    qint64 ageSecs = 0;
+    if (age != QStringLiteral("NOW")) {
+        qint64 const n = age.chopped(1).toLongLong();
+        switch (age.back().toLatin1()) {
+        case 'S': ageSecs = n; break;
+        case 'M': ageSecs = n * 60; break;
+        case 'H': ageSecs = n * 3600; break;
+        case 'D': ageSecs = n * 86400; break;
+        }
+    }
+    // Backdate: reported age + inbound transit (hops x 3 frames at
+    // NORMAL speed) — the sighting predates the reply's arrival.
+    qint64 const transitSecs =
+        qint64{it->hops} * kQCallFramesPerHop * kQCallFrameSecs;
+    QDateTime const when = DriftingDateTime::currentDateTimeUtc()
+                               .addSecs(-(ageSecs + transitSecs));
+    QString const target = it->target;
+    if (!wildcard)
+        m_pendingCallQueries.erase(it); // direct query: one answer
+    if (m_spotMapWindow) {
+        QString const band = m_config.bands()->find(
+            static_cast<Radio::Frequency>(dial));
+        m_spotMapWindow->addHearingReport(
+            band, responder, QString{}, {target}, {QString{}},
+            /*reportedToMeSnr=*/-99, when, snr);
+    }
+    qCWarning(chunkedarq_js8)
+        << "[QCALL] bound: " << responder << "hears" << target
+        << "snr=" << snr << "age=" << age
+        << "backdatedSecs=" << (ageSecs + transitSecs);
+    return true;
+}
+
 // [ARQ level 4] ONE authority for the form wire shape. Level >= 4:
 // the sparse reply packet when there is one, else a trimmed copy of
 // the form (same filename). Level 3: the complete document as-is —

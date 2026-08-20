@@ -84,6 +84,11 @@ class ICS213Dialog final : public QDialog {
     // fullPath unchanged when the section isn't present (Compact/
     // XML/already-trimmed) or the copy can't be written.
     static QString writeTrimmedWireCopy(QString const &fullPath);
+    // [slashfix] ONE authority for pulling the serial back out of a
+    // form FILENAME (ICS213_<serial>_<year>[_REPLY].<ext>), where a
+    // portable call's '/' was written as '_' — plain '_'-field
+    // splitting would truncate "WM8Q_P-0001" to "WM8Q".
+    static QString serialFromFormName(QString const &name);
     // Sparse wire packet path written by the last reply Send (empty
     // in compose mode) — dispatched to level-4 original senders.
     QString sparseWirePath() const { return m_sparseWirePath; }

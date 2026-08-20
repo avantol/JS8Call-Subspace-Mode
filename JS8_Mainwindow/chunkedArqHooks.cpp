@@ -944,7 +944,7 @@ void UI_Constructor::promptAndSaveReceivedFile(
     // in the title (operator spec: "ICS-213 Reply - WM8Q-0006").
     QString const replySerial =
         (isIcs213Form && isReplyForm)
-            ? header.name.section(QLatin1Char('_'), 1, 1)
+            ? ICS213Dialog::serialFromFormName(header.name)
             : QString();
     auto const msg = QStringLiteral(
         "Incoming %1 from %2\n\n"
@@ -1158,10 +1158,7 @@ void UI_Constructor::promptAndSaveReceivedFile(
                 // "ICS-213 Reply - K9AVT-0006". Sender-call fallback
                 // only when the name carries no serial.
                 QString const vSerial =
-                    headerCopy.name.startsWith(QStringLiteral("ICS213_"),
-                                               Qt::CaseInsensitive)
-                        ? headerCopy.name.section(QLatin1Char('_'), 1, 1)
-                        : QString();
+                    ICS213Dialog::serialFromFormName(headerCopy.name);
                 bool const vReply =
                     headerCopy.name.contains(QStringLiteral("_REPLY"),
                                              Qt::CaseInsensitive);

@@ -10,6 +10,8 @@
 #include "JS8_Main/DriftingDateTime.h"
 #include "JS8_Main/Geodesic.h"
 #include "JS8_Network/MqttClient.h"
+#include "JS8_Main/MultiSettings.h"
+#include <QFileInfo>
 #include "JS8_UI/Configuration.h"
 
 #include "SpotMapGeoData.h"
@@ -66,6 +68,18 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     setWindowTitle(tr("Spots Map"));
     setMinimumSize(320, 320);
     setMouseTracking(true); // hover tooltips on spots
+
+    // [#164] Open the persistent grid store and SEED the in-session
+    // authority before any feed can run. File sits beside the
+    // settings ini, honoring the per-instance suffix ([multiinst]).
+    {
+        QString const dir =
+            QFileInfo{m_settings->fileName()}.absolutePath();
+        if (m_gridDb.open(dir + QStringLiteral("/JS8Call") +
+                          MultiSettings::instanceSuffix() +
+                          QStringLiteral("-grids.db")))
+            m_gridByCall = m_gridDb.loadAll();
+    }
 
     {
         SettingsGroup g{m_settings, "SpotMap"};
@@ -517,7 +531,9 @@ void SpotMapWindow::addHearingReport(QString const &band,
                                      QString const &hearerGrid,
                                      QStringList const &heardCalls,
                                      QStringList const &heardGrids,
-                                     int const reportedToMeSnr) {
+                                     int const reportedToMeSnr,
+                                     QDateTime const &heardWhen,
+                                     int const heardSnr) {
     if (band.isEmpty() || hearer.isEmpty())
         return;
     auto const now = DriftingDateTime::currentDateTimeUtc();
@@ -568,7 +584,14 @@ void SpotMapWindow::addHearingReport(QString const &band,
         if (call.isEmpty() || call == hearer.toUpper())
             continue;
         HeardEdge &edge = e.heard[call];
-        edge.when = now;
+        // [#161 querycall] Backdated sightings never REGRESS a
+        // fresher edge; ordinary feeds keep their refresh-to-now.
+        QDateTime const sighting =
+            heardWhen.isValid() ? heardWhen : now;
+        if (!edge.when.isValid() || sighting > edge.when)
+            edge.when = sighting;
+        if (heardSnr > -99)
+            edge.snr = heardSnr;
         QString const gRaw =
             (i < heardGrids.size() ? heardGrids.at(i) : QString())
                 .trimmed();
@@ -601,7 +624,14 @@ QString SpotMapWindow::refinedGrid(QString const &call,
 }
 
 void SpotMapWindow::rememberGrid(QString const &call,
-                                 QString const &grid) {
+                                 QString const &gridIn,
+                                 QString const &source) {
+    // [gridcase 2026-08-20] CANONICAL CASE AT THE ONE DOOR (operator):
+    // MQTT sends subsquare-lowercase ("DN61ok") while wire text is
+    // uppercased — uppercase here so the authority, the persistent
+    // store, and the == early-out below all see one form. Geodesic
+    // normalizes internally, so nothing downstream cares.
+    QString const grid = gridIn.trimmed().toUpper();
     // [mqttgrid] Harvest a locator from the MQTT feed and backfill
     // any hearing-store entry/edge stored without a position — the
     // feed runs constantly, so a HEARING-list station we've never
@@ -619,6 +649,9 @@ void SpotMapWindow::rememberGrid(QString const &call,
         known.left(4).compare(grid.left(4), Qt::CaseInsensitive) == 0)
         return;
     m_gridByCall.insert(key, grid);
+    // [#164] Write-through: this is the authority's ONE accept point,
+    // so the persistent tier records exactly its decisions.
+    m_gridDb.upsert(key, grid, source);
     if (m_myGrid.size() < 4)
         return;
     auto const v = Geodesic::vector(m_myGrid, grid);
@@ -738,8 +771,10 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     int const snr = o.value(QStringLiteral("rp")).toInt(-99);
     // [mqttgrid] Harvest locators BEFORE any validity bail-out — a
     // spot we skip as a spot is still a grid sighting.
-    rememberGrid(receiverCall, receiverGrid);
-    rememberGrid(sender, o.value(QStringLiteral("sl")).toString());
+    rememberGrid(receiverCall, receiverGrid,
+                 QStringLiteral("mqtt"));
+    rememberGrid(sender, o.value(QStringLiteral("sl")).toString(),
+                 QStringLiteral("mqtt"));
     if (receiverCall.isEmpty() || receiverGrid.size() < 4 || snr == -99) {
         ++m_skippedSpots;
         return;
@@ -1798,7 +1833,7 @@ void SpotMapWindow::redraw() {
         m_viewAll
             // [viewall] All view counts heard stations, not
             // spotters of me.
-            ? tr("All stations — %1 — %2 heard / %3")
+            ? tr("All stations — %1 — %2 spots / %3")
                   .arg(bandText)
                   .arg(ordered.size())
                   .arg(windowText)

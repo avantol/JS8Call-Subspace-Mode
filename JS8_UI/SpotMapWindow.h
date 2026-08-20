@@ -31,6 +31,8 @@
 #include <QVector>
 #include <QWidget>
 
+#include "JS8_Main/GridDb.h"
+
 #include <functional>
 
 class Configuration;
@@ -76,11 +78,24 @@ class SpotMapWindow final : public QWidget {
     // reportedToMeSnr: an SNR value this station REPORTED TO US (its
     // copy of our signal) — the ONLY thing that colors an on-air
     // All-view dot solid (operator rule 2026-08-14); -99 = no change.
+    // [#164] Authority lookup for outside consumers (hearGridFor's
+    // fallback chain) — includes everything the persistent store
+    // seeded. Returns empty when unknown.
+    QString knownGrid(QString const &call) const {
+        return m_gridByCall.value(call.toUpper());
+    }
+
+    // heardWhen: optional BACKDATED sighting time for the heard
+    // edges ([#161] age-bearing replies) — invalid = now; an edge's
+    // `when` only ever moves FORWARD. heardSnr: third-party SNR for
+    // the heard edges (-99 = none).
     void addHearingReport(QString const &band, QString const &hearer,
                           QString const &hearerGrid,
                           QStringList const &heardCalls,
                           QStringList const &heardGrids,
-                          int reportedToMeSnr = -99);
+                          int reportedToMeSnr = -99,
+                          QDateTime const &heardWhen = QDateTime{},
+                          int heardSnr = -99);
 
   public slots:
     void setBand(QString const &band);
@@ -294,6 +309,11 @@ class SpotMapWindow final : public QWidget {
         float az = 0.0f;
         float dist = -1.0f; // < 0 = unresolved grid
         QString grid;
+        // [#161 querycall] THIRD-PARTY snr (hearer's copy of the
+        // heard station, e.g. a QUERY CALL "YES +08" reply). Feeds
+        // this edge ONLY — never the reportedToMeSnr color
+        // authority.
+        int snr = -99;
     };
     struct HearingEntry {
         QDateTime lastSeen;   // presence freshness (HBs, any frame)
@@ -308,6 +328,10 @@ class SpotMapWindow final : public QWidget {
     // (sender sc/sl and reporter rc/rl) — fallback grid source for
     // on-air stations the sanctioned text sources haven't placed.
     QHash<QString, QString> m_gridByCall;
+    // [#164] Persistent tier of the authority above — seeds it at
+    // startup, records every accepted refinement. Never read
+    // directly by consumers.
+    GridDb m_gridDb;
     int m_wheelAccum = 0; // [wheelzoom] trackpad delta accumulator
     // [zoomkeepcenter] Auto-fit pan applied at the last redraw —
     // baked into m_panPx when the operator leaves Auto so manual
@@ -316,7 +340,9 @@ class SpotMapWindow final : public QWidget {
     QToolButton *m_pskrBtn = nullptr; // [pskrtoggle]
     QToolButton *m_callsBtn = nullptr; // [callsbtn]
     bool m_showPskr = true;
-    void rememberGrid(QString const &call, QString const &grid);
+    void rememberGrid(QString const &call, QString const &grid,
+                      QString const &source =
+                          QStringLiteral("radio"));
     QString refinedGrid(QString const &call, QString const &grid) const;
     void showRelayPathToast();
     void stepZoom(int dir); // [zoomkeepcenter]

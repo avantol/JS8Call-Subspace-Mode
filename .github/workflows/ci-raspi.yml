@@ -56,7 +56,7 @@ jobs:
         if [ -f deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png ]; then
           cp deb-staging/usr/share/icons/hicolor/256x256/apps/js8call-subspace.png deb-pkg/usr/share/icons/hicolor/256x256/apps/
         fi
-        printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: arm64\nMaintainer: WM8Q\nDescription: Subspace Edition - weak-signal messaging\n Install with: sudo apt install ./Subspace-Edition_%s_arm64-raspi.deb\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6network6, libqt6serialport6, libfftw3-single3, libhamlib4 | libhamlib4t64, libusb-1.0-0, libudev1\n' "${VER}" "${VER}" > deb-pkg/DEBIAN/control
+        printf 'Package: js8call-subspace\nVersion: %s\nArchitecture: arm64\nMaintainer: WM8Q\nDescription: Subspace Edition - weak-signal messaging\n Install with: sudo apt install ./Subspace-Edition_%s_arm64-raspi.deb\nDepends: libqt6core6 | libqt6core6t64, libqt6gui6 | libqt6gui6t64, libqt6widgets6 | libqt6widgets6t64, libqt6network6, libqt6serialport6, libqt6sql6 | libqt6sql6t64, libqt6sql6-sqlite, libfftw3-single3, libhamlib4 | libhamlib4t64, libusb-1.0-0, libudev1\n' "${VER}" "${VER}" > deb-pkg/DEBIAN/control
         dpkg-deb -Zxz --build deb-pkg Subspace-Edition_${VER}_arm64-raspi.deb
         file deb-pkg/usr/bin/js8call-subspace
 
