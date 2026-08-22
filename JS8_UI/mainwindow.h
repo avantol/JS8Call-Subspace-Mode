@@ -265,7 +265,12 @@ class UI_Constructor : public QMainWindow {
                                   int *pPrevOffset);
     bool hasClosedExistingMessageBuffer(int offset);
     void logCallActivity(CallDetail d, bool spot = true);
-    void logHeardGraph(QString from, QString to);
+    // [#167] `thirdPartyIsEvidence`: does this frame prove `from`
+    // received `to`? Pass Varicode::isCommandReceptionEvidence(cmd) for
+    // a directed frame; true only when the edge is genuinely observed
+    // (e.g. a station named in a HEARING list).
+    void logHeardGraph(QString from, QString to,
+                       bool thirdPartyIsEvidence);
     QString lookupCallInCompoundCache(QString const &call);
     void cacheActivity(QString key);
     void restoreActivity(QString key);

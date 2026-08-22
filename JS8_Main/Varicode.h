@@ -168,6 +168,10 @@ class Varicode {
     static bool isCommandBuffered(const QString &cmd);
     static int isCommandChecksumed(const QString &cmd);
     static bool isCommandAutoreply(const QString &cmd);
+    // [#167] Does "A: B <cmd>" prove A received B? Replies and directed
+    // free text do; questions, broadcasts and relay forwards do not.
+    // The single authority for heard-graph edge evidence.
+    static bool isCommandReceptionEvidence(const QString &cmd);
     static bool isValidCallsign(const QString &callsign, bool *pIsCompound);
     static bool isCompoundCallsign(const QString &callsign);
     static bool isGroupAllowed(const QString &group);

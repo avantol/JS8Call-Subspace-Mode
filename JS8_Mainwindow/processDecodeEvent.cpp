@@ -894,7 +894,9 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             cmdcd.tdrift = cmd.tdrift;
                             cmdcd.submode = cmd.submode;
                             logCallActivity(cmdcd, false);
-                            logHeardGraph(cmd.from, cmd.to);
+                            logHeardGraph(cmd.from, cmd.to,
+                                          Varicode::isCommandReceptionEvidence(
+                                              cmd.cmd));
                         }
 
                         // merge any existing buffer to this frequency
@@ -946,7 +948,9 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                         td.tdrift = cmd.tdrift;
                         td.submode = cmd.submode;
                         logCallActivity(td, true);
-                        logHeardGraph(cmd.from, cmd.to);
+                        logHeardGraph(cmd.from, cmd.to,
+                                          Varicode::isCommandReceptionEvidence(
+                                              cmd.cmd));
                     }
                 }
 #endif

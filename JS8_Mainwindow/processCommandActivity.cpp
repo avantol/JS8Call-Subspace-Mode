@@ -76,7 +76,8 @@ void UI_Constructor::processCommandActivity() {
         cd.tdrift = d.tdrift;
         cd.submode = d.submode;
         logCallActivity(cd, true);
-        logHeardGraph(d.from, d.to);
+        logHeardGraph(d.from, d.to,
+                      Varicode::isCommandReceptionEvidence(d.cmd));
 
         // [hearlines] Feed the Spots Map's on-air heard-mesh (blue
         // lines). Runs BEFORE the command-allowed gate so EVERY
@@ -160,15 +161,43 @@ void UI_Constructor::processCommandActivity() {
             QString const myC = m_config.my_callsign().trimmed();
             if (!myC.isEmpty() &&
                 d.from.compare(myC, Qt::CaseInsensitive) != 0) {
+                // [#168] Record HOW WELL we heard it, not just that
+                // we did -- see the sibling site in mainwindow.cpp.
                 m_spotMapWindow->addHearingReport(
                     m_config.bands()->find(
                         static_cast<Radio::Frequency>(d.dial)),
-                    myC, m_config.my_grid(), {d.from}, {QString()});
+                    myC, m_config.my_grid(), {d.from}, {QString()},
+                    /*reportedToMeSnr=*/-99, QDateTime{},
+                    /*heardSnr=*/d.snr);
             }
         }
+        // [#167 2026-08-21] Mesh edge A->B ONLY when this frame is
+        // evidence A actually received B. Was: every directed frame,
+        // which painted a link for every unanswered probe.
         if (!d.to.startsWith(QLatin1Char('@')) &&
-            Radio::is_callsign(d.to)) {
+            Radio::is_callsign(d.to) &&
+            Varicode::isCommandReceptionEvidence(d.cmd)) {
             feedHearing(d.from, {d.to});
+        }
+        // [#167(d)] OVERHEARD RELAY IN FLIGHT is evidence the app was
+        // throwing away. "A: X> payload *DE* C" means A is forwarding
+        // C's traffic, so A DECODED C -- a real A->C edge, and one of
+        // the few ways a link between two distant stations becomes
+        // visible to us at all. Note the direction: the edge is to the
+        // *DE* ORIGINATOR, never to the destination X (that pairing is
+        // exactly the phantom this todo removes). The *DE* tail is
+        // otherwise consumed only for HEARING/GRID attribution below.
+        if (d.cmd == QStringLiteral(">") && !d.from.isEmpty()) {
+            static QRegularExpression const kDeFromRe(
+                QStringLiteral(R"(\*DE\*\s+(?<de>[A-Z0-9/]+))"),
+                QRegularExpression::CaseInsensitiveOption);
+            if (auto const m = kDeFromRe.match(d.text); m.hasMatch()) {
+                QString const de =
+                    m.captured(QStringLiteral("de")).toUpper();
+                if (Radio::is_callsign(de) &&
+                    de.compare(d.from, Qt::CaseInsensitive) != 0)
+                    feedHearing(d.from, {de});
+            }
         }
         // [onairspot] A frame addressed TO ME proves the sender hears
         // me — feed the map's MY view (the offline/PSKR-less
@@ -328,7 +357,9 @@ void UI_Constructor::processCommandActivity() {
             // 2. log it to the heard graph
             auto calls = Varicode::parseCallsigns(d.text);
             foreach (auto call, calls) {
-                logHeardGraph(d.from, call);
+                // [#167] A HEARING list is the station's own report of
+                // what it copies -- evidence by definition.
+                logHeardGraph(d.from, call, true);
             }
         }
 
@@ -1717,8 +1748,9 @@ void UI_Constructor::processCommandActivity() {
                 // retrieved by anybody
                 bool isGroupMsg = to.startsWith("@");
 
-                if (!isGroupMsg && to != who &&
-                    to != Radio::base_callsign(who)) {
+                // [#170] Same one-sided defect: a message stored
+                // for "AL0A/P" was unreachable by "AL0A" asking.
+                if (!isGroupMsg && !Radio::same_station(to, who)) {
                     continue;
                 }
 
@@ -1915,8 +1947,10 @@ void UI_Constructor::processCommandActivity() {
                     continue;
                 }
 
-                if (baseCall == cd.call ||
-                    baseCall == Radio::base_callsign(cd.call)) {
+                // [#170] Was `baseCall == base_callsign(cd.call)`,
+                // which only based ONE side: asking about "AL0A/P"
+                // missed every station that logged plain "AL0A".
+                if (Radio::same_station(baseCall, cd.call)) {
                     auto r = QString("%1 (%2)")
                                  .arg(Varicode::formatSNR(cd.snr))
                                  .arg(since(cd.utcTimestamp))

@@ -54,6 +54,12 @@ bool is_callsign(QString const &);
 bool is_compound_callsign(QString const &);
 QString base_callsign(QString);
 QString effective_prefix(QString);
+// [#170 2026-08-21] Same OPERATOR, ignoring portable/mobile affixes:
+// AL0A and AL0A/P are one station. Use this for every "is this the
+// station I mean" test; comparing raw strings silently stops matching
+// the moment someone goes /P, and applying base_callsign() to only ONE
+// side (the bug this replaces) makes the test asymmetric.
+bool same_station(QString const &, QString const &);
 } // namespace Radio
 
 Q_DECLARE_METATYPE(Radio::Frequency);

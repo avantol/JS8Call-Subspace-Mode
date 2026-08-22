@@ -128,6 +128,44 @@ QSet<int> autoreply_cmds = {0, 2, 3, 4, 6, 9, 10, 11, 12, 13, 14, 16, 30};
 // commands that should be buffered
 QSet<int> buffered_cmds = {5, 9, 10, 11, 12, 13, 15, 24};
 
+// [#167 2026-08-21] Commands that PROVE the sender received the station
+// it is addressing -- i.e. "A: B <cmd>" is evidence A can hear B, and
+// may therefore draw an A->B edge in any heard-graph.
+//
+// A REPLY proves the replier copied what it is replying to. A QUESTION
+// proves nothing: "A: B SNR?" is A asking into the void, and B may not
+// exist for all we know. Before this set existed, every directed frame
+// fed the mesh, so each unanswered probe painted a link -- and because
+// a relay forward is a directed frame too, relaying our own probe
+// fabricated the very edge the probe was sent to measure (K2AY,
+// 2026-08-21). Excluded on purpose despite being suggestive: AGN? /
+// QSL? / HW CPY? (questions), MSG / MSG TO: / CMD (blind sends),
+// HB / HEARTBEAT / HAIL / CQ (broadcasts), ">" (a relay forward -- its
+// *DE* tail is evidence for the OTHER direction, handled by the
+// caller). Missing a real edge is cheap; inventing one is not.
+//
+// 31 = directed free text: a conversation is a live link, nobody
+// ragchews into the void.
+QSet<int> reception_evidence_cmds = {
+    1,  // DIT DIT
+    2,  // NACK  ("I copied you, badly")
+    7,  // STATUS
+    8,  // HEARING
+    14, // ACK
+    15, // GRID (directed => an answer to GRID?)
+    17, // INFO
+    18, // FB
+    20, // SK
+    21, // RR
+    23, // QSL
+    25, // SNR
+    26, // NO
+    27, // YES
+    28, // 73
+    29, // HEARTBEAT SNR
+    31, // free text
+};
+
 // commands that may include an SNR value
 QSet<int> snr_cmds = {25, 29};
 
@@ -1280,6 +1318,15 @@ int Varicode::isCommandChecksumed(const QString &cmd) {
 bool Varicode::isCommandAutoreply(const QString &cmd) {
     return directed_cmds.contains(cmd) &&
            (autoreply_cmds.contains(directed_cmds[cmd]));
+}
+
+// [#167] See reception_evidence_cmds above. THE authority on "does this
+// directed frame prove its sender heard its addressee" -- every
+// heard-graph consumer must ask here rather than deciding locally, or
+// the two graphs drift apart and one of them starts lying again.
+bool Varicode::isCommandReceptionEvidence(const QString &cmd) {
+    return directed_cmds.contains(cmd) &&
+           reception_evidence_cmds.contains(directed_cmds[cmd]);
 }
 
 bool isValidCompoundCallsign(QStringView callsign) {

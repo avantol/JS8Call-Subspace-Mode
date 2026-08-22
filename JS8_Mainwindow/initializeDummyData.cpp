@@ -147,9 +147,9 @@ void UI_Constructor::initializeDummyData() {
     ui->extFreeTextMsgEdit->setPlainText("HELLOBRAVE NEW WORLD");
     ui->extFreeTextMsgEdit->setCharsSent(6);
 
-    logHeardGraph("KN4CRD", "OH8STN");
-    logHeardGraph("KN4CRD", "K0OG");
-    logHeardGraph("K0OG", "KN4CRD");
+    logHeardGraph("KN4CRD", "OH8STN", true);
+    logHeardGraph("KN4CRD", "K0OG", true);
+    logHeardGraph("K0OG", "KN4CRD", true);
 
     auto path = QDir::toNativeSeparators(
         m_config.writeable_data_dir().absoluteFilePath(QString("test.db3")));

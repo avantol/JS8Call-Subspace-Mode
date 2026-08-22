@@ -103,6 +103,18 @@ bool is_compound_callsign(QString const &callsign) {
 
 // split on first '/' and return the larger portion or the whole if
 // there is no '/'
+// [#170] Identity test. Bases BOTH operands -- the whole point. Two
+// call sites had `x == base_callsign(y)`, which matches when y carries
+// the affix but NOT when x does; asking QUERY CALL about "AL0A/P" then
+// missed every station that had logged plain "AL0A" (field 2026-08-21,
+// AL0A went portable mid-exercise).
+bool same_station(QString const &a, QString const &b) {
+    if (a.isEmpty() || b.isEmpty())
+        return false;
+    return base_callsign(a).compare(base_callsign(b),
+                                    Qt::CaseInsensitive) == 0;
+}
+
 QString base_callsign(QString callsign) {
     auto slash_pos = callsign.indexOf('/');
     if (slash_pos >= 0) {

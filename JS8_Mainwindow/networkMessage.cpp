@@ -7,6 +7,7 @@
  */
 
 #include "JS8_UI/mainwindow.h"
+#include "JS8_UI/SpotMapWindow.h"
 
 #include "JS8_Main/ChunkedArq.h"
 
@@ -415,6 +416,29 @@ if(type == "STATION.SET_SPOT") {
      * @brief RX.GET_CALL_ACTIVITY: Returns a list of active callsigns.
      * Filters results based on the `callsign_aging` configuration.
      */
+    /** @brief RX.GET_SPOT_MAP: [#168 2026-08-21] DEBUG/TEST dump of the
+     * Spots Map's live state — the hearing mesh (who hears whom, with
+     * ages and SNRs), every spot including internet-sourced ones with
+     * the reporting station, and the grid authority.
+     *
+     * Exists because that state lives only in RAM and no API reached
+     * it, so offline tooling was blind to the single most useful fact
+     * for routing: who is on the air THIS MINUTE and who is hearing
+     * them. Optional "BAND" param selects a band; default is the one
+     * currently displayed. Read-only. Structure is a debug surface,
+     * not a compatibility promise. */
+    if (type == "RX.GET_SPOT_MAP") {
+        if (!m_spotMapWindow) {
+            sendNetworkMessage("RX.SPOT_MAP", "",
+                               {{"_ID", id}, {"ERROR", "no spot map"}});
+            return;
+        }
+        auto dump = m_spotMapWindow->dumpState(
+            message.params().value("BAND").toString());
+        dump["_ID"] = id;
+        sendNetworkMessage("RX.SPOT_MAP", "", dump);
+        return;
+    }
     if (type == "RX.GET_CALL_ACTIVITY") {
         auto now = DriftingDateTime::currentDateTimeUtc();
         int callsignAging = m_config.callsign_aging();

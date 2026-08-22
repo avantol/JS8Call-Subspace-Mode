@@ -9,7 +9,8 @@
  * spots where MY callsign is the sender, and renders each spotter on an
  * azimuthal chart centered on my grid: position from
  * Geodesic::vector(myGrid, spotterGrid), heat color from the SNR the
- * spotter reported. Rolling 15-minute window, auto-scaling radius,
+ * spotter reported. Rolling ONE-HOUR window (WINDOW_SECS),
+ * auto-scaling radius,
  * current band displayed with per-band caches retained across band
  * changes.
  *
@@ -29,6 +30,7 @@
 #include <QPointF>
 #include <QPolygonF>
 #include <QVector>
+#include <QVariantMap>
 #include <QWidget>
 
 #include "JS8_Main/GridDb.h"
@@ -48,6 +50,9 @@ class SpotMapWindow final : public QWidget {
     ~SpotMapWindow() override;
 
     void saveSettings();
+    // [visrace2] Call before the shutdown save: makes closeEvent stop
+    // treating a window-manager close as "the user closed the map".
+    void beginShutdown() { m_shuttingDown = true; }
     bool wasVisibleAtShutdown() const; // for startup restore
     // [visrace] User-intent close (menu toggle): clears the
     // restore-at-startup flag, unlike a shutdown-driven close.
@@ -65,7 +70,7 @@ class SpotMapWindow final : public QWidget {
     // exchange ("A: B ..." = A hears/works B). Grids may be empty
     // when unknown; edges draw only when both ends resolve. Works
     // with no internet — this is the offline complement to the MQTT
-    // mesh (blue lines, drawn over the green).
+    // mesh (blue lines, drawn over the dark-yellow PSKR ones).
     // [onairspot] A station demonstrably heard MY signal (it sent me
     // a directed frame; an SNR reply even carries their copy's
     // report). The on-air equivalent of a PSK Reporter spot of me —
@@ -78,6 +83,15 @@ class SpotMapWindow final : public QWidget {
     // reportedToMeSnr: an SNR value this station REPORTED TO US (its
     // copy of our signal) — the ONLY thing that colors an on-air
     // All-view dot solid (operator rule 2026-08-14); -99 = no change.
+    // [#168 mapdump 2026-08-21] Read-only snapshot of what the map
+    // knows RIGHT NOW, for the API dump. The live spot feed and the
+    // hearing store exist only in RAM and no tool could reach them,
+    // so offline planners were blind to the one fact that matters
+    // most: who is on the air this minute (operator: "the spots map
+    // is pretty much *the point*"). Debug/test surface — structure
+    // may change; it is not a compatibility promise.
+    QVariantMap dumpState(QString const &band = QString{}) const;
+
     // [#164] Authority lookup for outside consumers (hearGridFor's
     // fallback chain) — includes everything the persistent store
     // seeded. Returns empty when unknown.
@@ -95,7 +109,8 @@ class SpotMapWindow final : public QWidget {
                           QStringList const &heardGrids,
                           int reportedToMeSnr = -99,
                           QDateTime const &heardWhen = QDateTime{},
-                          int heardSnr = -99);
+                          int heardSnr = -99,
+                          QString const &source = QString{});
 
   public slots:
     void setBand(QString const &band);
@@ -142,6 +157,17 @@ class SpotMapWindow final : public QWidget {
     void zoomAuto();
 
   private:
+    // [oneobs 2026-08-22] TRANSIENT RENDER UNIT ONLY -- never stored.
+    // Built per paint from the observation store below. The map used to
+    // keep two persistent QVector<Spot> stores alongside the mesh, and
+    // every display bug of 2026-08-21/22 was those two disagreeing with
+    // it: one spot per station capped the lines at one per station, dot
+    // age diverged from line age, heardBy provenance leaked onto
+    // stations visible for other reasons, and dots refreshed while
+    // their edges froze. Operator: "what's wrong with: for each message
+    // (or PSKR spot), draw a colour-coded or empty circle, connect the
+    // two with a line?" Nothing -- so the observation is now the only
+    // record, and circles and lines are drawn from it together.
     struct Spot {
         QDateTime when;         // clamped-to-now report time
         QString receiverCall;   // the PLOTTED station (spotter in my
@@ -169,6 +195,12 @@ class SpotMapWindow final : public QWidget {
         // [allsuper] Spot's SNR is a report of MY signal (my-view
         // datasets) — exempt from the All-view color override.
         bool reportsMe = false;
+        // [linecolor] Was the sender->reporter relationship supplied by
+        // a PSKR spot? Yellow is PSKR STRICTLY, and heardBy only ever
+        // comes from the internet feed -- but a station can be VISIBLE
+        // for radio reasons while still carrying a PSKR-sourced
+        // heardBy, and the line must not draw then.
+        bool heardByPskr = false;
         // [radioage] Last RADIO evidence for this station; `when`
         // may be refreshed by internet reports, so PSKR-off aging
         // must use this clock (dot-without-line gap, 2026-08-15).
@@ -178,7 +210,14 @@ class SpotMapWindow final : public QWidget {
                                 // default to a claimable real value
         qint64 freqHz = 0;      // exact RF Hz the spotter logged us at
         float azimuth = 0.0f;   // degrees true, from my grid
-        float distance = 0.0f;  // ALWAYS km (unit conversion at paint)
+        // ALWAYS km (unit conversion at paint). NEGATIVE = UNPLACED,
+        // matching HeardEdge/HearingEntry. It defaulted to 0.0f, which
+        // the visibility check reads as a valid position zero km away
+        // -- so any station whose grid is unknown was drawn ON TOP OF
+        // MY STATION (operator, 2026-08-22: "why is AK6OI on the map?
+        // no grid, it's plotted over my station"). Zero is a real
+        // distance; it must never double as "no distance".
+        float distance = -1.0f;
     };
 
     // [spotwin] STORAGE horizon: spots are retained in memory per
@@ -221,7 +260,6 @@ class SpotMapWindow final : public QWidget {
 
   private:
 
-    QHash<QString, QVector<Spot>> m_spotsByBand;
     QString m_currentBand;
     QString m_myCall;
     QString m_myGrid;
@@ -233,14 +271,20 @@ class SpotMapWindow final : public QWidget {
     QTimer m_replotTimer; // debounce
     QTimer m_pruneTimer;
     bool m_restoreVisible = false;
+    // [visrace2 2026-08-21] Set once app shutdown begins. A close
+    // arriving after this is teardown, NEVER user intent -- see
+    // closeEvent().
+    bool m_shuttingDown = false;
 
     // Toast overlay (lazy-created by showToast()).
     class QLabel *m_toast = nullptr;
     QTimer m_toastTimer;
 
-    // Zoom controls (upper-left, vertical: + / Auto / −). Manual scale
-    // is SESSION-ONLY state, never persisted — every launch starts in
-    // Auto (operator directive 2026-08-02). 0 = auto-scale.
+    // Zoom controls (upper-left, vertical: + / Auto / −). 0 = auto.
+    // PERSISTED since [persistui] 2026-08-15 (operator revision
+    // superseding the 2026-08-02 "always start in Auto" directive) --
+    // the old comment claiming session-only survived the change and
+    // contradicted saveSettings() for six days.
     class QToolButton *m_zoomInBtn = nullptr;
     class QToolButton *m_zoomAutoBtn = nullptr;
     class QToolButton *m_zoomOutBtn = nullptr;
@@ -251,9 +295,12 @@ class SpotMapWindow final : public QWidget {
     // Auto after "−" refused to re-fit). 0 = no damping (fresh fit).
     float m_lastAutoScaleKm = 0.0f;
 
-    // [spotwin] Accumulation-window buttons (15/30/60 min, upper
-    // right). Session-only; every open defaults to 60 (no
-    // persistence, operator directive 2026-08-03).
+    // [spotwin] View-window buttons (5/15/30/60 min, upper right).
+    // PERSISTED ([persistui]); the value is VALIDATED on load against
+    // the button set -- an out-of-set value (e.g. left by an
+    // experimental build) checked the 60m button while filtering at
+    // the stale number, which reads exactly like "the age selection
+    // does nothing".
     class QToolButton *m_win5Btn = nullptr;
     class QToolButton *m_win15Btn = nullptr;
     class QToolButton *m_win30Btn = nullptr;
@@ -314,6 +361,23 @@ class SpotMapWindow final : public QWidget {
         // this edge ONLY — never the reportedToMeSnr color
         // authority.
         int snr = -99;
+        // [tribblenet] PROVENANCE, and the three differ in KIND:
+        //   "radio"   FIRST-HAND -- our own receiver decoded it.
+        //   "mqtt"    INTERNET -- PSKReporter said so. Vanishes in an
+        //             offline session (#159), so never route on it
+        //             when planning for no-internet operation.
+        //   "hearing" THIRD-PARTY TESTIMONY, RF-derived: a HEARING?
+        //             list, or a QUERY CALL reply -- INCLUDING one
+        //             that reached us via a RELAY (operator
+        //             2026-08-21). Our radio never copied the station
+        //             being described; a remote station claims it,
+        //             and the SNR/age are THAT station's copy,
+        //             backdated by transit. Valid offline, but not an
+        //             observation.
+        // Without this, radio and internet edges are
+        // indistinguishable -- which silently breaks #159 offline
+        // routing and hides whether a relay is reachable by RF at all.
+        QString source;
     };
     struct HearingEntry {
         QDateTime lastSeen;   // presence freshness (HBs, any frame)
@@ -321,9 +385,30 @@ class SpotMapWindow final : public QWidget {
         float dist = -1.0f;
         QString grid;
         int snr = -99;        // SNR this station REPORTED TO US only
+        // [tribblenet audit 2026-08-21] PRESENCE provenance, same
+        // vocabulary as HeardEdge::source. Needed because the PSKR
+        // feed now populates this store: without it the anchor pass
+        // synthesized dots for internet-only stations even with "Add
+        // PSKReporter spots" OFF, silently breaking that toggle's
+        // contract. "radio" once ANY on-air evidence is seen -- a
+        // station heard on the air never reverts to internet-only.
+        QString source;
         QHash<QString, HeardEdge> heard;
     };
+    // [oneobs] THE observation store: band -> hearer -> (position +
+    // per-heard-call edges, each with its own time, SNR and source).
+    // ONE record per observation; circles AND lines are drawn from it.
     QHash<QString, QHash<QString, HearingEntry>> m_hearingByBand;
+    // [oneobs] Facts that belong to a STATION rather than to any one
+    // observation -- country and the frequency THEY transmit on. Small,
+    // and kept beside the observations rather than inside them so an
+    // observation stays a pure relationship.
+    struct StationInfo {
+        QString country;
+        qint64 freqHz = 0;
+        bool sawAsSender = false;  // observed transmitting => not rxOnly
+    };
+    QHash<QString, QHash<QString, StationInfo>> m_infoByBand;
     // [mqttgrid] call -> locator harvested from EVERY MQTT message
     // (sender sc/sl and reporter rc/rl) — fallback grid source for
     // on-air stations the sanctioned text sources haven't placed.
@@ -332,6 +417,21 @@ class SpotMapWindow final : public QWidget {
     // startup, records every accepted refinement. Never read
     // directly by consumers.
     GridDb m_gridDb;
+    // [#168 part 3] Write-behind journal timer. RAM stays the query
+    // authority; this only drains the queue into ONE transaction.
+    QTimer m_dbFlushTimer;
+    // Restore the who-hears-whom mesh (and spots) banked by previous
+    // sessions. Without this every restart destroyed the mesh, and a
+    // route search could only ever see what refilled since — measured
+    // three times mid-route on 2026-08-21.
+    void restoreMeshFromDisk();
+    // [#168 part 3] Journal one accepted observation as STATION FACTS.
+    // ONE place, called from BOTH insertion paths (on-air and PSKR) --
+    // patching each site separately is how the two drift apart. The
+    // RELATIONSHIP it implies is journalled by addHearingReport as an
+    // edge; this records only what is true of the station.
+    void journalStation(QString const &band, QString const &call);
+    void restoreStationsFromDisk();
     int m_wheelAccum = 0; // [wheelzoom] trackpad delta accumulator
     // [zoomkeepcenter] Auto-fit pan applied at the last redraw —
     // baked into m_panPx when the operator leaves Auto so manual
@@ -350,7 +450,6 @@ class SpotMapWindow final : public QWidget {
     // SNR rule — single definitions, every consumer reads these.
     QDateTime effectiveWhen(Spot const &s) const;
     int reportedToMeSnr(Spot const &s) const;
-    QHash<QString, QVector<Spot>> m_allSpotsByBand;
 
     // Drag-to-pan (persists, [persistui]; the Auto button zeroes it).
     // m_panPx = chart-center offset from the geometric center, in

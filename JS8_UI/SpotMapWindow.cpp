@@ -45,11 +45,27 @@ constexpr int LEGEND_STRIP_PX = 40;
 constexpr int MARGIN_PX = 18;
 constexpr int DOT_RADIUS_PX = 3;
 constexpr float DEFAULT_SCALE_KM = 5000.0f;
-constexpr float FLOOR_SCALE_KM = 500.0f;
+// [ladder] Closest zoom. Lowered 500 -> 150 km (operator 2026-08-21:
+// "add 2 more levels of zoom in... like 200 miles. 100 miles").
+// 100 mi is 161 km, so the floor has to reach ~150; the rungs were
+// always in the ladder, the old floor just clamped them away. NOTE
+// the ladder is multiplicative, so opening it this far necessarily
+// exposes the intermediate rungs (400/250/200) as well — two extra
+// levels is not expressible without a second, additive ladder.
+// CAVEAT at this range: Geodesic treats anything under CLOSE=120 km
+// as co-located and a 4-char grid is ~100 km across, so the closest
+// rungs show more resolution than the position data actually has.
+constexpr float FLOOR_SCALE_KM = 150.0f;
 // Manual-zoom range: floor shared with auto-scale; ceiling just past
 // the antipode (~20000 km) so one more "−" from any auto scale always
 // shows the whole reachable Earth.
-constexpr float MAX_SCALE_KM = 20000.0f;
+// Ceiling lowered 20000 -> 15000 km (operator 2026-08-21: delete
+// the widest rung) - it existed only to clear the antipode, and at
+// that scale the view is mostly empty ocean for any realistic spot
+// density. TRADE-OFF, stated: a near-antipodal path (>15000 km,
+// e.g. VK/ZL long path) can no longer be framed whole; 15000 km
+// still covers every path we have actually worked.
+constexpr float MAX_SCALE_KM = 15000.0f;
 // [ladder] THE zoom ladder (audit item 6 — niceCeil and stepScale
 // each owned a copy; one authority now). Values per decade; a step
 // past either end shifts the decade.
@@ -77,9 +93,21 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
             QFileInfo{m_settings->fileName()}.absolutePath();
         if (m_gridDb.open(dir + QStringLiteral("/JS8Call") +
                           MultiSettings::instanceSuffix() +
-                          QStringLiteral("-grids.db")))
+                          QStringLiteral("-grids.db"))) {
             m_gridByCall = m_gridDb.loadAll();
+            // [#168 part 3] Restore happens in setStation(), not
+            // here: m_myGrid is unknown at ctor time (bearings) and
+            // the first setStation() used to clear everything.
+        }
     }
+    // [#168 part 3] Write-behind: RAM answers every query, the queue
+    // drains to disk in one transaction on this timer. 45 s bounds
+    // what a crash can cost to a window of band observations we can
+    // simply re-hear.
+    m_dbFlushTimer.setInterval(45 * 1000);
+    connect(&m_dbFlushTimer, &QTimer::timeout, this,
+            [this] { m_gridDb.flush(); });
+    m_dbFlushTimer.start();
 
     {
         SettingsGroup g{m_settings, "SpotMap"};
@@ -94,11 +122,35 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
         m_viewAll = m_settings->value("ViewAll", false).toBool();
         m_showPskr = m_settings->value("ShowPskr", true).toBool();
         // [persistui] Zoom level (0 = Auto) and spots time range.
+        // [audit 2026-08-21] VALIDATE persisted values. Both are
+        // free-form ints/floats in the ini and both are used directly;
+        // a value the current build cannot express silently breaks the
+        // UI while the controls look normal.
+        //   ManualScaleKm: the ladder bounds moved this session
+        //   (FLOOR 500->150, MAX 20000->15000), so a value banked by
+        //   an older build can now be out of range.
+        //   ViewWindowSecs: must be one of the button values, or the
+        //   reflection below checks 60m while the filter uses the
+        //   stale number -- indistinguishable from "the age selection
+        //   does nothing". An experimental build with other buttons
+        //   is exactly how such a value gets written.
         m_manualScaleKm =
             m_settings->value("ManualScaleKm", 0.0f).toFloat();
+        if (m_manualScaleKm > 0.0f)
+            m_manualScaleKm = std::clamp(m_manualScaleKm,
+                                         FLOOR_SCALE_KM, MAX_SCALE_KM);
+        else
+            m_manualScaleKm = 0.0f; // negatives/NaN -> Auto
         m_viewWindowSecs =
             m_settings->value("ViewWindowSecs", DEFAULT_VIEW_SECS)
                 .toInt();
+        if (m_viewWindowSecs != 5 * 60 && m_viewWindowSecs != 15 * 60 &&
+            m_viewWindowSecs != 30 * 60 && m_viewWindowSecs != 60 * 60) {
+            qCWarning(mqttclient_js8)
+                << "[SPOTMAP] discarding out-of-set ViewWindowSecs"
+                << m_viewWindowSecs << "-> " << DEFAULT_VIEW_SECS;
+            m_viewWindowSecs = DEFAULT_VIEW_SECS;
+        }
         m_panPx = QPointF{m_settings->value("PanX", 0.0).toDouble(),
                           m_settings->value("PanY", 0.0).toDouble()};
     }
@@ -423,17 +475,44 @@ void SpotMapWindow::rebuildTopics() {
 }
 
 void SpotMapWindow::setStation(QString const &callsign, QString const &grid) {
-    if (callsign == m_myCall && grid == m_myGrid)
+    // Compare NORMALISED, or a raw-vs-trimmed mismatch re-runs the
+    // whole station-change path (clearing every store) on every call.
+    if (callsign.trimmed() == m_myCall && grid.trimmed() == m_myGrid)
         return;
-    m_myCall = callsign;
-    m_myGrid = grid;
-    // Azimuth/distance and subscription are both stale — start over.
-    qCWarning(mqttclient_js8)
-        << "[SPOTMAP] station changed — ALL spot data cleared:"
-        << callsign << grid; // [showfix] attribute any real data loss
-    m_spotsByBand.clear();
-    m_allSpotsByBand.clear(); // [viewall] same staleness
-    m_hearingByBand.clear();  // [hearlines] az/dist keyed to my grid
+    // [#168 part 3] The FIRST set is startup, not a station CHANGE.
+    // Treating them alike silently destroyed everything restored from
+    // disk: the ctor loaded the mesh, logged that it had, and then
+    // this ran moments later and cleared it -- so the log proved the
+    // LOAD while the data never survived to be used (operator caught
+    // the symptom: "on-air and PSKR spots that didn't show upon
+    // restart"). Restoring HERE also fixes a second defect: bearings
+    // are derived from m_myGrid, which the ctor does not yet know, so
+    // a ctor-time restore would have placed every dot at distance 0.
+    bool const firstSet = m_myCall.isEmpty();
+    // [callcase 2026-08-22] NORMALISE AT THE ONE DOOR. Callers pass
+    // m_config.my_callsign() raw; every OTHER consumer in the codebase
+    // trims it, this one did not. An untrimmed call makes myUp match
+    // nothing, so `heard.contains(myUp)` and `ed.key() != myUp` both
+    // fail -- the mesh registers no stations in the MY view and draws
+    // no lines, while the SPOT store (which never compares against
+    // myUp) still paints the dots. Symptom: "spots circles but no
+    // lines for them" (operator). Same shape as [gridcase]: normalise
+    // where the value enters the authority, not at each use.
+    m_myCall = callsign.trimmed();
+    m_myGrid = grid.trimmed();
+    if (firstSet) {
+        restoreMeshFromDisk();
+        restoreStationsFromDisk();
+    } else {
+        // A genuine move: azimuth/distance and subscription are both
+        // stale, so start over. Banked rows keep RAW grids, so the
+        // next restore recomputes correctly against the new one.
+        qCWarning(mqttclient_js8)
+            << "[SPOTMAP] station changed — ALL spot data cleared:"
+            << callsign << grid; // [showfix] attribute real data loss
+        m_infoByBand.clear();
+        m_hearingByBand.clear();  // [hearlines] az/dist keyed to grid
+    }
     positionWindowButtons();  // [viewall] my-call button text/width
     rebuildTopics();
     requestReplot();
@@ -464,63 +543,19 @@ void SpotMapWindow::setBand(QString const &band) {
 void SpotMapWindow::addOnAirSpotOfMe(QString const &band,
                                      QString const &call,
                                      QString const &grid, int const snr) {
+    // [oneobs 2026-08-22] A frame addressed to us IS an observation:
+    // "call heard WM8Q". Record it as one, and the dot for `call` plus
+    // the line to my triangle both fall out of that single record. The
+    // old path built a Spot in a parallel store, which is how a dot
+    // could refresh while its line went stale.
     if (band.isEmpty() || call.isEmpty() || grid.size() < 4 ||
-        m_myGrid.size() < 4)
+        m_myGrid.size() < 4 || m_myCall.isEmpty())
         return;
-    rememberGrid(call, grid); // [gridfine] radio grids feed the
-                              // authority too — the 6-char truth can
-                              // arrive by RADIO while PSKR only ever
-                              // supplies a 4-char registered locator
-                              // (KJ7VWV: call-list DN52QT vs rl DN52;
-                              // three MQTT-cache-only fixes failed)
-    QString const gridF = refinedGrid(call, grid);
-    auto const vec = Geodesic::vector(m_myGrid, gridF);
-    if (!vec.azimuth().isValid() || !vec.distance().isValid())
-        return;
-    Spot spot;
-    spot.reportsMe = true; // [allsuper]
-    spot.when = DriftingDateTime::currentDateTimeUtc();
-    spot.radioWhen = spot.when; // [radioage] radio evidence clock
-    spot.receiverCall = call.toUpper();
-    spot.receiverGrid = gridF;
-    // [hbdots] A frame with no report value must not ERASE a known
-    // report: fall back to (1) this call's previous my-view spot,
-    // (2) the SNR it stamped into the hearing store (SNR reply that
-    // arrived before its position was known — the AC7WY sequence).
-    int effSnr = snr;
-    if (effSnr <= -99) {
-        for (Spot const &old : m_spotsByBand.value(band))
-            if (old.receiverCall == spot.receiverCall &&
-                !old.monitorOnly) {
-                effSnr = old.snr;
-                break;
-            }
-    }
-    if (effSnr <= -99) {
-        if (auto const &hearers = m_hearingByBand.value(band);
-            hearers.contains(spot.receiverCall) &&
-            hearers.value(spot.receiverCall).snr > -99)
-            effSnr = hearers.value(spot.receiverCall).snr;
-    }
-    // [snrwho] Keep the -99 sentinel in the store — collapsing it
-    // to 0 made "no report" indistinguishable from a real 0 dB
-    // (operator 2026-08-15). Paint is safe: monitorOnly renders
-    // hollow, never heat-colored.
-    spot.snr = effSnr;
-    spot.monitorOnly = (effSnr <= -99);
-    spot.azimuth = vec.azimuth();
-    spot.distance = vec.distance();
-    auto &spots = m_spotsByBand[band];
-    spots.erase(std::remove_if(spots.begin(), spots.end(),
-                               [&](Spot const &s) {
-                                   return s.receiverCall ==
-                                          spot.receiverCall;
-                               }),
-                spots.end());
-    spots.append(spot);
-    pruneBand(band);
-    if (band == m_currentBand && isVisible() && !m_viewAll)
-        requestReplot();
+    m_infoByBand[band][call.toUpper()].sawAsSender = true;
+    journalStation(band, call);
+    addHearingReport(band, call, grid, {m_myCall.toUpper()}, {m_myGrid},
+                     /*reportedToMeSnr=*/snr, QDateTime{},
+                     /*heardSnr=*/snr, QStringLiteral("radio"));
 }
 
 // [hearlines] See header. Latest position per station; edges keyed
@@ -533,7 +568,8 @@ void SpotMapWindow::addHearingReport(QString const &band,
                                      QStringList const &heardGrids,
                                      int const reportedToMeSnr,
                                      QDateTime const &heardWhen,
-                                     int const heardSnr) {
+                                     int const heardSnr,
+                                     QString const &source) {
     if (band.isEmpty() || hearer.isEmpty())
         return;
     auto const now = DriftingDateTime::currentDateTimeUtc();
@@ -579,11 +615,43 @@ void SpotMapWindow::addHearingReport(QString const &band,
     }
     if (reportedToMeSnr > -99)
         e.snr = reportedToMeSnr;
+    // [audit 2026-08-21] PRESENCE provenance. RF evidence is STICKY:
+    // once a station has been heard on the air, later internet
+    // reports must not demote it to "internet-only" and make it
+    // vanish when the PSKR toggle goes off.
+    {
+        QString const evid =
+            !source.isEmpty()
+                ? source
+                : (heardWhen.isValid() ? QStringLiteral("hearing")
+                                       : QStringLiteral("radio"));
+        if (e.source.isEmpty() ||
+            (e.source == QStringLiteral("mqtt") &&
+             evid != QStringLiteral("mqtt")))
+            e.source = evid;
+    }
     for (int i = 0; i < heardCalls.size(); ++i) {
         QString const call = heardCalls.at(i).toUpper();
         if (call.isEmpty() || call == hearer.toUpper())
             continue;
         HeardEdge &edge = e.heard[call];
+        // [meshprobe 2026-08-22] What actually happens to an edge that
+        // names US: does it move forward, or is it refused?
+        if (!m_myCall.isEmpty() &&
+            call == m_myCall.toUpper()) {
+            static qint64 lastEdgeProbe = 0;
+            qint64 const nowMs2 = now.toMSecsSinceEpoch();
+            if (nowMs2 - lastEdgeProbe > 10000) {
+                lastEdgeProbe = nowMs2;
+                qCWarning(mqttclient_js8)
+                    << "[MESHPROBE] edge ->me hearer=" << hearer
+                    << "existing age_s="
+                    << (edge.when.isValid() ? edge.when.secsTo(now) : -1)
+                    << "incoming age_s="
+                    << (heardWhen.isValid() ? heardWhen.secsTo(now) : -1)
+                    << "src=" << source;
+            }
+        }
         // [#161 querycall] Backdated sightings never REGRESS a
         // fresher edge; ordinary feeds keep their refresh-to-now.
         QDateTime const sighting =
@@ -592,6 +660,30 @@ void SpotMapWindow::addHearingReport(QString const &band,
             edge.when = sighting;
         if (heardSnr > -99)
             edge.snr = heardSnr;
+        // [tribblenet] Explicit source beats inference: the caller
+        // knows. Default keeps the old behaviour for on-air paths.
+        // [audit 2026-08-21] STICKY toward FIRST-HAND, never a
+        // downgrade. Assigning unconditionally let an internet report
+        // of a pair overwrite our own radio observation of it -- and
+        // PSKR echoes our OWN spots back to us constantly, so a
+        // radio edge could be demoted to "mqtt" seconds after we
+        // earned it, hiding it from the blue mesh and from any
+        // offline (#159) route.
+        {
+            QString const evid =
+                !source.isEmpty()
+                    ? source
+                    : (heardWhen.isValid() ? QStringLiteral("hearing")
+                                           : QStringLiteral("radio"));
+            auto const rank = [](QString const &s) {
+                return s == QStringLiteral("radio")     ? 0
+                       : s == QStringLiteral("hearing") ? 1
+                                                        : 2;
+            };
+            if (edge.source.isEmpty() ||
+                rank(evid) <= rank(edge.source))
+                edge.source = evid;
+        }
         QString const gRaw =
             (i < heardGrids.size() ? heardGrids.at(i) : QString())
                 .trimmed();
@@ -601,9 +693,307 @@ void SpotMapWindow::addHearingReport(QString const &band,
             edge.grid = g;
             resolve(g, &edge.az, &edge.dist);
         }
+        // [#168 part 3] Journal the edge the authority just accepted.
+        // RAW GRIDS only -- az/dist are my-grid-relative and become
+        // nonsense after a move (#154/#164 trap); bearings are
+        // recomputed on load. A BACKDATED sighting is a QUERY CALL /
+        // HEARING reply (#161), which is the ONLY way a station that
+        // does not publish to PSKReporter ever reveals its ears --
+        // worth distinguishing, per the operator.
+        GridDb::EdgeRow row;
+        row.band = band;
+        row.hearer = hearer;
+        row.heard = call;
+        row.hearerGrid = e.grid;
+        row.heardGrid = edge.grid;
+        row.snr = edge.snr;
+        row.when = edge.when.isValid()
+                       ? edge.when.toSecsSinceEpoch()
+                       : now.toSecsSinceEpoch();
+        row.source = edge.source;
+        m_gridDb.queueEdge(row);
     }
+    // [#168 part 1] Presence, on every sighting (throttled inside).
+    // [audit] -99, not reportedToMeSnr: that value is THEIR copy of
+    // OUR signal, not ours of theirs.
+    m_gridDb.noteActivity(hearer, -99);
     if (band == m_currentBand && isVisible() && m_showConnections)
         requestReplot();
+}
+
+// [oneobs 2026-08-22] Journal STATION FACTS for one call. The
+// observations themselves are journalled as edges by
+// addHearingReport(); this records only what is true of the station.
+void SpotMapWindow::journalStation(QString const &band,
+                                   QString const &call) {
+    if (band.isEmpty() || call.isEmpty())
+        return;
+    QString const c = call.toUpper();
+    auto const &info = m_infoByBand.value(band).value(c);
+    auto const &hz = m_hearingByBand.value(band);
+    GridDb::StationRow r;
+    r.band = band;
+    r.call = c;
+    r.grid = m_gridByCall.value(c);
+    r.country = info.country;
+    r.freqHz = info.freqHz;
+    r.rxOnly = !info.sawAsSender;
+    auto const now = DriftingDateTime::currentDateTimeUtc();
+    r.anyWhen = now.toSecsSinceEpoch();
+    // Their report of MY signal, if this station has one.
+    if (auto const it = hz.constFind(c); it != hz.constEnd()) {
+        r.snrToMe = it->snr;
+        r.reportsMe = it->heard.contains(m_myCall.toUpper());
+        if (it->source != QStringLiteral("mqtt"))
+            r.radioWhen = r.anyWhen;
+    }
+    m_gridDb.queueStation(r);
+    m_gridDb.noteActivity(c, -99);
+}
+
+void SpotMapWindow::restoreStationsFromDisk() {
+    // [oneobs] Only STATION FACTS are restored here -- country, their
+    // transmit frequency, whether they have been seen sending. The
+    // observations themselves come back as edges in
+    // restoreMeshFromDisk(), and every dot is derived from those.
+    auto const rows = m_gridDb.loadStations(WINDOW_SECS);
+    int restored = 0;
+    for (GridDb::StationRow const &r : rows) {
+        if (r.band.isEmpty() || r.call.isEmpty())
+            continue;
+        StationInfo &info = m_infoByBand[r.band][r.call.toUpper()];
+        if (!r.country.isEmpty())
+            info.country = r.country;
+        if (r.freqHz > 0)
+            info.freqHz = r.freqHz;
+        if (!r.rxOnly)
+            info.sawAsSender = true;
+        ++restored;
+    }
+    if (restored)
+        qCWarning(mqttclient_js8)
+            << "[SPOTMAP] restored" << restored << "station records";
+}
+
+// [#168 part 3] Rebuild the mesh banked by earlier sessions.
+void SpotMapWindow::restoreMeshFromDisk() {
+    // WINDOW_SECS, not RETAIN_SECS: the RAM store ages at
+    // WINDOW_SECS and pruneBand() runs on every incoming report, so
+    // anything older is deleted within seconds of startup. Loading a
+    // day's worth only made spots appear and then visibly vanish
+    // (operator, 2026-08-21: "PSKR spots started disappearing... in
+    // the first 10 seconds"). The extra history stays ON DISK for
+    // tooling that queries it directly.
+    auto const rows = m_gridDb.loadEdges(WINDOW_SECS);
+    if (rows.isEmpty())
+        return;
+    int restored = 0;
+    for (GridDb::EdgeRow const &r : rows) {
+        if (r.band.isEmpty() || r.hearer.isEmpty() || r.heard.isEmpty())
+            continue;
+        HearingEntry &e = m_hearingByBand[r.band][r.hearer];
+        QDateTime const when =
+            QDateTime::fromSecsSinceEpoch(r.when, Qt::UTC);
+        if (!e.lastSeen.isValid() || when > e.lastSeen)
+            e.lastSeen = when;
+        if (e.grid.isEmpty() && !r.hearerGrid.isEmpty())
+            e.grid = r.hearerGrid;
+        // [audit] Same stickiness rule as the live path.
+        if (e.source.isEmpty() ||
+            (e.source == QStringLiteral("mqtt") &&
+             !r.source.isEmpty() && r.source != QStringLiteral("mqtt")))
+            e.source = r.source.isEmpty() ? QStringLiteral("radio")
+                                          : r.source;
+        HeardEdge &edge = e.heard[r.heard];
+        // Freshest wins, exactly as the live path does -- a replay
+        // must never drag an edge backwards.
+        if (!edge.when.isValid() || when > edge.when) {
+            edge.when = when;
+            if (r.snr > -99)
+                edge.snr = r.snr;
+            // [tribblenet] PROVENANCE MUST SURVIVE THE ROUND TRIP.
+            // Dropping it here made every restored edge draw BLUE --
+            // an untagged edge fails the "mqtt" display filter, so a
+            // map rebuilt from disk showed PSKR links as on-air ones
+            // while live spots (correctly tagged) drew yellow. That is
+            // exactly what the operator saw: wrong colours on the
+            // initial draw, correct ones appearing afterwards.
+            // It is banked in `edges.source` -- restore it.
+            edge.source = r.source.isEmpty()
+                              ? QStringLiteral("radio")
+                              : r.source;
+        }
+        if (edge.grid.isEmpty() && !r.heardGrid.isEmpty())
+            edge.grid = r.heardGrid;
+        ++restored;
+    }
+    // [audit 2026-08-21] RESOLVE BEARINGS HERE. The previous comment
+    // claimed m_myGrid "may not be known this early" and left az/dist
+    // at -1 for "the next report" to fix. Both halves were wrong once
+    // the restore moved into setStation(): m_myGrid IS set by then,
+    // and no next report ever comes -- rememberGrid() early-outs when
+    // the grid is unchanged, and a restored grid always matches the
+    // seeded bank. So every restored edge kept dist < 0 forever, which
+    // means NO anchor dot and NO line: the mesh was faithfully
+    // restored and completely invisible.
+    if (m_myGrid.size() >= 4) {
+        auto const place = [this](QString const &grid, float *az,
+                                  float *dist) {
+            if (grid.size() < 4)
+                return;
+            if (auto const v = Geodesic::vector(m_myGrid, grid);
+                v.azimuth().isValid() && v.distance().isValid()) {
+                *az = v.azimuth();
+                *dist = v.distance();
+            }
+        };
+        for (auto b = m_hearingByBand.begin();
+             b != m_hearingByBand.end(); ++b)
+            for (auto he = b.value().begin(); he != b.value().end();
+                 ++he) {
+                if (he->dist < 0.0f)
+                    place(he->grid, &he->az, &he->dist);
+                for (auto ed = he->heard.begin();
+                     ed != he->heard.end(); ++ed)
+                    if (ed->dist < 0.0f)
+                        place(ed->grid, &ed->az, &ed->dist);
+            }
+    }
+    qCWarning(mqttclient_js8)
+        << "[SPOTMAP] restored" << restored << "mesh edges from disk"
+        << "across" << m_hearingByBand.size() << "band(s)";
+}
+
+// [#168 mapdump] See header. Everything here is already in RAM; we
+// only serialize it. Read-only: no aging, no pruning, no side effects
+// on what the map displays.
+QVariantMap SpotMapWindow::dumpState(QString const &band) const {
+    QString const b = band.isEmpty() ? m_currentBand : band;
+    auto const now = DriftingDateTime::currentDateTimeUtc();
+
+    // Who is hearing whom, with the age of each observation. This is
+    // the mesh an offline planner needs and cannot otherwise get.
+    QVariantList hearing;
+    for (auto it = m_hearingByBand.value(b).constBegin();
+         it != m_hearingByBand.value(b).constEnd(); ++it) {
+        HearingEntry const &e = it.value();
+        QVariantMap h;
+        h["CALL"] = it.key();
+        h["GRID"] = e.grid;
+        h["LAST_SEEN"] = e.lastSeen.toMSecsSinceEpoch();
+        h["AGE_S"] = e.lastSeen.isValid()
+                         ? qint64(e.lastSeen.secsTo(now)) : qint64(-1);
+        h["SNR_TO_ME"] = e.snr;      // their report of OUR signal
+        QVariantList heard;
+        for (auto he = e.heard.constBegin(); he != e.heard.constEnd();
+             ++he) {
+            QVariantMap edge;
+            edge["CALL"] = he.key();
+            edge["GRID"] = he.value().grid;
+            edge["WHEN"] = he.value().when.toMSecsSinceEpoch();
+            edge["AGE_S"] = he.value().when.isValid()
+                                ? qint64(he.value().when.secsTo(now))
+                                : qint64(-1);
+            edge["SNR"] = he.value().snr;   // third-party report
+            // [tribblenet] PROVENANCE, so a consumer can tell an
+            // over-the-air edge from an internet one -- the
+            // difference between a relay we can actually reach
+            // and one we only know about because PSKReporter
+            // said so (operator audit, 2026-08-21).
+            edge["SOURCE"] = he.value().source.isEmpty()
+                                 ? QStringLiteral("radio")
+                                 : he.value().source;
+            heard.append(edge);
+        }
+        h["HEARS"] = heard;
+        hearing.append(h);
+    }
+
+    // Spots, including internet-sourced ones. `HEARD_BY` is the whole
+    // point for routing: the station that reported this one is a relay
+    // candidate with LIVE evidence of hearing it.
+    auto const packSpots = [&now](QVector<Spot> const &src) {
+        QVariantList out;
+        for (Spot const &sp : src) {
+            QVariantMap m;
+            m["CALL"] = sp.receiverCall;
+            m["GRID"] = sp.receiverGrid;
+            m["WHEN"] = sp.when.toMSecsSinceEpoch();
+            m["AGE_S"] = sp.when.isValid()
+                             ? qint64(sp.when.secsTo(now)) : qint64(-1);
+            m["SNR"] = sp.snr;
+            m["HEARD_BY"] = sp.heardBy;
+            m["HEARD_BY_GRID"] = sp.heardByGrid;
+            m["PSKR"] = sp.pskr;
+            m["RX_ONLY"] = sp.rxOnly;
+            m["MONITOR_ONLY"] = sp.monitorOnly;
+            m["REPORTS_ME"] = sp.reportsMe;
+            m["RADIO_WHEN"] = sp.radioWhen.toMSecsSinceEpoch();
+            out.append(m);
+        }
+        return out;
+    };
+
+    QVariantMap out;
+    out["BAND"] = b;
+    out["MY_CALL"] = m_myCall;
+    out["MY_GRID"] = m_myGrid;
+    out["UTC"] = now.toMSecsSinceEpoch();
+    out["HEARING"] = hearing;
+    // [oneobs] Derived, not stored: SPOTS_MINE is every station whose
+    // observation names ME as the heard party; SPOTS_ALL is every
+    // station the observations mention at all. Consumers keep the same
+    // two lists; nothing keeps a second copy to disagree with.
+    {
+        QVector<Spot> mine, all;
+        QSet<QString> seenAll;
+        QString const myUpD = m_myCall.toUpper();
+        auto const &hzD = m_hearingByBand.value(b);
+        auto const mk = [&](QString const &call, QString const &grid,
+                            float az, float dist, int snr,
+                            QDateTime const &wh, bool reportsMe) {
+            Spot sp;
+            sp.receiverCall = call;
+            sp.receiverGrid = grid;
+            sp.azimuth = az;
+            sp.distance = dist;
+            sp.snr = snr;
+            sp.when = wh;
+            sp.reportsMe = reportsMe;
+            sp.monitorOnly = (snr <= -99);
+            return sp;
+        };
+        for (auto h = hzD.constBegin(); h != hzD.constEnd(); ++h) {
+            bool const hearsMe = h.value().heard.contains(myUpD);
+            Spot const sp = mk(h.key(), h.value().grid, h.value().az,
+                               h.value().dist, h.value().snr,
+                               h.value().lastSeen, hearsMe);
+            if (hearsMe)
+                mine.append(sp);
+            if (!seenAll.contains(h.key())) {
+                seenAll.insert(h.key());
+                all.append(sp);
+            }
+            for (auto ed = h.value().heard.constBegin();
+                 ed != h.value().heard.constEnd(); ++ed) {
+                if (seenAll.contains(ed.key()) || ed.key() == myUpD)
+                    continue;
+                seenAll.insert(ed.key());
+                all.append(mk(ed.key(), ed.value().grid, ed.value().az,
+                              ed.value().dist, -99, ed.value().when,
+                              false));
+            }
+        }
+        out["SPOTS_MINE"] = packSpots(mine);
+        out["SPOTS_ALL"] = packSpots(all);
+    }
+    // The grid authority: every locator we know, from any source.
+    QVariantMap grids;
+    for (auto it = m_gridByCall.constBegin();
+         it != m_gridByCall.constEnd(); ++it)
+        grids[it.key()] = it.value();
+    out["GRIDS"] = grids;
+    return out;
 }
 
 QString SpotMapWindow::refinedGrid(QString const &call,
@@ -689,34 +1079,8 @@ void SpotMapWindow::rememberGrid(QString const &call,
             }
         }
     }
-    // [gridfine] The SPOT datasets hold their birth grid until the
-    // station transmits again — upgrade them too, or a my-view dot
-    // sits on the 4-char square while the All-view anchor has
-    // snapped (field 2026-08-15: KJ7VWV at DN52 vs DN52QT).
-    auto const upgradeSpots = [&](QHash<QString, QVector<Spot>> &byBand) {
-        for (auto &vec : byBand)
-            for (Spot &sp : vec) {
-                if (sp.receiverCall == key &&
-                    sp.receiverGrid.compare(
-                        grid, Qt::CaseInsensitive) != 0) { // [movers]
-                    sp.receiverGrid = grid;
-                    sp.azimuth = v.azimuth();
-                    sp.distance = v.distance();
-                    touched = true;
-                }
-                if (sp.heardBy == key &&
-                    (sp.heardByDist < 0.0f ||
-                     sp.heardByGrid.compare(
-                         grid, Qt::CaseInsensitive) != 0)) {
-                    sp.heardByGrid = grid;
-                    sp.heardByAz = v.azimuth();
-                    sp.heardByDist = v.distance();
-                    touched = true;
-                }
-            }
-    };
-    upgradeSpots(m_spotsByBand);
-    upgradeSpots(m_allSpotsByBand);
+    // [oneobs] No spot datasets to upgrade any more -- positions live
+    // on the observations, which the loop above already backfilled.
     if (touched) {
         qCWarning(mqttclient_js8)
             << "[SPOTMAP] station position refined:"
@@ -857,71 +1221,105 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
         return;
     }
 
-    Spot spot;
-    spot.pskr = true;             // [pskrtoggle]
-    spot.reportsMe = senderIsMe;  // [allsuper] my-view = reporter of me
-    spot.receiverCall = plottedCall;
-    spot.receiverGrid = plottedGrid;
-    spot.country = country;
-    spot.heardBy = heardBy;
-    spot.heardByAz = heardByAz;
-    spot.heardByDist = heardByDist;
-    if (!heardBy.isEmpty())
-        spot.heardByGrid = reporterGrid; // [mondots] for the hover
-    spot.freqHz = spotFreqHz;
-    spot.snr = snr;
-    spot.azimuth = vec.azimuth();
-    spot.distance = vec.distance(); // km (display conversion at paint)
-
-    // Report time: payload epoch clamped to now; arrival time if absent.
+    // [oneobs 2026-08-22] NO SPOT OBJECT. A PSKR report IS an
+    // observation ("reporter heard sender"); recording it once below
+    // gives both circles and the line between them. Station-level
+    // facts the observation cannot carry go to m_infoByBand.
     auto const now = DriftingDateTime::currentDateTimeUtc();
+    QDateTime when;
     if (qint64 const t =
             static_cast<qint64>(o.value(QStringLiteral("t")).toDouble(0));
         t > 0) {
-        spot.when = QDateTime::fromSecsSinceEpoch(t, Qt::UTC);
-        if (spot.when > now)
-            spot.when = now;
+        when = QDateTime::fromSecsSinceEpoch(t, Qt::UTC);
+        if (when > now)
+            when = now;
     } else {
-        spot.when = now;
-        // [tstamp] Arrival-stamped spot (payload carried no 't').
-        // Suspect class for the 2026-08-14 anomaly: stale EU spots of
-        // us showing as fresh with no recent TX — a broker (re)connect
-        // delivering retained/old messages would stamp them 'now'
-        // here. Warn-level so the next occurrence is attributable.
+        when = now;
+        // [tstamp] Arrival-stamped (payload carried no 't') -- a broker
+        // reconnect delivering retained messages would look fresh here.
         qCWarning(mqttclient_js8)
             << "[SPOTMAP] spot WITHOUT timestamp, stamped now:"
             << "sender=" << sender << "reporter=" << receiverCall
             << "band=" << band << "state=" << m_stateText;
     }
+    {
+        StationInfo &info = m_infoByBand[band][plottedCall];
+        if (!country.isEmpty())
+            info.country = country;
+        // THEIRS only: on a report of MY signal `f` is the frequency
+        // they heard US on, which is not a fact about them.
+        if (!senderIsMe && spotFreqHz > 0)
+            info.freqHz = spotFreqHz;
+        if (!senderIsMe)
+            info.sawAsSender = true;   // it was the SENDER of a spot
+    }
+    journalStation(band, plottedCall);
 
-    // Latest-per-plotted-station (operator choice): replace any
-    // existing spot of the same station in this band. My-view keys
-    // by spotter; the All view keys by heard sender.
-    auto &spots =
-        senderIsMe ? m_spotsByBand[band] : m_allSpotsByBand[band];
-    // [pskrtoggle] On-air provenance SURVIVES the replace: if the
-    // station's existing spot was radio-evidenced, the merged spot
-    // stays visible with PSKR display off (field 2026-08-15:
-    // KJ7VWV's fresh on-air spot clobbered by his own PSKR report
-    // → station vanished from the my-view inside its window).
-    for (Spot const &old : spots)
-        if (old.receiverCall == spot.receiverCall) {
-            if (!old.pskr)
-                spot.pskr = false;
-            // [radioage] Radio clock survives internet refreshes.
-            if (old.radioWhen.isValid() &&
-                (!spot.radioWhen.isValid() ||
-                 old.radioWhen > spot.radioWhen))
-                spot.radioWhen = old.radioWhen;
-            break;
+    // [tribblenet 2026-08-21] FEED THE MESH, not just the dot.
+    // Operator: "KB2UUL keeps changing who hears it every few seconds
+    // ... but the total is always 1". CAUSE: the dot store keeps ONE
+    // row per plotted station (the erase below), and the PSKR path
+    // never wrote to the hearing store at all -- so who-hears-whom
+    // fell back to the dots and could hold a single reporter.
+    //
+    // Placed HERE, after spot.when is resolved, and the spot's OWN
+    // timestamp is passed as heardWhen: stamping edges "now" made
+    // every PSKR re-report refresh them, so nothing ever aged and the
+    // time-window buttons did nothing (operator, same session).
+    if (!band.isEmpty()) {
+        QString const reporter = receiverCall.toUpper();
+        QString const rGrid = refinedGrid(reporter, receiverGrid);
+        if (senderIsMe) {
+            // [meshprobe 2026-08-22] Reports-of-me dots refresh while
+            // their edges freeze; the code reads correct, so measure
+            // instead of re-reading it. One line per reports-of-me
+            // spot, rate-limited to 1/10 s.
+            static qint64 lastProbe = 0;
+            qint64 const nowMs = now.toMSecsSinceEpoch();
+            if (nowMs - lastProbe > 10000) {
+                lastProbe = nowMs;
+                qCWarning(mqttclient_js8)
+                    << "[MESHPROBE] reports-me from" << reporter
+                    << "band=" << band << "myCall=" << m_myCall
+                    << "obs age_s="
+                    << when.secsTo(now)
+                    << "will feed edge:" << reporter << "->"
+                    << m_myCall.toUpper();
+            }
+            if (!m_myCall.isEmpty())
+                // [audit 2026-08-21] heardSnr ALONGSIDE
+                // reportedToMeSnr. Both describe the same measurement
+                // -- how well this station hears US -- but they land in
+                // different places: reportedToMeSnr on the STATION
+                // (colours its dot), heardSnr on the EDGE (ranks it as
+                // a first hop). Passing only the first left every
+                // reports-of-me edge at -99, so TribbleNet knew THAT a
+                // station hears us but never HOW WELL, and could not
+                // rank first hops at all.
+                addHearingReport(band, reporter, rGrid,
+                                 {m_myCall.toUpper()}, {m_myGrid}, snr,
+                                 when, /*heardSnr=*/snr,
+                                 QStringLiteral("mqtt"));
+        } else {
+            QString const sndr = sender.toUpper();
+            QString const sGrid = o.value(QStringLiteral("sl")).toString();
+            // [audit 2026-08-21] WHEN THE REPORTER IS US, this is OUR
+            // OWN receiver's evidence making a round trip through
+            // PSKReporter -- radio-derived, not internet-derived. The
+            // transport is not the provenance. Tagging it "mqtt" hid
+            // our own decodes from the blue mesh and would have
+            // deleted them from an offline (#159) route, which is
+            // precisely backwards.
+            QString const evid =
+                reporter.compare(m_myCall, Qt::CaseInsensitive) == 0
+                    ? QStringLiteral("radio")
+                    : QStringLiteral("mqtt");
+            if (!sndr.isEmpty() && sndr != reporter)
+                addHearingReport(band, reporter, rGrid, {sndr}, {sGrid},
+                                 /*reportedToMeSnr=*/-99, when,
+                                 /*heardSnr=*/snr, evid);
         }
-    spots.erase(std::remove_if(spots.begin(), spots.end(),
-                               [&](Spot const &s) {
-                                   return s.receiverCall ==
-                                          spot.receiverCall;
-                               }),
-                spots.end());
-    spots.append(spot);
+    }
     pruneBand(band);
 
     // Repaint when the on-screen view is affected: reports of me
@@ -962,17 +1360,28 @@ QDateTime SpotMapWindow::effectiveWhen(Spot const &s) const {
 void SpotMapWindow::pruneBand(QString const &band) {
     auto const cutoff =
         DriftingDateTime::currentDateTimeUtc().addSecs(-WINDOW_SECS);
+    // [audit 2026-08-21] Prune on effectiveWhen(), THE presence clock
+    // the header declares every consumer reads. This one did not: it
+    // used the raw `when`, which internet reports keep refreshing, so
+    // with PSKR display OFF a station could sit in the store long
+    // after its last radio evidence. Conservative either way, but the
+    // "one definition" contract has to actually hold.
     auto const age = [&](QVector<Spot> &spots) {
         spots.erase(std::remove_if(spots.begin(), spots.end(),
                                    [&](Spot const &s) {
-                                       return s.when < cutoff;
+                                       return effectiveWhen(s) < cutoff;
                                    }),
                     spots.end());
     };
-    age(m_spotsByBand[band]);
-    age(m_allSpotsByBand[band]); // [viewall]
+    // [audit 2026-08-21] find(), not operator[]: pruning must never
+    // CREATE a band. onPruneTick() walks one map and prunes by key,
+    // so operator[] quietly inserted empty entries into the other two
+    // on every 30 s tick, for every band ever seen.
+    auto const hb = m_hearingByBand.find(band);
+    if (hb == m_hearingByBand.end())
+        return;
     // [hearlines] Per-edge aging; empty hearers drop out.
-    auto &hearers = m_hearingByBand[band];
+    auto &hearers = hb.value();
     for (auto h = hearers.begin(); h != hearers.end();) {
         auto &heard = h.value().heard;
         for (auto ed = heard.begin(); ed != heard.end();) {
@@ -989,13 +1398,10 @@ void SpotMapWindow::pruneBand(QString const &band) {
 }
 
 void SpotMapWindow::onPruneTick() {
-    for (auto it = m_spotsByBand.begin(); it != m_spotsByBand.end(); ++it)
-        pruneBand(it.key());
-    // [viewall] Bands that only ever saw other senders' spots.
-    for (auto it = m_allSpotsByBand.begin(); it != m_allSpotsByBand.end();
+    // [oneobs] One store to walk.
+    for (auto it = m_hearingByBand.begin(); it != m_hearingByBand.end();
          ++it)
-        if (!m_spotsByBand.contains(it.key()))
-            pruneBand(it.key());
+        pruneBand(it.key());
     // [maptick] Repaint on every 30 s tick while visible (was: only
     // when pruning removed something) — keeps the "last X of Y min"
     // counter, the age fade, and the view-window filter current on a
@@ -1185,11 +1591,22 @@ void SpotMapWindow::zoomAuto() {
 }
 
 void SpotMapWindow::redraw() {
+    // [perf 2026-08-21] The MQTT client runs from app launch whether or
+    // not the map is open, so a hidden window was still painting a full
+    // chart on every state change. Nothing can see it; showEvent()
+    // requests a replot, so reopening is still immediate.
+    if (!isVisible())
+        return;
     QSize const sz = size() * devicePixelRatio();
     if (sz.isEmpty())
         return;
-    m_pixmap = QPixmap{sz};
-    m_pixmap.setDevicePixelRatio(devicePixelRatio());
+    // [perf] Reuse the buffer: a full-window QPixmap was allocated on
+    // EVERY repaint (up to ~7/s on the 150 ms debounce). Only the
+    // size changing needs a new one.
+    if (m_pixmap.size() != sz) {
+        m_pixmap = QPixmap{sz};
+        m_pixmap.setDevicePixelRatio(devicePixelRatio());
+    }
     m_pixmap.fill(QColor(16, 16, 24)); // near-black chart background
 
     QPainter p{&m_pixmap};
@@ -1219,117 +1636,193 @@ void SpotMapWindow::redraw() {
     // [spotwin] Storage holds the full hour; the 15/30/60 buttons
     // pick how much of it renders. Everything below (auto-scale,
     // counts, dots, hover) operates on the filtered view.
-    QVector<Spot> visible;
+    // ===================================================================
+    // [renderset 2026-08-21] THE render-set authority. ONE pass, ONE
+    // visibility rule, ONE position rule.
+    //
+    // WHY THIS EXISTS. The drawn set used to be assembled by FOUR
+    // independent passes -- spot filter, [allsuper] append, [mondots]
+    // synthesis, and the hearing-store anchor walk -- each with its own
+    // PSKR gate, its own age gate and its own "already present" set.
+    // Feeding the PSKR stream into the mesh (needed for routing) then
+    // put the same station in reach of several passes at once, and
+    // every fix in one pass surfaced as a defect in another: blue lines
+    // that followed the PSKR toggle, then orphan circles with the
+    // toggle on, then orphan circles with it off. Operator: "we're
+    // chasing circularly... do one thing in one place."
+    //
+    // THE MODEL. Each station is registered ONCE with the freshest
+    // timestamp per EVIDENCE CLASS:
+    //     radioWhen  our own receiver, or a station answering us
+    //     when       freshest of ANY class (radio or internet)
+    // Visibility is then a single expression -- effectiveWhen(), which
+    // already encodes [radioage]: with PSKR shown, freshness is
+    // freshness; with it hidden, a station ages by its RADIO clock and
+    // an internet-only station has no radio clock, so it disappears.
+    // No pass needs its own toggle check, and none can disagree.
+    //
+    // POSITION IS SEPARATE AND UNCONDITIONAL (operator: "you can always
+    // use PSKR data for the grid"). allPos records where every station
+    // is, drawn or not, so a line never loses an endpoint because a
+    // spot is hidden. That is the whole point of the grid bank (#164).
+    QVector<Spot> render;
+    QHash<QString, QPointF> allPos;   // call -> (azimuth, distance)
     {
+        QString const myUp = m_myCall.toUpper();
         auto const cutoff = now.addSecs(-m_viewWindowSecs);
-        // [viewall] Dataset per the view buttons: my spotters, or
-        // every heard station on the band.
-        auto const &source = m_viewAll ? m_allSpotsByBand : m_spotsByBand;
-        // [posauth 2026-08-15] The hearing store is the ONE position
-        // source: when it has placed a station, its grid/az/dist
-        // override the spot's own — the two views can no longer
-        // disagree about where a station sits (4 fixes failed while
-        // position lived in two models).
-        auto const &posAuth = m_hearingByBand.value(m_currentBand);
-        for (Spot s : source.value(m_currentBand)) {
-            if (effectiveWhen(s) < cutoff || !(m_showPskr || !s.pskr))
-                continue;
-            if (auto const it = posAuth.constFind(s.receiverCall);
-                it != posAuth.constEnd() && it->dist >= 0.0f) {
-                s.receiverGrid = it->grid;
-                s.azimuth = it->az;
-                s.distance = it->dist;
+        QHash<QString, Spot> reg;
+        QSet<QString> sawAsSender;    // [mondots] rxOnly = never a sender
+
+        // Register one observation. `pskrEv` says which clock it feeds;
+        // `posAuth` forces the position (the hearing store is [posauth],
+        // the ONE position source when it has placed a station).
+        auto const note = [&](QString const &callRaw, QString const &grid,
+                              float az, float dist, bool pskrEv,
+                              QDateTime const &when, int snrToMe,
+                              bool posAuth) -> Spot * {
+            QString const call = callRaw.toUpper();
+            // [selfhop] I am the triangle, never a dot -- from ANY
+            // source, so nothing clickable exists at my position.
+            if (call.isEmpty() ||
+                call.compare(myUp, Qt::CaseInsensitive) == 0)
+                return nullptr;
+            Spot &r = reg[call];
+            if (r.receiverCall.isEmpty()) {
+                r.receiverCall = call;
+                r.distance = -1.0f;   // unplaced until a grid resolves
             }
-            visible.append(s);
-        }
-        // [allsuper 2026-08-15] The All view is a SUPERSET of the
-        // my view by construction: stations known only as reporters
-        // of MY signal (PSKR rc / on-air spotters) get their my-view
-        // spot appended unless already plotted as senders (field:
-        // KN6ZOM, W7YSB/7 on the my map, absent from All).
-        if (m_viewAll) {
-            QSet<QString> present;
-            for (Spot const &s : visible)
-                present.insert(s.receiverCall);
-            for (Spot s : m_spotsByBand.value(m_currentBand)) {
-                if (effectiveWhen(s) < cutoff ||
-                    !(m_showPskr || !s.pskr) ||
-                    present.contains(s.receiverCall))
+            if (dist >= 0.0f &&
+                (posAuth || r.distance <= 0.0f)) {
+                r.receiverGrid = grid;
+                r.azimuth = az;
+                r.distance = dist;
+            }
+            if (dist >= 0.0f)
+                allPos.insert(call,
+                              QPointF{static_cast<qreal>(az),
+                                      static_cast<qreal>(dist)});
+            if (when.isValid() && (!r.when.isValid() || when > r.when))
+                r.when = when;
+            if (!pskrEv && when.isValid() &&
+                (!r.radioWhen.isValid() || when > r.radioWhen))
+                r.radioWhen = when;
+            // [snrwho] A dB value exists ONLY as a report of MY signal.
+            if (snrToMe > -99)
+                r.snr = snrToMe;
+            return &r;
+        };
+
+        // ---- 1. (no separate spot pass) ------------------------------
+        // [oneobs 2026-08-22] There is nothing to feed here any more.
+        // Circles come from the same observations the lines do, below.
+        // ---- 2. THE OBSERVATIONS -------------------------------------
+        // [hearlines] Stations that never report to PSKReporter exist
+        // ONLY here. [posauth] and the position rule both live in note().
+        auto const &hz = m_hearingByBand.value(m_currentBand);
+        for (auto h = hz.constBegin(); h != hz.constEnd(); ++h) {
+            bool const hearsMe =
+                h.value().snr > -99 || h.value().heard.contains(myUp);
+            if (!m_viewAll && !hearsMe)
+                continue;    // [viewedges] MY view: hearers of me only
+            // [renderset] A DOT REQUIRES AN EDGE, never bare
+            // presence. Registering a station from lastSeen alone gave
+            // a dot to anything with radio presence whose edges were
+            // all internet-sourced -- visible with PSKR off, every one
+            // of its lines filtered out, i.e. a hollow circle connected
+            // to nothing (operator, 2026-08-21). Presence still
+            // REFRESHES a station the edges below register; it just
+            // cannot conjure one on its own.
+            for (auto ed = h.value().heard.constBegin();
+                 ed != h.value().heard.constEnd(); ++ed) {
+                bool const edgePskr =
+                    ed.value().source == QStringLiteral("mqtt");
+                // [renderset] AGE A STATION BY THE EVIDENCE THIS VIEW
+                // IS ABOUT. The MY view shows stations HEARING ME and
+                // draws one line each, from the X->ME edge; so only
+                // that edge may qualify X. Refreshing X's clock from
+                // its edges to OTHER stations let a dot pass the time
+                // filter while the line it needs had already aged out
+                // -- coloured spots with no lines (operator,
+                // 2026-08-21, 15 min window: the six radio "X hears
+                // WM8Q" edges were 22.6 min old while the dots stayed).
+                // The All view is about every edge, so there every
+                // edge qualifies -- and every one of them can draw.
+                if (!m_viewAll && ed.key() != myUp)
                     continue;
-                if (auto const it = posAuth.constFind(s.receiverCall);
-                    it != posAuth.constEnd() && it->dist >= 0.0f) {
-                    s.receiverGrid = it->grid;
-                    s.azimuth = it->az;
-                    s.distance = it->dist;
-                }
-                present.insert(s.receiverCall);
-                visible.append(s);
+                // The hearer is evidenced by this edge too.
+                note(h.key(), h.value().grid, h.value().az,
+                     h.value().dist, edgePskr, ed.value().when,
+                     h.value().snr, /*posAuth=*/true);
+                if (m_viewAll) // heard-endpoints: All view only
+                    note(ed.key(), ed.value().grid, ed.value().az,
+                         ed.value().dist, edgePskr, ed.value().when,
+                         -99, /*posAuth=*/true);
             }
         }
-    }
-    // [relaykeep] Selected relay hops are pinned to the map while
-    // relay-select is active: any hop whose live dot aged out of the
-    // view window (or the window selection shrank) is re-added from
-    // its click-time snapshot. Removed only by Undo / exiting the
-    // mode / band change.
-    if (m_relaySelect) {
-        QSet<QString> present;
-        for (Spot const &s : visible)
-            present.insert(s.receiverCall);
-        for (Spot const &snap : m_relayPathSpots)
-            if (!present.contains(snap.receiverCall)) {
-                visible.append(snap);
-                present.insert(snap.receiverCall);
-            }
-    }
 
-    // [mondots] All view: reporters that never transmitted on the
-    // band (pure monitors) still deserve a dot — we have their call
-    // and grid from the reports naming them (operator, 2026-08-14).
-    // Newest report per monitor; skip calls already plotted as
-    // senders. Gives every connection line a real anchor and makes
-    // monitors hoverable / relay-selectable.
-    if (m_viewAll && !visible.isEmpty()) {
-        QSet<QString> senderCalls;
-        for (Spot const &s : visible)
-            senderCalls.insert(s.receiverCall);
-        QHash<QString, Spot> monitors;
-        for (Spot const &s : visible) {
-            if (s.heardBy.isEmpty() || s.heardByDist < 0.0f ||
-                senderCalls.contains(s.heardBy))
+        // ---- 3. ONE visibility rule ----------------------------------
+        auto const &infoBand = m_infoByBand.value(m_currentBand);
+        for (auto it = reg.begin(); it != reg.end(); ++it) {
+            Spot &r = it.value();
+            if (r.distance < 0.0f)
+                continue;               // nowhere to draw it
+            // [oneobs] Station facts an observation cannot carry.
+            if (auto const in = infoBand.constFind(it.key());
+                in != infoBand.constEnd()) {
+                r.country = in->country;
+                r.freqHz = in->freqHz;
+                if (in->sawAsSender)
+                    sawAsSender.insert(it.key());
+            }
+            // [mondots] rxOnly = never observed as a SENDER; the only
+            // case hover labels "monitor".
+            r.rxOnly = !sawAsSender.contains(it.key());
+            // [pskrtoggle] Internet-only when no radio clock exists --
+            // derived, never set by a pass.
+            r.pskr = !r.radioWhen.isValid();
+            // [snrwho][allhollow] Hollow unless a report of MY signal.
+            r.monitorOnly = (r.snr <= -99);
+            // [pskrtoggle] EVIDENCE CLASS FIRST. An internet-only
+            // station is not shown at all while PSKR spots are hidden
+            // -- and therefore draws no yellow line, which is the
+            // whole contract of the button.
+            //
+            // This must be explicit. effectiveWhen() does NOT encode
+            // the toggle on its own: with no radio clock it FALLS BACK
+            // to `when`, so relying on it alone kept every
+            // internet-only station visible with the toggle off and
+            // gave the MY view a full set of yellow lines (operator:
+            // "can't have ANY yellow lines with add PSKR unchecked").
+            // The old code caught this in a separate spot filter that
+            // the unified pass replaced; the rule survives, now stated
+            // once, here.
+            if (!m_showPskr && r.pskr)
                 continue;
-            auto it = monitors.find(s.heardBy);
-            if (it == monitors.end() || s.when > it->when) {
-                Spot m;
-                m.when = s.when;
-                m.receiverCall = s.heardBy;
-                m.receiverGrid = s.heardByGrid;
-                m.azimuth = s.heardByAz;
-                m.distance = s.heardByDist;
-                m.monitorOnly = true;
-                m.rxOnly = true; // receive-only SO FAR — still a
-                                 // valid relay hop (operator
-                                 // 2026-08-15: they may transmit)
-                m.pskr = true;   // derived purely from PSKR reports
-                monitors.insert(s.heardBy, m);
-            }
+            // [radioage] THE clock, for what remains.
+            QDateTime const eff = effectiveWhen(r);
+            if (!eff.isValid() || eff < cutoff)
+                continue;
+            render.append(r);
         }
-        for (Spot const &m : monitors)
-            visible.append(m);
-    }
 
-    // [selfhop] My own station is the triangle, never a dot: no
-    // own-call spot from ANY source (MQTT echoes of my signal,
-    // mondots synthesis, on-air) may reach the render or hit-test
-    // path — nothing clickable exists at my position by
-    // construction.
-    visible.erase(std::remove_if(visible.begin(), visible.end(),
-                                 [this](Spot const &s) {
-                                     return s.receiverCall.compare(
-                                                m_myCall,
-                                                Qt::CaseInsensitive) == 0;
-                                 }),
-                  visible.end());
+        // [relaykeep] Selected relay hops stay pinned while relay-select
+        // is active, even if their evidence aged out of the window.
+        if (m_relaySelect) {
+            QSet<QString> present;
+            for (Spot const &s : render)
+                present.insert(s.receiverCall);
+            for (Spot const &snap : m_relayPathSpots)
+                if (!present.contains(snap.receiverCall)) {
+                    render.append(snap);
+                    present.insert(snap.receiverCall);
+                    if (snap.distance >= 0.0f)
+                        allPos.insert(
+                            snap.receiverCall,
+                            QPointF{static_cast<qreal>(snap.azimuth),
+                                    static_cast<qreal>(snap.distance)});
+                }
+        }
+    }
 
     // [bboxfit 2026-08-15] Auto-fit uses the WHOLE window: the
     // bounding box of every station (home included at the origin) in
@@ -1350,67 +1843,10 @@ void SpotMapWindow::redraw() {
         maxY = std::max(maxY, y);
         anyFit = true;
     };
-    // [fitset 2026-08-16] Anchor SELECTION happens BEFORE the fit,
-    // in km-space (positions need no scale — only projection does),
-    // so the bounding box grows over EXACTLY the rendered set. The
-    // old parallel store-walk had its own conditions; any transient
-    // divergence from the render pass displaced the box CENTER and
-    // autoPan shifted the whole map sideways for one paint (field:
-    // correct scale, half-screen-right pan, self-corrected).
-    QVector<Spot> anchorSpots;
-    {
-        QSet<QString> present;
-        for (Spot const &s : visible)
-            present.insert(s.receiverCall);
-        auto const cutoffH = now.addSecs(-m_viewWindowSecs);
-        auto const &hz = m_hearingByBand.value(m_currentBand);
-        QString const myUpS = m_myCall.toUpper();
-        auto const addAnchor = [&](QString const &call, float az,
-                                   float dist, QString const &grid,
-                                   int snr, QDateTime const &when) {
-            // [selfhop] I am the triangle, never a dot.
-            if (call.compare(m_myCall, Qt::CaseInsensitive) == 0)
-                return;
-            if (dist < 0.0f || present.contains(call))
-                return;
-            Spot m;
-            m.when = when;
-            m.receiverCall = call;
-            m.receiverGrid = grid;
-            m.azimuth = az;
-            m.distance = dist;
-            // [snrwho] -99 no-report sentinel preserved.
-            m.snr = snr;
-            m.monitorOnly = (snr <= -99);
-            anchorSpots.append(m);
-            present.insert(call);
-        };
-        for (auto h = hz.constBegin(); h != hz.constEnd(); ++h) {
-            bool const hearsMe =
-                h.value().snr > -99 || h.value().heard.contains(myUpS);
-            if (!m_viewAll && !hearsMe)
-                continue; // MY view: hearers of me only
-            if (h.value().lastSeen.isValid() &&
-                h.value().lastSeen >= cutoffH)
-                addAnchor(h.key(), h.value().az, h.value().dist,
-                          h.value().grid, h.value().snr,
-                          h.value().lastSeen);
-            for (auto ed = h.value().heard.constBegin();
-                 ed != h.value().heard.constEnd(); ++ed) {
-                if (ed.value().when < cutoffH)
-                    continue;
-                addAnchor(h.key(), h.value().az, h.value().dist,
-                          h.value().grid, h.value().snr,
-                          ed.value().when);
-                if (m_viewAll) // heard-endpoints: All view only
-                    addAnchor(ed.key(), ed.value().az, ed.value().dist,
-                              ed.value().grid, -99, ed.value().when);
-            }
-        }
-    }
-    for (Spot const &s : visible)
-        grow(s.azimuth, s.distance);
-    for (Spot const &s : anchorSpots)
+    // [fitset] The box grows over EXACTLY the rendered set -- now a
+    // single vector, so divergence between "what was fit" and "what was
+    // drawn" is impossible by construction.
+    for (Spot const &s : render)
         grow(s.azimuth, s.distance);
     // [autofit] The box covers the COMPLETE render set — spots and
     // store anchors alike; Auto must fit ALL of them.
@@ -1533,11 +1969,17 @@ void SpotMapWindow::redraw() {
             return qRound(scaleKm);
         struct KmMi { int km; int mi; };
         static constexpr KmMi table[] = {
+            // [units] NEW close rungs, rounded to the nearest 25 mi
+            // (operator: "show scale to nearest 25 miles then... for
+            // the two new scales only") — the >=500 km entries below
+            // keep the original operator table untouched.
+            {150, 100},    {200, 125},    {250, 150},   {300, 175},
+            {400, 250},
             {500, 300},    {600, 375},    {800, 500},   {1000, 625},
             {1250, 775},   {1500, 925},   {2000, 1250}, {2500, 1550},
             {3000, 1850},  {4000, 2500},  {5000, 3100}, {6000, 3700},
             {8000, 5000},  {10000, 6200}, {12500, 7700},
-            {15000, 9300}, {20000, 12400}};
+            {15000, 9300}};
         for (auto const &e : table)
             if (std::fabs(scaleKm - e.km) <= e.km * 0.01f)
                 return e.mi;
@@ -1561,8 +2003,7 @@ void SpotMapWindow::redraw() {
     // happens AFTER the anchor pass below — audit item 12: anchors
     // appended post-sort always painted on top regardless of age).
     // Age fades alpha 1.0 -> 0.5 across the selected view window.
-    QVector<Spot> ordered = visible;
-    ordered += anchorSpots; // [fitset] same set the box was fit to
+    QVector<Spot> ordered = render;
 
     auto const project = [&](float az, float dist) {
         double const rad = az * DEG2RAD;
@@ -1574,6 +2015,14 @@ void SpotMapWindow::redraw() {
     // dot; operator 2026-08-14: no lines to nowhere) and the relay
     // path.
     QHash<QString, QPointF> posByCall;
+    // [audit2] Positions the mesh knows but is not DRAWING (a PSKR-only
+    // station with the spot toggle off) still anchor lines: a radio
+    // edge to such a station is real evidence and must render.
+    for (auto it = allPos.constBegin(); it != allPos.constEnd();
+         ++it)
+        posByCall.insert(it.key(),
+                         project(static_cast<float>(it.value().x()),
+                                 static_cast<float>(it.value().y())));
     for (Spot const &s : ordered)
         posByCall.insert(s.receiverCall, project(s.azimuth, s.distance));
     // [selfhop] My own position is always the triangle at center —
@@ -1599,129 +2048,162 @@ void SpotMapWindow::redraw() {
     std::sort(ordered.begin(), ordered.end(),
               [](Spot const &a, Spot const &b) { return a.when < b.when; });
 
+    // [inkdensity 2026-08-21] ADAPTIVE PSKR LINE COLOUR.
+    // At greyline the internet mesh is ~1400 segments and solid yellow
+    // reads as a hairball. PSKReporter displays this same density
+    // legibly (operator), and the way it does it is to let the busy
+    // case go quiet rather than to discard data. So the colour is a
+    // function of how much ink is actually on the chart:
+    //
+    //   coverage = (total yellow length x pen width) / chart area
+    //
+    // Length matters as much as count -- a dozen transatlantic lines
+    // fill more map than a hundred local ones -- and the ratio is
+    // resolution-independent, so it self-corrects on zoom, on resize,
+    // and when the time window is shortened (which is the operator's
+    // primary density control and must keep working).
+    //
+    // Below CLEAR the colour is untouched; at SATURATED it is fully
+    // muted toward a dark warm grey; linear between. The LEGEND swatch
+    // uses this same value, so what the legend teaches is always what
+    // the map is drawing.
+    QColor pskrLineColor{165, 138, 18, 190};
+    double pskrCoverage = 0.0;
     if (m_showConnections) {
-        // [heararrow] Mid-line arrowhead POINTING AT THE HEARING
-        // station. Operator rules 2026-08-15: heads on the ALL map
-        // only, and only on lines that connect to ME (either
-        // direction), PSKR-sourced included. Head color follows the
-        // active pen.
-        auto const heardLine = [&p](QPointF const &hearer,
-                                    QPointF const &heard) {
-            p.drawLine(heard, hearer);
-            double const len = QLineF(heard, hearer).length();
-            if (len < 24.0)
-                return; // too short for a legible head
-            double const ang = std::atan2(hearer.y() - heard.y(),
-                                          hearer.x() - heard.x());
-            QPointF const dir{std::cos(ang), std::sin(ang)};
-            double const sz = 8.0; // head length (operator: larger)
-            // Tip offset hearer-ward of the midpoint by 3 head
-            // lengths: a bidirectional pair (each head drawn by its
-            // own edge, each offset toward ITS hearer) lands
-            // back-to-back with a 4-head-size space between them
-            // (operator 2026-08-15). Short lines center the head.
-            double const off = len >= 2.0 * (3.0 * sz) + 6.0
-                                   ? 3.0 * sz
-                                   : sz * 0.4;
-            QPointF const tip = (hearer + heard) / 2.0 + dir * off;
-            QPainterPath head(tip);
-            head.lineTo(tip - QPointF(std::cos(ang - 0.45),
-                                      std::sin(ang - 0.45)) * sz);
-            head.lineTo(tip - QPointF(std::cos(ang + 0.45),
-                                      std::sin(ang + 0.45)) * sz);
-            head.closeSubpath();
-            p.save();
-            p.setBrush(p.pen().color());
-            p.setPen(Qt::NoPen);
-            p.drawPath(head);
-            p.restore();
-        };
-        // [pskrline] Dark yellow (operator 2026-08-15; was light
-        // green) — distinct from blue on-air mesh and red relay path.
-        p.setPen(QPen{QColor(200, 170, 25, 170), 1});
-        // [melineall 2026-08-15] "Reports me" is a fact about the
-        // STATION, not about whichever spot object owns its dot: a
-        // reporter of my signal that also TRANSMITS is plotted from
-        // the sender dataset in the All view, and its line to me was
-        // lost with the skipped append (field: ND7M/NT5DF/K1KWC
-        // lined in my view, bare in All).
-        QSet<QString> meReporters;
-        if (m_viewAll) {
-            auto const cutoffR = now.addSecs(-m_viewWindowSecs);
-            for (Spot const &s : m_spotsByBand.value(m_currentBand))
-                if (effectiveWhen(s) >= cutoffR &&
-                    (m_showPskr || !s.pskr))
-                    meReporters.insert(s.receiverCall); // [radioage]
-        }
-        for (Spot const &s : ordered) {
-            QPointF const from = posByCall.value(s.receiverCall);
-            // [connfix 2026-08-14] Branch on the VIEW, not on
-            // heardBy-emptiness: synthetic monitor dots have no
-            // heardBy and were falling into the my-view branch,
-            // drawing phantom center-to-monitor lines ("EU stations
-            // with lines to me" — operator report, PSKReporter map
-            // confirmed no such links). Monitors draw no line of
-            // their own; their edges come from each sender's spot.
-            if (!m_viewAll) {
-                // [linecolor 2026-08-15] Yellow = PSKR, per the
-                // legend — a RADIO-evidenced station must not wear
-                // the internet color (field: KC6UCN's on-air HB ACK
-                // read as a PSKR leak). Radio spots rely on their
-                // blue mesh edge instead.
-                if (s.pskr)
-                    p.drawLine(center, from); // my view: center = me
-                continue;
-            }
-            if (!s.monitorOnly && posByCall.contains(s.heardBy))
-                p.drawLine(from, posByCall.value(s.heardBy));
-            // [melineall] Line to me for EVERY station that reported
-            // my signal, whatever dataset drew its dot. [heararrow]
-            // Connects to me → arrowhead at the hearing reporter.
-            // [linecolor] Only PSKR-sourced reports draw yellow;
-            // radio reporters already carry their blue mesh edge.
-            if (meReporters.contains(s.receiverCall) && s.pskr)
-                heardLine(from, center);
-        }
-        // [hearlines] On-air heard-mesh edges: 1 px BLUE, drawn
-        // after (over) the yellow PSKR mesh — visual priority per
-        // operator 2026-08-14. Sources: HEARING replies (incl. the
-        // relayed "*DE* CALL" form) and every directed exchange.
-        // [viewedges 2026-08-15] View-filtered: the MY view shows
-        // ONLY edges where the heard station is ME (X heard me →
-        // line X to my triangle); third-party edges belong to the
-        // All view alone.
         auto const cutoffH = now.addSecs(-m_viewWindowSecs);
-        p.setPen(QPen{QColor(90, 160, 255, 210), 1});
+        QPen const penRadio{QColor(90, 160, 255, 210), 1};   // on-air
         auto const &hearers = m_hearingByBand.value(m_currentBand);
         QString const myUp = m_myCall.toUpper();
+        // [lineperf 2026-08-21] COLLECT, THEN DRAW PER COLOUR. At
+        // greyline this loop went from ~9 lines to ~1400, and the old
+        // shape paid for it twice: a setPen() for every edge, and a
+        // save()/setBrush()/restore() around every arrowhead. Grouping
+        // by colour makes that four state changes instead of several
+        // thousand, with identical output. The arrowhead geometry is
+        // unchanged.
+        struct Seg { QPointF hearer, heard; bool head; };
+        QVector<Seg> segRadio, segPskr;
         for (auto h = hearers.constBegin(); h != hearers.constEnd(); ++h) {
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
                 if (ed.value().when < cutoffH)
                     continue;
+                bool const isPskr =
+                    ed.value().source == QStringLiteral("mqtt");
+                // [pskrtoggle] Internet lines are exactly what the
+                // button hides. Radio lines are never affected by it.
+                if (isPskr && !m_showPskr)
+                    continue;
+                QPointF from, to;
+                bool head = false;
                 if (!m_viewAll) {
-                    // MY view: X heard ME → X's dot to my triangle.
-                    // [heararrow] No heads here — every line
+                    // [viewedges] MY view: only "X heard ME", drawn
+                    // from X to my triangle; no head, every line
                     // connects to me by definition.
                     if (ed.key() != myUp ||
                         !posByCall.contains(h.key()))
                         continue;
-                    p.drawLine(posByCall.value(h.key()), center);
+                    from = posByCall.value(h.key());
+                    to = center;
                 } else {
                     if (!posByCall.contains(h.key()) ||
                         !posByCall.contains(ed.key()))
                         continue;
-                    // [heararrow] All view: head only when I am an
-                    // endpoint; third-party edges stay bare.
-                    if (h.key() == myUp || ed.key() == myUp)
-                        heardLine(posByCall.value(h.key()),
-                                  posByCall.value(ed.key()));
-                    else
-                        p.drawLine(posByCall.value(h.key()),
-                                   posByCall.value(ed.key()));
+                    // [heararrow] h.key() HEARS ed.key(), so the head
+                    // points at h.key(): an edge A->B says traffic
+                    // flows B to A, and routing reads that direction.
+                    from = posByCall.value(h.key());
+                    to = posByCall.value(ed.key());
+                    head = true;
                 }
+                (isPskr ? segPskr : segRadio)
+                    .append(Seg{from, to, head});
             }
         }
+        // [inkdensity 2026-08-22] METRIC: THE NUMBER OF YELLOW LINES.
+        // Operator's call, after trying ink-coverage and peak-cell
+        // density: "just use the number of lines".
+        //
+        // It is the metric you can predict in your head while tuning by
+        // eye, and the fancier ones each failed in practice. Ink
+        // coverage averaged the solid United States against the empty
+        // Atlantic and reported "medium". Peak-cell density was worse:
+        // every line in the MY view terminates on my triangle, so the
+        // centre cell pinned the peak at maximum and the bright end
+        // became unreachable no matter how sparse the map was.
+        //
+        // A plain count has neither failure mode. It does ignore line
+        // LENGTH and off-screen segments -- accepted deliberately; the
+        // time-window buttons remain the real density control and this
+        // only decides how loudly the layer speaks.
+        constexpr int FULL_MUTE_LINES = 500;  // count at full grey
+        double const u =
+            std::clamp(static_cast<double>(segPskr.size()) /
+                           FULL_MUTE_LINES,
+                       0.0, 1.0);
+        // Weighted late so modest crowding keeps its colour; continuous
+        // so nothing pops as lines come and go.
+        //   50 lines ->  1% muted     250 lines -> 25%
+        //  150 lines ->  9%           500 lines -> full grey
+        pskrCoverage = u * u;
+        {
+            // Reverted to the previous maximum brightness (operator,
+            // 2026-08-22: "i was wrong about increasing the max
+            // brightness of the yellow").
+            QColor const sparse{225, 190, 30, 225};  // bright yellow
+            // Muted must mean RECEDED, never ERASED: the chart
+            // background is (16,16,24), so the dark end stays clearly
+            // above it. NEUTRAL channels -- an R>G>B "grey" reads as
+            // brown, i.e. residual yellow rather than muting.
+            QColor const dense{82, 82, 86, 170};     // neutral grey
+            auto const mix = [t = pskrCoverage](int a1, int b1) {
+                return static_cast<int>(a1 + (b1 - a1) * t);
+            };
+            pskrLineColor = QColor(mix(sparse.red(), dense.red()),
+                                   mix(sparse.green(), dense.green()),
+                                   mix(sparse.blue(), dense.blue()),
+                                   mix(sparse.alpha(), dense.alpha()));
+        }
+
+        auto const drawGroup = [&](QVector<Seg> const &segs,
+                                   QPen const &pen) {
+            if (segs.isEmpty())
+                return;
+            p.setPen(pen);
+            p.setBrush(Qt::NoBrush);
+            for (Seg const &sg : segs)
+                p.drawLine(sg.heard, sg.hearer);
+            // Heads share one brush/pen state for the whole group.
+            p.setBrush(pen.color());
+            p.setPen(Qt::NoPen);
+            for (Seg const &sg : segs) {
+                if (!sg.head)
+                    continue;
+                double const len = QLineF(sg.heard, sg.hearer).length();
+                if (len < 24.0)
+                    continue; // too short for a legible head
+                double const ang =
+                    std::atan2(sg.hearer.y() - sg.heard.y(),
+                               sg.hearer.x() - sg.heard.x());
+                QPointF const dir{std::cos(ang), std::sin(ang)};
+                double const sz = 8.0;
+                double const off = len >= 2.0 * (3.0 * sz) + 6.0
+                                       ? 3.0 * sz
+                                       : sz * 0.4;
+                QPointF const tip =
+                    (sg.hearer + sg.heard) / 2.0 + dir * off;
+                QPainterPath head(tip);
+                head.lineTo(tip - QPointF(std::cos(ang - 0.45),
+                                          std::sin(ang - 0.45)) * sz);
+                head.lineTo(tip - QPointF(std::cos(ang + 0.45),
+                                          std::sin(ang + 0.45)) * sz);
+                head.closeSubpath();
+                p.drawPath(head);
+            }
+            p.setBrush(Qt::NoBrush);
+        };
+        drawGroup(segPskr, QPen{pskrLineColor, 1}); // internet under
+        drawGroup(segRadio, penRadio); // on-air over ([hearlines])
     }
 
     m_screenSpots.clear();
@@ -1923,7 +2405,13 @@ void SpotMapWindow::redraw() {
             {QColor(90, 160, 255),
              tr("Heard by %1").arg(m_myCall.isEmpty() ? tr("me")
                                                       : m_myCall)},
-            {QColor(200, 170, 25), tr("Heard by PSKR")}};
+            // [inkdensity] THE SAME value the lines were drawn with --
+            // read from the variable, never re-specified, so the legend
+            // cannot teach a colour the map is not using (it did
+            // exactly that once when the line was darkened alone).
+            {pskrLineColor, pskrCoverage > 0.25
+                                ? tr("Heard by PSKR (dense)")
+                                : tr("Heard by PSKR")}};
         int const rowH = 11;
         qreal const ascent = p.fontMetrics().ascent();
         qreal maxW = 0;
@@ -2144,7 +2632,10 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         if (best->spot.freqHz > 0 && m_dialHz > 0) {
             qint64 const audio = best->spot.freqHz - m_dialHz;
             if (audio > 0 && audio < 6000) {
-                tip += tr("\n%1 Hz").arg(audio);
+                // [audit] Say WHOSE offset it is -- see the QSY note.
+                tip += best->spot.reportsMe
+                           ? tr("\nheard me at %1 Hz").arg(audio)
+                           : tr("\n%1 Hz").arg(audio);
             }
         }
         // [BUILD 340] Country, when not our own (topic DXCC compare).
@@ -2168,7 +2659,17 @@ void SpotMapWindow::mouseDoubleClickEvent(QMouseEvent *event) {
     // global disable was over-applied).
     if (event->button() == Qt::LeftButton && !m_relaySelect) {
         if (ScreenSpot const *best = hitTest(event->position())) {
-            if (best->spot.freqHz > 0 && m_dialHz > 0) {
+            // [audit 2026-08-21] WHOSE FREQUENCY? The payload `f` is
+            // the frequency of the SPOTTED TRANSMISSION -- which is
+            // THEIRS in the All view (the sender is plotted) but OURS
+            // in the MY view (the SPOTTER is plotted, and the
+            // transmission they logged was our own). QSYing on a
+            // reports-me spot therefore moved us to our OWN offset
+            // while announcing it as someone else's. Hover still shows
+            // the offset for both, because "what offset did they copy
+            // me on" is genuinely useful -- only the QSY is wrong.
+            if (!best->spot.reportsMe && best->spot.freqHz > 0 &&
+                m_dialHz > 0) {
                 qint64 const audio = best->spot.freqHz - m_dialHz;
                 // QSY window: above 1000 Hz (HB sub-band convention)
                 // and at most 2500 Hz (Andy 2026-07-17 — stay inside
@@ -2342,7 +2843,15 @@ void SpotMapWindow::closeEvent(QCloseEvent *event) {
     // a spontaneous close is the user's X (clears the restore flag);
     // a programmatic close is shutdown or the menu toggle, which
     // manages the flag itself ([visrace]).
-    if (event->spontaneous())
+    // [visrace2 2026-08-21] ...but ONLY while the app is running. At
+    // shutdown the window manager can deliver a SPONTANEOUS close to
+    // this top-level window as part of session teardown, which read
+    // as "user clicked X", cleared the restore flag, and saved false
+    // over the correct value written moments earlier by
+    // writeSettings() -- so the map sometimes failed to reopen, with
+    // the outcome depending on which close arrived first (operator:
+    // "starts up without the spots map sometimes. a race?").
+    if (event->spontaneous() && !m_shuttingDown)
         m_restoreVisible = false; // [visrace] user clicked the X
     saveSettings(); // full state, incl. geometry — crash-safe too
     m_resetOnNextShow = true; // [showfix] genuine close -> next show resets

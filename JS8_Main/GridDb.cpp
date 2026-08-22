@@ -13,9 +13,23 @@
 
 Q_LOGGING_CATEGORY(griddb_js8, "js8.griddb")
 
+namespace {
+// One write per call per minute is plenty for a presence signal and
+// bounds the queue when the band is busy.
+constexpr qint64 kActivityThrottleSecs = 60;
+// Pruning walks the whole table; hourly is ample for a day's data.
+constexpr qint64 kPruneEverySecs = 60 * 60;
+
+qint64 nowSecs() {
+    return QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
+}
+} // namespace
+
 GridDb::~GridDb() {
-    if (m_db.isOpen())
+    if (m_db.isOpen()) {
+        flush(); // do not lose the last window on a clean exit
         m_db.close();
+    }
     m_db = QSqlDatabase{}; // release before removeDatabase
     if (!m_connName.isEmpty())
         QSqlDatabase::removeDatabase(m_connName);
@@ -35,21 +49,149 @@ bool GridDb::open(QString const &path) {
             << m_db.lastError().text();
         return false;
     }
-    QSqlQuery q{m_db};
-    if (!q.exec(QStringLiteral(
-            "CREATE TABLE IF NOT EXISTS grids ("
-            " call TEXT PRIMARY KEY,"
-            " grid TEXT NOT NULL,"
-            " source TEXT,"
-            " first_seen INTEGER,"
-            " last_seen INTEGER,"
-            " count INTEGER DEFAULT 1)"))) {
-        qCWarning(griddb_js8)
-            << "[GRIDDB] schema FAILED:" << q.lastError().text();
+    // Write-behind wants WAL: readers never block, and NORMAL means we
+    // are not fsyncing per transaction. A crash can cost the last
+    // flush interval, which is band observations we can re-hear.
+    QSqlQuery pragma{m_db};
+    pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+    pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
+    if (!ensureSchema()) {
         m_db.close();
         return false;
     }
-    qCWarning(griddb_js8) << "[GRIDDB] open:" << path;
+    qCWarning(griddb_js8) << "[GRIDDB] open:" << path
+                          << "schema v" << SCHEMA_VERSION;
+    return true;
+}
+
+void GridDb::wipe() {
+    QSqlQuery q{m_db};
+    for (auto const &t : {QStringLiteral("grids"), QStringLiteral("edges"),
+                          QStringLiteral("spots"),
+                          QStringLiteral("stations")}) {
+        // NEVER ignore this result. It failed silently for three
+        // builds (2026-08-21): an active read cursor on the same
+        // connection blocks DDL, so every DROP returned "database
+        // table is locked" while the caller logged a rebuild that
+        // never happened -- grid counts kept GROWING across restarts
+        // that claimed to have wiped, and the spots table kept its
+        // old columns so loadSpots() could not even prepare.
+        if (!q.exec(QStringLiteral("DROP TABLE IF EXISTS %1").arg(t)))
+            qCWarning(griddb_js8)
+                << "[GRIDDB] DROP" << t << "FAILED:"
+                << q.lastError().text();
+    }
+}
+
+bool GridDb::ensureSchema() {
+    QSqlQuery q{m_db};
+    if (!q.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS meta ("
+            " k TEXT PRIMARY KEY, v TEXT)"))) {
+        qCWarning(griddb_js8)
+            << "[GRIDDB] meta FAILED:" << q.lastError().text();
+        return false;
+    }
+    int have = 0;
+    if (q.exec(QStringLiteral(
+            "SELECT v FROM meta WHERE k='schema_version'")) &&
+        q.next())
+        have = q.value(0).toInt();
+    // RELEASE THE CURSOR before any DDL. Qt keeps a SELECT active
+    // until the query is finished, and SQLite refuses to DROP a
+    // table while a read statement is live on the same connection --
+    // which is exactly how the wipe below silently did nothing.
+    q.finish();
+    // Rebuild whenever the version is not EXACTLY ours. The absent
+    // `have &&` guard is deliberate: a file with no version row is
+    // NOT a fresh one, and the guard I first wrote skipped the wipe
+    // for exactly that case -- CREATE TABLE IF NOT EXISTS then kept
+    // the old `grids` table, every upsert failed with "Parameter
+    // count mismatch" against columns that did not exist, and the
+    // version row got stamped to 2 regardless (caught in the log,
+    // 2026-08-21). On a genuinely new database the DROPs are
+    // harmless no-ops, so unconditional is simpler and right.
+    //
+    // The wreckage that produces is MIXED-SCHEMA, not "half-migrated"
+    // (operator: "what is there to migrate?"): nothing migrates here
+    // by design. `grids` kept its old shape because CREATE TABLE IF
+    // NOT EXISTS is a no-op on an existing table, while `edges` and
+    // `spots` were created fresh at the new shape -- half the tables
+    // rebuilt, half did not, and the stamp then claimed the whole
+    // file was current.
+    //
+    // NOT a field-compatibility mechanism, and worth being precise
+    // about (operator: "how does legacy fit in?"): GridDb shipped in
+    // Build 371, one day before this, on one bench. There are no
+    // deployed databases to protect. What this actually guards
+    // against is a file THIS CODE wrote badly -- and the stamp alone
+    // cannot do that, because the broken file carries the CURRENT
+    // version number over the WRONG columns. Hence the shape check
+    // below, which is the real mechanism; the stamp is a cheap
+    // second signal that starts mattering only once v2 databases
+    // exist in the field and a future v3 has to recognise them.
+    if (have != SCHEMA_VERSION) {
+        // Drop and rebuild BY DESIGN — nothing in the field to
+        // migrate, and the old columns' meanings were wrong anyway.
+        qCWarning(griddb_js8)
+            << "[GRIDDB] schema v" << have << "->" << SCHEMA_VERSION
+            << "- rebuilding (drop and recreate by design)";
+        wipe();
+    }
+
+    bool ok = true;
+    ok &= q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS grids ("
+        " call TEXT PRIMARY KEY,"
+        " grid TEXT NOT NULL,"
+        " source TEXT,"
+        " first_seen INTEGER,"
+        " grid_changed INTEGER,"  // was the misnamed last_seen
+        " change_count INTEGER DEFAULT 1,"
+        // [#168 part 1] ACTIVITY, updated on every sighting.
+        " last_heard INTEGER,"
+        " heard_count INTEGER DEFAULT 0,"
+        " snr_last INTEGER DEFAULT -99)"));
+    ok &= q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS edges ("
+        " band TEXT NOT NULL,"
+        " hearer TEXT NOT NULL,"
+        " heard TEXT NOT NULL,"
+        " when_s INTEGER NOT NULL,"
+        " snr INTEGER DEFAULT -99,"
+        " hearer_grid TEXT,"
+        " heard_grid TEXT,"
+        " source TEXT,"
+        " PRIMARY KEY (band, hearer, heard))"));
+    ok &= q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS stations ("
+        " band TEXT NOT NULL,"
+        " call TEXT NOT NULL,"
+        " grid TEXT,"
+        " country TEXT,"
+        " freq_hz INTEGER DEFAULT 0,"
+        " any_when INTEGER NOT NULL,"
+        " radio_when INTEGER DEFAULT 0,"
+        " snr_to_me INTEGER DEFAULT -99,"
+        " reports_me INTEGER DEFAULT 0,"
+        " rx_only INTEGER DEFAULT 0,"
+        " PRIMARY KEY (band, call))"));
+    // One index, on the prune/age column. At a few thousand rows
+    // nothing else earns its keep.
+    ok &= q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS edges_when ON edges(when_s)"));
+    ok &= q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS stations_when ON stations(any_when)"));
+    if (!ok) {
+        qCWarning(griddb_js8)
+            << "[GRIDDB] schema FAILED:" << q.lastError().text();
+        return false;
+    }
+    q.prepare(QStringLiteral(
+        "INSERT INTO meta (k, v) VALUES ('schema_version', ?)"
+        " ON CONFLICT(k) DO UPDATE SET v = excluded.v"));
+    q.addBindValue(QString::number(SCHEMA_VERSION));
+    q.exec();
     return true;
 }
 
@@ -63,9 +205,17 @@ QHash<QString, QString> GridDb::loadAll() const {
             << "[GRIDDB] load FAILED:" << q.lastError().text();
         return out;
     }
-    while (q.next())
-        out.insert(q.value(0).toString().toUpper(),
-                   q.value(1).toString().toUpper()); // [gridcase]
+    while (q.next()) {
+        QString const g = q.value(1).toString().toUpper(); // [gridcase]
+        // [audit 2026-08-21] SKIP EMPTY GRIDS. noteActivity() creates
+        // rows for stations whose grid is not yet known (grid ''), so
+        // loading blindly injected empty strings into the ONE grid
+        // authority and inflated every "N grids" count with entries
+        // that locate nothing.
+        if (g.isEmpty())
+            continue;
+        out.insert(q.value(0).toString().toUpper(), g);
+    }
     qCWarning(griddb_js8) << "[GRIDDB] seeded" << out.size()
                           << "grids from disk";
     return out;
@@ -75,20 +225,22 @@ void GridDb::upsert(QString const &call, QString const &grid,
                     QString const &source) {
     if (!m_db.isOpen() || call.isEmpty() || grid.isEmpty())
         return;
-    qint64 const now =
-        QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
+    qint64 const now = nowSecs();
     QSqlQuery q{m_db};
     q.prepare(QStringLiteral(
-        "INSERT INTO grids (call, grid, source, first_seen, last_seen,"
-        " count) VALUES (?, ?, ?, ?, ?, 1)"
+        "INSERT INTO grids (call, grid, source, first_seen,"
+        " grid_changed, change_count, last_heard, heard_count)"
+        " VALUES (?, ?, ?, ?, ?, 1, ?, 1)"
         " ON CONFLICT(call) DO UPDATE SET"
         " grid = excluded.grid,"
         " source = excluded.source,"
-        " last_seen = excluded.last_seen,"
-        " count = count + 1"));
+        " grid_changed = excluded.grid_changed,"
+        " change_count = change_count + 1,"
+        " last_heard = excluded.last_heard"));
     q.addBindValue(call.toUpper());
     q.addBindValue(grid);
     q.addBindValue(source);
+    q.addBindValue(now);
     q.addBindValue(now);
     q.addBindValue(now);
     if (!q.exec())
@@ -98,4 +250,263 @@ void GridDb::upsert(QString const &call, QString const &grid,
     else
         qCDebug(griddb_js8) << "[GRIDDB] upsert" << call << grid
                             << source;
+}
+
+void GridDb::noteActivity(QString const &call, int snr) {
+    if (!m_db.isOpen() || call.isEmpty())
+        return;
+    QString const c = call.toUpper();
+    qint64 const now = nowSecs();
+    auto const it = m_lastActivityWrite.constFind(c);
+    if (it != m_lastActivityWrite.constEnd() &&
+        now - it.value() < kActivityThrottleSecs)
+        return;
+    // [perf 2026-08-21] Bound the throttle map. One entry per callsign
+    // ever seen is small, but it grows without limit across a long
+    // session; entries older than the throttle window can never
+    // suppress anything again.
+    if (m_lastActivityWrite.size() > 4096) {
+        for (auto it = m_lastActivityWrite.begin();
+             it != m_lastActivityWrite.end();) {
+            if (now - it.value() > kActivityThrottleSecs * 4)
+                it = m_lastActivityWrite.erase(it);
+            else
+                ++it;
+        }
+    }
+    m_lastActivityWrite.insert(c, now);
+    QSqlQuery q{m_db};
+    // A station may be active long before we know its grid, so this
+    // must be able to create the row; grid stays empty until a
+    // sanctioned source supplies one.
+    //
+    // [audit 2026-08-21] snr_last IS FIRST-HAND ONLY. Callers were
+    // passing whatever SNR was to hand -- which at both sites is a
+    // report of MY signal at THEIR receiver, the opposite direction
+    // from "how well do we hear this station". Direction conflation
+    // is the single most repeated defect in this subsystem, so the
+    // column now takes -99 unless a caller has genuinely measured the
+    // station itself.
+    q.prepare(QStringLiteral(
+        "INSERT INTO grids (call, grid, first_seen, last_heard,"
+        " heard_count, snr_last, change_count)"
+        " VALUES (?, '', ?, ?, 1, ?, 0)"
+        " ON CONFLICT(call) DO UPDATE SET"
+        " last_heard = excluded.last_heard,"
+        " heard_count = heard_count + 1,"
+        " snr_last = excluded.snr_last"));
+    q.addBindValue(c);
+    q.addBindValue(now);
+    q.addBindValue(now);
+    q.addBindValue(snr);
+    if (!q.exec())
+        qCDebug(griddb_js8) << "[GRIDDB] activity FAILED:" << c
+                            << q.lastError().text();
+}
+
+void GridDb::queueEdge(EdgeRow const &e) {
+    if (e.hearer.isEmpty() || e.heard.isEmpty())
+        return;
+    EdgeRow row = e;
+    row.hearer = row.hearer.toUpper();
+    row.heard = row.heard.toUpper();
+    if (row.hearer == row.heard)
+        return;
+    if (!row.when)
+        row.when = nowSecs();
+    m_pendingEdges.append(row);
+}
+
+void GridDb::queueStation(StationRow const &s) {
+    if (s.call.isEmpty() || s.band.isEmpty())
+        return;
+    StationRow row = s;
+    row.call = row.call.toUpper();
+    if (!row.anyWhen)
+        row.anyWhen = nowSecs();
+    m_pendingStations.append(row);
+}
+
+void GridDb::flush() {
+    if (!m_db.isOpen())
+        return;
+    qint64 const now = nowSecs();
+    bool const prune = now - m_lastPrune >= kPruneEverySecs;
+    if (m_pendingEdges.isEmpty() && m_pendingStations.isEmpty() &&
+        !prune)
+        return;
+
+    int const edges = m_pendingEdges.size();
+    int const spots = m_pendingStations.size();
+    // ONE transaction for the whole batch — the entire performance
+    // story. Per-row transactions would fsync per row.
+    bool const inTxn = m_db.transaction();
+    if (!inTxn)
+        qCWarning(griddb_js8)
+            << "[GRIDDB] transaction FAILED - writing unbatched:"
+            << m_db.lastError().text();
+
+    if (!m_pendingEdges.isEmpty()) {
+        QSqlQuery q{m_db};
+        q.prepare(QStringLiteral(
+            "INSERT INTO edges (band, hearer, heard, when_s, snr,"
+            " hearer_grid, heard_grid, source)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(band, hearer, heard) DO UPDATE SET"
+            // Freshest wins; never let a stale replay move an edge
+            // backwards in time.
+            " when_s = MAX(when_s, excluded.when_s),"
+            " snr = CASE WHEN excluded.when_s >= when_s"
+            "            THEN excluded.snr ELSE snr END,"
+            " hearer_grid = excluded.hearer_grid,"
+            " heard_grid = excluded.heard_grid,"
+            " source = excluded.source"));
+        for (EdgeRow const &e : m_pendingEdges) {
+            q.bindValue(0, e.band);
+            q.bindValue(1, e.hearer);
+            q.bindValue(2, e.heard);
+            q.bindValue(3, e.when);
+            q.bindValue(4, e.snr);
+            q.bindValue(5, e.hearerGrid);
+            q.bindValue(6, e.heardGrid);
+            q.bindValue(7, e.source);
+            if (!q.exec())
+                qCDebug(griddb_js8) << "[GRIDDB] edge FAILED:"
+                                    << e.hearer << e.heard
+                                    << q.lastError().text();
+        }
+        m_pendingEdges.clear();
+    }
+
+    if (!m_pendingStations.isEmpty()) {
+        QSqlQuery q{m_db};
+        q.prepare(QStringLiteral(
+            "INSERT INTO stations (band, call, grid, country, freq_hz,"
+            " any_when, radio_when, snr_to_me, reports_me, rx_only)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(band, call) DO UPDATE SET"
+            // Freshest wins; a stale replay never moves a clock back.
+            " any_when = MAX(any_when, excluded.any_when),"
+            " radio_when = MAX(radio_when, excluded.radio_when),"
+            // Facts only improve: never blank a known grid/country/freq
+            // with an observation that happens not to carry one.
+            " grid = CASE WHEN excluded.grid <> '' THEN excluded.grid"
+            "             ELSE grid END,"
+            " country = CASE WHEN excluded.country <> ''"
+            "                THEN excluded.country ELSE country END,"
+            " freq_hz = CASE WHEN excluded.freq_hz > 0"
+            "                THEN excluded.freq_hz ELSE freq_hz END,"
+            " snr_to_me = CASE WHEN excluded.snr_to_me > -99"
+            "                  THEN excluded.snr_to_me ELSE snr_to_me END,"
+            " reports_me = MAX(reports_me, excluded.reports_me),"
+            // rx_only is STICKY-FALSE: once seen transmitting, never
+            // demoted back to receive-only.
+            " rx_only = MIN(rx_only, excluded.rx_only)"));
+        for (StationRow const &r : m_pendingStations) {
+            q.bindValue(0, r.band);
+            q.bindValue(1, r.call);
+            q.bindValue(2, r.grid);
+            q.bindValue(3, r.country);
+            q.bindValue(4, r.freqHz);
+            q.bindValue(5, r.anyWhen);
+            q.bindValue(6, r.radioWhen);
+            q.bindValue(7, r.snrToMe);
+            q.bindValue(8, r.reportsMe ? 1 : 0);
+            q.bindValue(9, r.rxOnly ? 1 : 0);
+            if (!q.exec())
+                qCDebug(griddb_js8) << "[GRIDDB] station FAILED:"
+                                    << r.call << q.lastError().text();
+        }
+        m_pendingStations.clear();
+    }
+
+    if (prune) {
+        m_lastPrune = now;
+        QSqlQuery q{m_db};
+        qint64 const cutoff = now - RETAIN_SECS;
+        q.prepare(QStringLiteral("DELETE FROM edges WHERE when_s < ?"));
+        q.addBindValue(cutoff);
+        q.exec();
+        q.prepare(QStringLiteral(
+            "DELETE FROM stations WHERE any_when < ?"));
+        q.addBindValue(cutoff);
+        q.exec();
+    }
+
+    // [audit] Only commit what we actually began; committing without
+    // a transaction logs a spurious failure every flush.
+    if (inTxn && !m_db.commit())
+        qCWarning(griddb_js8)
+            << "[GRIDDB] commit FAILED:" << m_db.lastError().text();
+    else if (edges || spots)
+        qCDebug(griddb_js8) << "[GRIDDB] flushed" << edges << "edges"
+                            << spots << "stations";
+}
+
+QVector<GridDb::EdgeRow>
+GridDb::loadEdges(qint64 notOlderThanSecs) const {
+    QVector<EdgeRow> out;
+    if (!m_db.isOpen())
+        return out;
+    QSqlQuery q{m_db};
+    q.prepare(QStringLiteral(
+        "SELECT band, hearer, heard, when_s, snr, hearer_grid,"
+        " heard_grid, source FROM edges WHERE when_s >= ?"
+        " ORDER BY when_s"));
+    q.addBindValue(nowSecs() - notOlderThanSecs);
+    if (!q.exec()) {
+        qCWarning(griddb_js8)
+            << "[GRIDDB] loadEdges FAILED:" << q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        EdgeRow e;
+        e.band = q.value(0).toString();
+        e.hearer = q.value(1).toString();
+        e.heard = q.value(2).toString();
+        e.when = q.value(3).toLongLong();
+        e.snr = q.value(4).toInt();
+        e.hearerGrid = q.value(5).toString();
+        e.heardGrid = q.value(6).toString();
+        e.source = q.value(7).toString();
+        out.append(e);
+    }
+    qCWarning(griddb_js8) << "[GRIDDB] restored" << out.size()
+                          << "mesh edges from disk";
+    return out;
+}
+
+QVector<GridDb::StationRow>
+GridDb::loadStations(qint64 notOlderThanSecs) const {
+    QVector<StationRow> out;
+    if (!m_db.isOpen())
+        return out;
+    QSqlQuery q{m_db};
+    q.prepare(QStringLiteral(
+        "SELECT band, call, grid, country, freq_hz, any_when,"
+        " radio_when, snr_to_me, reports_me, rx_only"
+        " FROM stations WHERE any_when >= ? ORDER BY any_when"));
+    q.addBindValue(nowSecs() - notOlderThanSecs);
+    if (!q.exec()) {
+        qCWarning(griddb_js8)
+            << "[GRIDDB] loadStations FAILED:" << q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        StationRow r;
+        r.band = q.value(0).toString();
+        r.call = q.value(1).toString();
+        r.grid = q.value(2).toString();
+        r.country = q.value(3).toString();
+        r.freqHz = q.value(4).toLongLong();
+        r.anyWhen = q.value(5).toLongLong();
+        r.radioWhen = q.value(6).toLongLong();
+        r.snrToMe = q.value(7).toInt();
+        r.reportsMe = q.value(8).toInt() != 0;
+        r.rxOnly = q.value(9).toInt() != 0;
+        out.append(r);
+    }
+    qCWarning(griddb_js8) << "[GRIDDB] restored" << out.size()
+                          << "stations from disk";
+    return out;
 }

@@ -460,8 +460,10 @@ UI_Constructor::~UI_Constructor() {
 void UI_Constructor::writeSettings() {
     // Spots Map persists in its own settings group; must run while the
     // window's visibility state is still meaningful (pre-close).
-    if (m_spotMapWindow)
+    if (m_spotMapWindow) {
+        m_spotMapWindow->beginShutdown(); // [visrace2] before the save
         m_spotMapWindow->saveSettings();
+    }
     if (m_arqMonitorWindow) // [#153] same pre-close persistence rule
         m_arqMonitorWindow->saveSettings();
 
@@ -1493,6 +1495,7 @@ void UI_Constructor::auto_tx_mode(bool state) {
 void UI_Constructor::keyPressEvent(QKeyEvent *e) {
     switch (e->key()) {
     case Qt::Key_Escape:
+        qWarning() << "[TX-CAUSE] stopTx: Escape key";
         on_stopTxButton_clicked();
         stopTx();
         return;
@@ -2860,8 +2863,14 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
                 static_cast<Radio::Frequency>(d.dial));
             m_spotMapWindow->addHearingReport(
                 band, d.call, m_callActivity.value(d.call).grid, {}, {});
+            // [#168] Carry the SNR WE measured. It was being dropped,
+            // so every "we hear X" edge stored -99 -- the map knew who
+            // we could hear but never how well, which is exactly the
+            // hop-1 question relay selection asks (2026-08-21).
             m_spotMapWindow->addHearingReport(
-                band, myC, m_config.my_grid(), {d.call}, {QString()});
+                band, myC, m_config.my_grid(), {d.call}, {QString()},
+                /*reportedToMeSnr=*/-99, QDateTime{},
+                /*heardSnr=*/d.snr);
         }
     }
 
@@ -2872,7 +2881,16 @@ void UI_Constructor::logCallActivity(CallDetail d, bool spot) {
     ++m_callActivityVersion;
 }
 
-void UI_Constructor::logHeardGraph(QString from, QString to) {
+// [#167 2026-08-21] `thirdPartyIsEvidence` says whether this frame
+// proves FROM received TO. The us->from edge below is never in doubt --
+// we decoded it ourselves -- but the third-party edge is only real for
+// a reply or directed free text (Varicode::isCommandReceptionEvidence).
+// This graph feeds the call-detail popup's "HEARING:" line, which was
+// listing every station a call had merely PROBED, the same defect the
+// Spots Map had; both now read the one authority rather than each
+// deciding locally.
+void UI_Constructor::logHeardGraph(QString from, QString to,
+                                   bool thirdPartyIsEvidence) {
     auto my_callsign = m_config.my_callsign();
 
     // hearing
@@ -2889,7 +2907,12 @@ void UI_Constructor::logHeardGraph(QString from, QString to) {
         m_heardGraphIncoming[from] = {my_callsign};
     }
 
-    if (to == "@ALLCALL") {
+    // [#167] Group traffic was already excluded for @ALLCALL only, so
+    // a frame to @SUBSPACE (or any other group) drew an edge to the
+    // GROUP NAME as if it were a station. Any '@' target is a
+    // broadcast and proves nothing about a specific station.
+    if (to.isEmpty() || to.startsWith(QLatin1Char('@')) ||
+        !thirdPartyIsEvidence) {
         return;
     }
 
@@ -3528,6 +3551,8 @@ void UI_Constructor::prepareSending(qint64 nowMS) {
                             << "(waiting for waveform completion)";
             }
         } else {
+            qWarning() << "[TX-CAUSE] stopTx: btxok falling edge"
+                       << "(non-FT2) m_iptt=" << m_iptt;
             stopTx();
         }
     }
@@ -5062,6 +5087,8 @@ void UI_Constructor::resetMessageUI() {
     update_dynamic_property(ui->extFreeTextMsgEdit, "transmitting", false);
 
     if (ui->startTxButton->isChecked()) {
+        qWarning() << "[TX-CAUSE] resetMessageUI unchecking Send"
+                   << "(will fire the mechanical stop)";
         ui->startTxButton->setChecked(false);
     }
 }
@@ -5831,6 +5858,8 @@ void UI_Constructor::on_startTxButton_toggled(bool checked) {
         // slot → haltAll → sendFailed "halted", totalRetries=0).
         // Un-clicking Send means "stop sending" — session-kill is the
         // Halt button's job alone.
+        qWarning() << "[TX-CAUSE] stopTx: startTxButton unchecked"
+                   << "(mechanical) — box cleared by resetMessage";
         resetMessage();
         stopTxMechanical();
         stopTx();
@@ -8587,6 +8616,7 @@ void UI_Constructor::stopTxMechanical()
 
 void UI_Constructor::on_stopTxButton_clicked() // Stop Tx — OPERATOR halt
 {
+    qWarning() << "[TX-CAUSE] operator HALT clicked";
     // [BUILD 353 haltwrap] This slot is now reached ONLY by operator
     // gestures: the Halt button (Qt auto-connect) and Escape. All
     // programmatic stops call stopTxMechanical() directly and can no
