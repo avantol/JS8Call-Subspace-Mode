@@ -354,8 +354,10 @@ class SpotMapWindow final : public QWidget {
     // filter applies at paint.
     struct HeardEdge {
         QDateTime when;
-        float az = 0.0f;
-        float dist = -1.0f; // < 0 = unresolved grid
+        // [#170(f)] No az/dist here. Position is derived from the
+        // grid by the ONE authority (m_gridByCall) at paint time;
+        // storing it meant keeping a second copy in sync, which is
+        // what the backfill walk existed to do.
         QString grid;
         // [#161 querycall] THIRD-PARTY snr (hearer's copy of the
         // heard station, e.g. a QUERY CALL "YES +08" reply). Feeds
@@ -382,8 +384,10 @@ class SpotMapWindow final : public QWidget {
     };
     struct HearingEntry {
         QDateTime lastSeen;   // presence freshness (HBs, any frame)
-        float az = 0.0f;
-        float dist = -1.0f;
+        // [#170(f)] No az/dist here. Position is derived from the
+        // grid by the ONE authority (m_gridByCall) at paint time;
+        // storing it meant keeping a second copy in sync, which is
+        // what the backfill walk existed to do.
         QString grid;
         int snr = -99;        // SNR this station REPORTED TO US only
         // [tribblenet audit 2026-08-21] PRESENCE provenance, same

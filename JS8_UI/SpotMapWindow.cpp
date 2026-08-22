@@ -615,12 +615,8 @@ void SpotMapWindow::addHearingReport(QString const &band,
     // map (audit item 1: entries froze at their first position).
     // refinedGrid already returns the canonical best form, so
     // same-square precision can only improve here, never thrash.
-    if (!hearerGridT.isEmpty() &&
-        (e.dist < 0.0f ||
-         e.grid.compare(hearerGridT, Qt::CaseInsensitive) != 0)) {
-        e.grid = hearerGridT;
-        resolve(hearerGridT, &e.az, &e.dist);
-    }
+    if (!hearerGridT.isEmpty())
+        e.grid = hearerGridT;   // [#170(f)] grid only; position derived
     if (reportedToMeSnr > -99)
         e.snr = reportedToMeSnr;
     // [audit 2026-08-21] PRESENCE provenance. RF evidence is STICKY:
@@ -697,10 +693,8 @@ void SpotMapWindow::addHearingReport(QString const &band,
                 .trimmed();
         rememberGrid(call, gRaw); // [gridfine] feed then refine
         QString const g = refinedGrid(call, gRaw);
-        if (!g.isEmpty() || edge.grid.isEmpty()) {
-            edge.grid = g;
-            resolve(g, &edge.az, &edge.dist);
-        }
+        if (!g.isEmpty() || edge.grid.isEmpty())
+            edge.grid = g;      // [#170(f)] grid only; position derived
         // [#168 part 3] Journal the edge the authority just accepted.
         // RAW GRIDS only -- az/dist are my-grid-relative and become
         // nonsense after a move (#154/#164 trap); bearings are
@@ -853,38 +847,19 @@ void SpotMapWindow::restoreMeshFromDisk() {
             edge.grid = r.heardGrid;
         ++restored;
     }
-    // [audit 2026-08-21] RESOLVE BEARINGS HERE. The previous comment
-    // claimed m_myGrid "may not be known this early" and left az/dist
-    // at -1 for "the next report" to fix. Both halves were wrong once
-    // the restore moved into setStation(): m_myGrid IS set by then,
-    // and no next report ever comes -- rememberGrid() early-outs when
-    // the grid is unchanged, and a restored grid always matches the
-    // seeded bank. So every restored edge kept dist < 0 forever, which
-    // means NO anchor dot and NO line: the mesh was faithfully
-    // restored and completely invisible.
-    if (m_myGrid.size() >= 4) {
-        auto const place = [this](QString const &grid, float *az,
-                                  float *dist) {
-            if (grid.size() < 4)
-                return;
-            if (auto const v = Geodesic::vector(m_myGrid, grid);
-                v.azimuth().isValid() && v.distance().isValid()) {
-                *az = v.azimuth();
-                *dist = v.distance();
-            }
-        };
-        for (auto b = m_hearingByBand.begin();
-             b != m_hearingByBand.end(); ++b)
-            for (auto he = b.value().begin(); he != b.value().end();
-                 ++he) {
-                if (he->dist < 0.0f)
-                    place(he->grid, &he->az, &he->dist);
-                for (auto ed = he->heard.begin();
-                     ed != he->heard.end(); ++ed)
-                    if (ed->dist < 0.0f)
-                        place(ed->grid, &ed->az, &ed->dist);
-            }
-    }
+    // [#170(f)] NO BEARING RESOLUTION HERE ANY MORE.
+    //
+    // This block existed because restored edges carried a grid but no
+    // az/dist, so they drew nothing -- "faithfully restored and
+    // completely invisible" (audit, 2026-08-21). With position derived
+    // from m_gridByCall at paint, a restored edge is placeable the
+    // moment the grid bank has its grid, and the bank is seeded from
+    // the grids table before this runs.
+    //
+    // Checked against the live database before deleting: of 617
+    // callsigns carrying a grid on an edge, ZERO were missing from the
+    // grids table -- the bank is a strict superset (656 rows). So
+    // nothing loses its position by trusting the authority instead.
     qCWarning(mqttclient_js8)
         << "[SPOTMAP] restored" << restored << "mesh edges from disk"
         << "across" << m_hearingByBand.size() << "band(s)";
@@ -1029,14 +1004,13 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
         QSet<QString> seenAll;
         QString const myUpD = m_myCall.toUpper();
         auto const &hzD = m_hearingByBand.value(b);
+        // [#170(f)] Position from the ONE authority, like the renderer.
         auto const mk = [&](QString const &call, QString const &grid,
-                            float az, float dist, int snr,
-                            QDateTime const &wh, bool reportsMe) {
+                            int snr, QDateTime const &wh,
+                            bool reportsMe) {
             Spot sp;
             sp.receiverCall = call;
             sp.receiverGrid = grid;
-            sp.azimuth = az;
-            sp.distance = dist;
             sp.snr = snr;
             sp.when = wh;
             sp.reportsMe = reportsMe;
@@ -1045,8 +1019,7 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
         };
         for (auto h = hzD.constBegin(); h != hzD.constEnd(); ++h) {
             bool const hearsMe = h.value().heard.contains(myUpD);
-            Spot const sp = mk(h.key(), h.value().grid, h.value().az,
-                               h.value().dist, h.value().snr,
+            Spot const sp = mk(h.key(), h.value().grid, h.value().snr,
                                h.value().lastSeen, hearsMe);
             if (hearsMe)
                 mine.append(sp);
@@ -1059,9 +1032,8 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
                 if (seenAll.contains(ed.key()) || ed.key() == myUpD)
                     continue;
                 seenAll.insert(ed.key());
-                all.append(mk(ed.key(), ed.value().grid, ed.value().az,
-                              ed.value().dist, -99, ed.value().when,
-                              false));
+                all.append(mk(ed.key(), ed.value().grid, -99,
+                              ed.value().when, false));
             }
         }
         out["SPOTS_MINE"] = packSpots(mine);
@@ -1122,52 +1094,38 @@ void SpotMapWindow::rememberGrid(QString const &call,
     // [#164] Write-through: this is the authority's ONE accept point,
     // so the persistent tier records exactly its decisions.
     m_gridDb.upsert(key, grid, source);
-    if (m_myGrid.size() < 4)
-        return;
-    auto const v = Geodesic::vector(m_myGrid, grid);
-    if (!v.azimuth().isValid() || !v.distance().isValid())
-        return;
-    bool touched = false;
-    // [gridfine] Upgrade covers unplaced entries AND ones placed on
-    // a same-square shorter grid — existing dots snap to the precise
-    // position instead of straddling two spots across views.
-    // [movers] The precision guard above blocks same-square
-    // downgrades from ever reaching this point, so a DIFFERENT
-    // stored grid is either a same-square upgrade or a genuine
-    // cross-square move — relocate in both cases.
-    auto const upgradable = [&](QString const &g, float dist) {
-        return dist < 0.0f ||
-               g.compare(grid, Qt::CaseInsensitive) != 0;
-    };
-    for (auto b = m_hearingByBand.begin(); b != m_hearingByBand.end();
-         ++b) {
-        auto he = b.value().find(key);
-        if (he != b.value().end() && upgradable(he->grid, he->dist)) {
-            he->grid = grid;
-            he->az = v.azimuth();
-            he->dist = v.distance();
-            touched = true;
-        }
-        for (auto &entry : b.value()) {
-            auto ed = entry.heard.find(key);
-            if (ed != entry.heard.end() &&
-                upgradable(ed->grid, ed->dist)) {
-                ed->grid = grid;
-                ed->az = v.azimuth();
-                ed->dist = v.distance();
-                touched = true;
-            }
-        }
-    }
-    // [oneobs] No spot datasets to upgrade any more -- positions live
-    // on the observations, which the loop above already backfilled.
-    if (touched) {
-        qCWarning(mqttclient_js8)
-            << "[SPOTMAP] station position refined:"
-            << key << "grid=" << grid; // [placelog]
-        if (isVisible())
-            requestReplot();
-    }
+    // [#170(k)] A grid sighting IS a sighting. upsert() no longer
+    // stamps activity itself -- that belongs to noteActivity(), which
+    // owns the per-call throttle -- so the fact has to be recorded
+    // here, through its owner. Without this, grid-only sightings would
+    // stop counting as activity entirely: the [mqttgrid] path harvests
+    // a locator from spots it then discards, and nothing else on that
+    // route calls noteActivity().
+    m_gridDb.noteActivity(key, -99);
+    // [#170(f) 2026-08-22] THE BACKFILL WALK IS GONE.
+    //
+    // This used to walk every band x every hearer x every edge to copy
+    // az/dist onto each record whose grid had just changed -- roughly
+    // 1500 iterations per accepted grid change, arriving at PSKR rate.
+    //
+    // It existed only to keep a SECOND COPY of a derived value in sync.
+    // Azimuth and distance are functions of (my grid, their grid), and
+    // m_gridByCall above is the one authority for their grid, so the
+    // renderer computes position at paint from that instead. Nothing
+    // is stored, so nothing can go stale -- which also retires the
+    // "entry frozen at its first position" defect class outright, and
+    // the first-placement-wins and thrash guards along with it: both
+    // were protecting against instability that this accept point
+    // already prevents.
+    //
+    // Verified against the live database before removing (666
+    // edge/authority grid pairs): 641 identical, 18 where the
+    // authority is MORE precise, 7 genuine disagreements that resolve
+    // to whatever passed the precision/mover rules here -- and zero
+    // callsigns whose grid existed only on an edge, so no station
+    // becomes unplaceable.
+    if (isVisible())
+        requestReplot();
 }
 
 void SpotMapWindow::onMqttState(QString const &state) {
@@ -1756,10 +1714,9 @@ void SpotMapWindow::redraw() {
         // Register one observation. `pskrEv` says which clock it feeds;
         // `posAuth` forces the position (the hearing store is [posauth],
         // the ONE position source when it has placed a station).
-        auto const note = [&](QString const &callRaw, QString const &grid,
-                              float az, float dist, bool pskrEv,
-                              QDateTime const &when, int snrToMe,
-                              bool posAuth) -> Spot * {
+        auto const note = [&](QString const &callRaw, bool pskrEv,
+                              QDateTime const &when,
+                              int snrToMe) -> Spot * {
             QString const call = callRaw.toUpper();
             // [selfhop] I am the triangle, never a dot -- from ANY
             // source, so nothing clickable exists at my position.
@@ -1771,16 +1728,25 @@ void SpotMapWindow::redraw() {
                 r.receiverCall = call;
                 r.distance = -1.0f;   // unplaced until a grid resolves
             }
-            if (dist >= 0.0f &&
-                (posAuth || r.distance <= 0.0f)) {
-                r.receiverGrid = grid;
-                r.azimuth = az;
-                r.distance = dist;
+            // [#170(f)] POSITION COMES FROM THE AUTHORITY, always.
+            // Callers no longer pass az/dist and no record stores
+            // them: m_gridByCall owns the grid, so the position is a
+            // function of it and is computed here, fresh, every paint.
+            // That removes the old precedence rule (first placement
+            // wins unless posAuth) because with a single source there
+            // are no competing placements to rank.
+            QString const authGrid = m_gridByCall.value(call);
+            if (!authGrid.isEmpty() && m_myGrid.size() >= 4) {
+                auto const v = Geodesic::vector(m_myGrid, authGrid);
+                if (v.azimuth().isValid() && v.distance().isValid()) {
+                    r.receiverGrid = authGrid;
+                    r.azimuth = static_cast<float>(v.azimuth());
+                    r.distance = static_cast<float>(v.distance());
+                    allPos.insert(call,
+                                  QPointF{static_cast<qreal>(r.azimuth),
+                                          static_cast<qreal>(r.distance)});
+                }
             }
-            if (dist >= 0.0f)
-                allPos.insert(call,
-                              QPointF{static_cast<qreal>(az),
-                                      static_cast<qreal>(dist)});
             if (when.isValid() && (!r.when.isValid() || when > r.when))
                 r.when = when;
             if (!pskrEv && when.isValid() &&
@@ -1830,13 +1796,10 @@ void SpotMapWindow::redraw() {
                 if (!m_viewAll && ed.key() != myUp)
                     continue;
                 // The hearer is evidenced by this edge too.
-                note(h.key(), h.value().grid, h.value().az,
-                     h.value().dist, edgePskr, ed.value().when,
-                     h.value().snr, /*posAuth=*/true);
+                note(h.key(), edgePskr, ed.value().when,
+                     h.value().snr);
                 if (m_viewAll) // heard-endpoints: All view only
-                    note(ed.key(), ed.value().grid, ed.value().az,
-                         ed.value().dist, edgePskr, ed.value().when,
-                         -99, /*posAuth=*/true);
+                    note(ed.key(), edgePskr, ed.value().when, -99);
             }
         }
 

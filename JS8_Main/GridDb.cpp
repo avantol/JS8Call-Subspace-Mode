@@ -59,6 +59,28 @@ bool GridDb::open(QString const &path) {
         m_db.close();
         return false;
     }
+    // Normalise grids already on disk. queueEdge() uppercases from now
+    // on, but 5194 rows were written before that and would stay mixed
+    // for as long as they live -- leaving the trap in place for
+    // exactly the data most likely to be compared later. Idempotent
+    // and cheap at these row counts, so it runs unconditionally rather
+    // than needing a schema bump to carry it.
+    {
+        QSqlQuery fix{m_db};
+        if (fix.exec(QStringLiteral(
+                "UPDATE edges SET hearer_grid = upper(hearer_grid),"
+                " heard_grid = upper(heard_grid)"
+                " WHERE hearer_grid <> upper(hearer_grid)"
+                "    OR heard_grid <> upper(heard_grid)"))) {
+            if (int const n = fix.numRowsAffected(); n > 0)
+                qCWarning(griddb_js8)
+                    << "[GRIDDB] normalised" << n << "mixed-case grids";
+        } else {
+            qCWarning(griddb_js8)
+                << "[GRIDDB] grid normalise FAILED:"
+                << fix.lastError().text();
+        }
+    }
     qCWarning(griddb_js8) << "[GRIDDB] open:" << path
                           << "schema v" << SCHEMA_VERSION;
     return true;
@@ -229,20 +251,24 @@ void GridDb::upsert(QString const &call, QString const &grid,
     QSqlQuery q{m_db};
     q.prepare(QStringLiteral(
         "INSERT INTO grids (call, grid, source, first_seen,"
-        " grid_changed, change_count, last_heard, heard_count)"
-        " VALUES (?, ?, ?, ?, ?, 1, ?, 1)"
+        " grid_changed, change_count)"
+        " VALUES (?, ?, ?, ?, ?, 1)"
         " ON CONFLICT(call) DO UPDATE SET"
         " grid = excluded.grid,"
         " source = excluded.source,"
         " grid_changed = excluded.grid_changed,"
-        " change_count = change_count + 1,"
-        " last_heard = excluded.last_heard"));
+        " change_count = change_count + 1"));
     q.addBindValue(call.toUpper());
     q.addBindValue(grid);
     q.addBindValue(source);
     q.addBindValue(now);
     q.addBindValue(now);
-    q.addBindValue(now);
+    // [#170(k)] ACTIVITY IS NOT THIS FUNCTION'S JOB. upsert() used to
+    // write last_heard/heard_count itself, bypassing the per-call
+    // throttle in noteActivity() -- the very separation the #168 split
+    // exists to create. Route it through the owner instead; the clock
+    // written is identical, so no behaviour changes except that the
+    // throttle now actually applies.
     if (!q.exec())
         qCWarning(griddb_js8)
             << "[GRIDDB] upsert FAILED:" << call
@@ -310,11 +336,34 @@ void GridDb::queueEdge(EdgeRow const &e) {
     EdgeRow row = e;
     row.hearer = row.hearer.toUpper();
     row.heard = row.heard.toUpper();
+    // GRIDS UPPERCASE TOO. Callsigns were normalised here from the
+    // start; grids were not, so 5194 of them sat in the edges table as
+    // "JN68rn" while the grid authority held "JN68RN" -- the same fact
+    // in two cases, in two tables. Nothing compares them for equality
+    // today, which is exactly why it survived: it is a trap that costs
+    // nothing until something does. The identical shape bit us twice
+    // in one session, with "WM8Q>" failing a callsign compare and with
+    // the renderer drawing from the un-normalised copy.
+    //
+    // Maidenhead subsquares are conventionally lowercase, so this is a
+    // storage convention, not a display one -- present grids however
+    // you like, but store one form.
+    row.hearerGrid = row.hearerGrid.toUpper();
+    row.heardGrid = row.heardGrid.toUpper();
     if (row.hearer == row.heard)
         return;
     if (!row.when)
         row.when = nowSecs();
+    // [perf #170(j)] BOUND THE QUEUE. Edges arrive at PSKR rate with
+    // nothing between the 45 s flushes to stop them piling up -- at
+    // greyline that is thousands. Flushing early when the queue gets
+    // large keeps the memory bounded and the transaction a sane size,
+    // and it cannot lose data: flush() is the same call the timer
+    // makes.
+    constexpr int kMaxPendingEdges = 2000;
     m_pendingEdges.append(row);
+    if (m_pendingEdges.size() >= kMaxPendingEdges)
+        flush();
 }
 
 void GridDb::queueStation(StationRow const &s) {
