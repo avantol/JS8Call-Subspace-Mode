@@ -1,5 +1,5 @@
 Package: js8call-subspace
-Version: 4.1.0.372
+Version: 4.1.0.372.17-snrestore
 Section: hamradio
 Priority: optional
 Architecture: amd64

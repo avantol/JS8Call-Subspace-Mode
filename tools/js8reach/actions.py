@@ -8,10 +8,10 @@ agree:
                            => mean align wait P/2
   reply decision instant   B0 + (2 + replyFrames) * P
                                                  (ChunkedArq.h:276-322)
-  relay hop                3 frames = 45 s each direction
-                                                 (mainwindow.h:1283)
+  relay hop                60 s each direction, MEASURED on air
+                                                 2026-08-22 (was 45)
 
-so  t = P/2 + txFrames*P + (2 + replyFrames)*P + hops*2*45
+so  t = P/2 + txFrames*P + (2 + replyFrames)*P + hops*2*60
 
 Frame counts come from the wire forms audited in Varicode.cpp: a bare
 directed command is ONE frame; a command with a body carries a 16-bit
@@ -24,7 +24,9 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 PERIOD_S = 15.0                  # Normal
-RELAY_HOP_S = 45.0               # 3 frames per hop, one direction
+RELAY_HOP_S = 60.0               # one relay hop, one direction.
+# MEASURED 2026-08-22, three hops in a row at 60 s each (see
+# reference_js8reach). Was 45.0, which under-budgeted every chain.
 
 
 def rtt(tx_frames: int, reply_frames: int, relay_hops: int = 0) -> float:
@@ -99,9 +101,19 @@ def relay_ping(via: str, target: str, p: float, why: list[str]) -> Action:
 
 def store_and_forward(via: str, target: str, text: str, p: float,
                       why: list[str]) -> Action:
-    """`R>T MSG TO:` — hand the traffic to a station that hears T; the
-    app's store-and-forward delivers when T next appears. Not contact,
-    but delivery, and it costs us nothing further."""
-    return Action("sandf", f"{via}>{target} MSG TO:{target} {text}",
-                  rtt(2, 2, relay_hops=1), p, 1, why,
-                  target=target, via=via)
+    """DO NOT USE as a routing step. Kept only so the cost model stays
+    complete.
+
+    `MSG TO:` makes the relay station HOLD our traffic and take on the
+    job of delivering it. Relaying costs a station one transmission it
+    already agreed to; storing a message costs it an obligation it
+    never asked for. Operator's rule, 2026-08-22: "we really don't want
+    to disturb W0BYU with a MSG, only a relay."
+
+    Relay (`R>T ...`) is the only third-party step to plan. If a target
+    cannot be reached, wait for it or try another relay -- do not park
+    traffic on a bystander.
+    """
+    raise NotImplementedError(
+        "MSG TO: is not a routing step -- relay only (operator, "
+        "2026-08-22)")

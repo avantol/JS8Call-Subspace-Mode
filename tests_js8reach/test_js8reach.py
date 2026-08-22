@@ -40,8 +40,11 @@ check(abs(A.rtt(1, 1) - 67.5) < 1e-9,
       "SNR? ping costs 67.5 s (1 frame out, 1-frame reply)")
 check(abs(A.rtt(2, 2) - 97.5) < 1e-9,
       "QUERY CALL sweep costs 97.5 s (body+CRC out, 2-frame reply)")
-check(abs(A.rtt(2, 1, relay_hops=1) - A.rtt(2, 1) - 90.0) < 1e-9,
-      "one relay hop adds 90 s round trip (45 s each way)")
+# 60 s each way, MEASURED on air 2026-08-22 across three consecutive
+# hops of WM8Q>KJ7VWV>KB7ITU>KL7UT. The old 45 was a guess from the
+# frame count and it under-budgeted every chain we ran.
+check(abs(A.rtt(2, 1, relay_hops=1) - A.rtt(2, 1) - 120.0) < 1e-9,
+      "one relay hop adds 120 s round trip (60 s each way, measured)")
 
 # ---- 2. the index ordering is the optimal one ----------------------
 # For sequential attempts until first success, E[T] is minimized by
@@ -105,14 +108,21 @@ check(G.distance_km("DN61", "DN61XX") == 0.0,
 # measure. Reproduces the K2AY case of 2026-08-21 exactly.
 from live import LiveMap, Sighting  # noqa: E402
 
+# "K2AY heard AE0YH" is a RELATIONSHIP, so it is a hearing edge. It used
+# to ride on a spot's HEARD_BY; that field is gone (Build 372) because a
+# spot names one station and the store holds every pair.
 phantom = LiveMap(
     band="40m", my_call="WM8Q", my_grid="DN61OK",
     grids={"K2AY": "FN13HC", "AE0YH": "EN41QN"},
-    spots=[Sighting(call="AE0YH", grid="EN41QN", age_s=900, snr=-13,
-                    heard_by="K2AY")],
+    spots=[Sighting(call="AE0YH", grid="EN41QN", age_s=900, snr=-13)],
     hearing=[{"CALL": "AE0YH", "GRID": "EN41QN", "AGE_S": 175,
+              # the phantom: our own relayed probe, never decoded
               "HEARS": [{"CALL": "K2AY", "GRID": "FN13HC",
-                         "SNR": -99, "AGE_S": 385}]}])
+                         "SNR": -99, "AGE_S": 385}]},
+             {"CALL": "K2AY", "GRID": "FN13HC", "AGE_S": 900,
+              # the real leg: K2AY actually decoded AE0YH
+              "HEARS": [{"CALL": "AE0YH", "GRID": "EN41QN",
+                         "SNR": -13, "AGE_S": 900}]}])
 
 check([h[0] for h in phantom.hearers_of("K2AY", 3600)] == [],
       "an SNR-less hearing edge to a never-transmitting station is "
@@ -120,6 +130,12 @@ check([h[0] for h in phantom.hearers_of("K2AY", 3600)] == [],
 check(phantom.is_active("K2AY", 3600)[0] == "listening",
       "the phantom edge does not promote a receive-only station to "
       "'transmitting'")
+# This verdict now comes from the HEARER side of the hearing store. It
+# used to come from a spot's HEARD_BY, and deleting that field without
+# adding the branch would have silently lost it for every station that
+# is not reporting ME.
+check("reported hearing AE0YH" in phantom.is_active("K2AY", 3600)[2],
+      "'listening' is derived from the target appearing as a HEARER")
 check([c for c, _a, _s in phantom.reports_by("K2AY", 3600)] == ["AE0YH"],
       "the real delivery leg survives: K2AY's own spot of AE0YH")
 
@@ -131,6 +147,42 @@ check([h[0] for h in real.hearers_of("VA3NB", 3600)] == ["AE0YH"],
       "an edge carrying a real SNR is kept -- something was decoded")
 check(real.is_active("VA3NB", 3600)[0] == "transmitting",
       "a decoded edge proves the station keyed up, even with no spot")
+
+# ---- callsign identity: base() must pick the CALL, not the longest --
+from callsign import (base, is_amateur_call,          # noqa: E402
+                      is_receive_only, is_routable)
+
+for raw, want in [("AL0A/P", "AL0A"),
+                  ("VE3/W1ABC", "W1ABC"),
+                  ("W1ABC/QRP", "W1ABC"),
+                  ("W1ABC/7", "W1ABC"),
+                  ("KH6/W1ABC", "W1ABC"),
+                  ("VP2E/W1ABC", "W1ABC"),
+                  ("W1ABC", "W1ABC")]:
+    check(base(raw) == want, f"base({raw}) = {want}")
+
+# The bug that prompted this: an affix LONGER than the call. The old
+# longest-token rule returned "FULLERTON", so the station matched
+# nothing and could not be routed to.
+check(base("W6MFB/FULLERTON") == "W6MFB",
+      "base() survives an affix longer than the call (W6MFB/FULLERTON)")
+
+# Routability is TWO questions, and they are not the same one.
+check(is_amateur_call("W1ABC") and is_amateur_call("AL0A/P"),
+      "real calls are amateur calls, affix or not")
+for junk in ("DIG647", "SWL45", "13RF1146", "109HA3651",
+             "RAVEHEART", "WESSEX", "20DR3VIL", "PL6W702WI"):
+    check(not is_amateur_call(junk),
+          f"{junk} is not an amateur call (SWL / freeband / pirate)")
+
+check(is_receive_only("K1RA-4") and is_receive_only("WH6HJH-RX"),
+      "hyphen suffix marks a receive-only node")
+check(is_amateur_call("K1RA-4") is False,
+      "a receive-only node is judged on its own identity, not the operator's")
+check(not is_routable("K1RA-4"),
+      "a skimmer is not routable even though K1RA is a real station")
+check(is_routable("W1ABC/P") and not is_routable("DIG647"),
+      "is_routable admits real stations and rejects non-stations")
 
 print()
 print(f"{'ALL PASS' if not FAIL else str(FAIL) + ' FAILURE(S)'}")

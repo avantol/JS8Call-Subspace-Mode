@@ -33,3 +33,14 @@ docs/html/
 *.qph
 *.ts
 *.qm
+
+# Build artifacts that kept showing up as untracked noise (2026-08-22)
+__pycache__/
+*.pyc
+*.bak
+*.mod
+moc_*.cpp
+deb-staging/usr/bin/
+tests_arqmon/arqmon_test
+tests_nativearq/nativearq_fsm_test
+tests_nativearq/nativebinary_test

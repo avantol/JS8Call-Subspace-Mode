@@ -36,8 +36,12 @@ class Sighting:
     grid: str
     age_s: float
     snr: int
-    heard_by: str = ""          # who reported it (the relay candidate)
-    heard_by_grid: str = ""
+    # NOTE: there is deliberately no `heard_by` here. A spot names ONE
+    # station; who heard it is a relationship, and relationships live in
+    # the hearing store, which holds all of them instead of one. The app
+    # stopped filling HEARD_BY when the map became observation-based
+    # (Build 372) and nothing was lost, because every spot is derived
+    # from that same store. Ask hearers_of() / reports_by() instead.
     pskr: bool = False          # internet-sourced
     rx_only: bool = False
     # [2026-08-21] TRUE = this spot is a report OF MY SIGNAL, filed by
@@ -79,7 +83,7 @@ class LiveMap:
         seen = set()
         for key in ("SPOTS_ALL", "SPOTS_MINE"):
             for s in p.get(key) or []:
-                ident = (s.get("CALL"), s.get("WHEN"), s.get("HEARD_BY"))
+                ident = (s.get("CALL"), s.get("WHEN"))
                 if ident in seen:
                     continue
                 seen.add(ident)
@@ -88,8 +92,6 @@ class LiveMap:
                     grid=s.get("GRID") or "",
                     age_s=float(s.get("AGE_S", -1)),
                     snr=int(s.get("SNR", -99)),
-                    heard_by=(s.get("HEARD_BY") or "").upper(),
-                    heard_by_grid=s.get("HEARD_BY_GRID") or "",
                     pskr=bool(s.get("PSKR")),
                     rx_only=bool(s.get("RX_ONLY")),
                     reports_me=bool(s.get("REPORTS_ME"))))
@@ -144,15 +146,7 @@ class LiveMap:
             elif base(s.call) == c:
                 cand = ("transmitting", s.age_s,
                         "its transmission was decoded"
-                        + (f" by {s.heard_by}" if s.heard_by else
-                           " here")
                         + (f" at {s.snr:+d}" if s.snr > -99 else ""))
-            elif base(s.heard_by) == c:
-                cand = ("listening", s.age_s,
-                        f"it reported hearing {s.call}"
-                        + (f" at {s.snr:+d}" if s.snr > -99 else "")
-                        + " -- receiver live, not heard transmitting"
-                          " so far")
             else:
                 continue
             # "transmitting" always outranks "listening", however much
@@ -168,6 +162,8 @@ class LiveMap:
         # someone addressing it (see hearers_of).
         for h in self.hearing:
             hearer = (h.get("CALL") or "").upper()
+            # (a) the target as the HEARD party: somebody decoded it, so
+            #     it transmitted.
             for e in h.get("HEARS") or []:
                 if base(e.get("CALL") or "") != c:
                     continue
@@ -179,6 +175,27 @@ class LiveMap:
                         f"{hearer} decoded it at {snr:+d}")
                 if best is None or (0, age) < (best[0], best[1]):
                     best = (0, age, cand)
+            # (b) the target as the HEARER: it reported hearing somebody,
+            #     so its receiver is live even though nothing has decoded
+            #     IT. This used to come from a spot's HEARD_BY; when that
+            #     field went away the verdict went with it, and only the
+            #     "it hears ME" case above survived. The same evidence is
+            #     right here in the hearing store, from the other side --
+            #     it just was not being read.
+            if base(hearer) != c:
+                continue
+            for e in h.get("HEARS") or []:
+                age = float(e.get("AGE_S", -1))
+                if not (0 <= age <= within_s):
+                    continue
+                snr = int(e.get("SNR", -99))
+                cand = ("listening", age,
+                        f"it reported hearing {e.get('CALL') or '?'}"
+                        + (f" at {snr:+d}" if snr > -99 else "")
+                        + " -- receiver live, not heard transmitting"
+                          " so far")
+                if best is None or (1, age) < (best[0], best[1]):
+                    best = (1, age, cand)
         return best[2] if best else None
 
     def reports_by(self, call: str, within_s: float = 3600
@@ -187,15 +204,11 @@ class LiveMap:
         These are stations IT can hear -- the far side of a relay."""
         c = base(call)
         out: dict = {}
-        for s in self.spots:
-            if base(s.heard_by) == c and 0 <= s.age_s <= within_s:
-                k = base(s.call)
-                if k not in out or s.age_s < out[k][0]:
-                    out[k] = (s.age_s, s.snr)
-        # ALSO the hearing store -- the symmetric source hearers_of has
-        # always used. Omitting it made "what are WE hearing?" report 1
-        # station when the map held 30 (2026-08-21), which I then
-        # misread as a weak receiver.
+        # The hearing store is the ONLY source now. It always held every
+        # one of these edges; the spot loop that used to run first could
+        # only ever restate a subset (2026-08-21: omitting the store made
+        # "what are WE hearing?" report 1 station when the map held 30,
+        # which I then misread as a weak receiver).
         for h in self.hearing:
             if base(h.get("CALL") or "") != c:
                 continue
@@ -246,8 +259,10 @@ class LiveMap:
                    ) -> list[tuple[str, float, int]]:
         """(hearer, age_s, snr) for stations currently hearing `call`.
 
-        Two live sources: a spot's reporting station (`HEARD_BY`), and
-        the hearing store's per-edge records.
+        Source: the hearing store's per-edge records. (There was a
+        second source -- a spot's `HEARD_BY` -- until Build 372. It only
+        ever restated a subset of these, because the app derives its
+        spots from this same store.)
 
         PHANTOM EDGES ARE FILTERED HERE. The app builds hearing edges
         from A *addressing* B as well as from A *decoding* B (TODO
@@ -270,12 +285,6 @@ class LiveMap:
         """
         c = base(call)
         out: dict[str, tuple[float, int]] = {}
-        for s in self.spots:
-            if base(s.call) == c and s.heard_by \
-                    and 0 <= s.age_s <= within_s:
-                prev = out.get(s.heard_by)
-                if prev is None or s.age_s < prev[0]:
-                    out[s.heard_by] = (s.age_s, s.snr)
         keys_up = c in self.transmitters()
         for h in self.hearing:
             hearer = (h.get("CALL") or "").upper()
@@ -340,9 +349,8 @@ def _main() -> int:
         print("\nactive now (freshest first):")
         for s in lm.active(args.within_min * 60)[:15]:
             src = "pskr" if s.pskr else "radio"
-            by = f" heard-by {s.heard_by}" if s.heard_by else ""
             print(f"   {s.call:10s} {s.grid:9s} {s.age_s / 60:5.0f} min "
-                  f"{src}{by}")
+                  f"{src}")
     return 0
 
 

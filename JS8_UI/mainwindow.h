@@ -302,6 +302,12 @@ class UI_Constructor : public QMainWindow {
     void confirmThenEnqueueMessage(int timeout, int priority, QString message,
                                    int offset, Callback c);
     void enqueueMessage(int priority, QString message, int offset, Callback c);
+    // [attemptviz] ONE parser for "is this outgoing text a call we are
+    // waiting on an answer to, and along what chain". Called twice on
+    // purpose: at ENQUEUE so the path appears the moment the call is
+    // issued, and again when frames are built so the countdown runs on
+    // the real transmit time. txFrames <= 0 means "not known yet".
+    void noteAttemptFromText(QString const &text, int txFrames);
     void resetMessage();
     void resetMessageUI();
     void restoreMessage();

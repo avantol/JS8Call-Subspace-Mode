@@ -85,6 +85,14 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     setMinimumSize(320, 320);
     setMouseTracking(true); // hover tooltips on spots
 
+    // [attemptviz] Animates the dash gap while a call is outstanding.
+    // Started on demand by noteAttempt and stopped by tickAttempts, so
+    // a map with nothing in flight never repaints on its account.
+    m_attemptTimer = new QTimer{this};
+    m_attemptTimer->setInterval(500);
+    connect(m_attemptTimer, &QTimer::timeout, this,
+            &SpotMapWindow::tickAttempts);
+
     // [#164] Open the persistent grid store and SEED the in-session
     // authority before any feed can run. File sits beside the
     // settings ini, honoring the per-instance suffix ([multiinst]).
@@ -768,6 +776,24 @@ void SpotMapWindow::restoreStationsFromDisk() {
             info.freqHz = r.freqHz;
         if (!r.rxOnly)
             info.sawAsSender = true;
+        // THEIR REPORT OF OUR SIGNAL. This was written to disk and
+        // never read back -- a write-only column. It is the one value
+        // that colours a dot ([snrwho]: a dB figure exists only as a
+        // report of MY signal), so after every restart the whole map
+        // painted in the no-report colour until fresh PSKR reports of
+        // us trickled in. 131 rows held a real value while the live
+        // store had none (operator, 2026-08-22: "we lost all color
+        // coding for signal strength").
+        //
+        // Applied ONLY to a station the mesh restore already created.
+        // Creating an entry here would put a dot on the map with no
+        // observation behind it -- the hollow-circle defect again.
+        if (r.snrToMe > -99) {
+            auto &band = m_hearingByBand[r.band];
+            auto const it = band.find(r.call.toUpper());
+            if (it != band.end() && it->snr <= -99)
+                it->snr = r.snrToMe;
+        }
         ++restored;
     }
     if (restored)
@@ -867,6 +893,35 @@ void SpotMapWindow::restoreMeshFromDisk() {
 // [#168 mapdump] See header. Everything here is already in RAM; we
 // only serialize it. Read-only: no aging, no pruning, no side effects
 // on what the map displays.
+namespace {
+
+// One place decides how this dump writes a time that was never set.
+//
+// A default-constructed QDateTime still answers toMSecsSinceEpoch(),
+// and the number it gives back looks entirely real: on this machine
+// 25200000, which is just the UTC-7 offset. Every raw timestamp here
+// used to call it unguarded, so an absent time went out as a plausible
+// 1970 date that no consumer could tell from a measurement. Reading
+// the map over the API showed all 150 stations reporting the same
+// "radio time", which is what put us onto it.
+//
+// The age field keeps its -1 convention rather than going null: a
+// negative age is impossible, so -1 is already unambiguous, and
+// tools/js8reach/live.py reads it with float(), which a null would
+// break. The raw time has no such spare value -- every number is a
+// valid instant -- so absence there has to be null.
+//
+// Emitting the time and its age together is the point: there is no way
+// to write one of these without resolving whether the value is set.
+void putTime(QVariantMap &m, QString const &key, QString const &ageKey,
+             QDateTime const &t, QDateTime const &now) {
+    m[key] = t.isValid() ? QVariant{t.toMSecsSinceEpoch()} : QVariant{};
+    if (!ageKey.isEmpty())
+        m[ageKey] = t.isValid() ? qint64(t.secsTo(now)) : qint64(-1);
+}
+
+} // namespace
+
 QVariantMap SpotMapWindow::dumpState(QString const &band) const {
     QString const b = band.isEmpty() ? m_currentBand : band;
     auto const now = DriftingDateTime::currentDateTimeUtc();
@@ -880,9 +935,8 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
         QVariantMap h;
         h["CALL"] = it.key();
         h["GRID"] = e.grid;
-        h["LAST_SEEN"] = e.lastSeen.toMSecsSinceEpoch();
-        h["AGE_S"] = e.lastSeen.isValid()
-                         ? qint64(e.lastSeen.secsTo(now)) : qint64(-1);
+        putTime(h, QStringLiteral("LAST_SEEN"), QStringLiteral("AGE_S"),
+                e.lastSeen, now);
         h["SNR_TO_ME"] = e.snr;      // their report of OUR signal
         QVariantList heard;
         for (auto he = e.heard.constBegin(); he != e.heard.constEnd();
@@ -890,10 +944,8 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
             QVariantMap edge;
             edge["CALL"] = he.key();
             edge["GRID"] = he.value().grid;
-            edge["WHEN"] = he.value().when.toMSecsSinceEpoch();
-            edge["AGE_S"] = he.value().when.isValid()
-                                ? qint64(he.value().when.secsTo(now))
-                                : qint64(-1);
+            putTime(edge, QStringLiteral("WHEN"), QStringLiteral("AGE_S"),
+                    he.value().when, now);
             edge["SNR"] = he.value().snr;   // third-party report
             // [tribblenet] PROVENANCE, so a consumer can tell an
             // over-the-air edge from an internet one -- the
@@ -909,36 +961,64 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
         hearing.append(h);
     }
 
-    // Spots, including internet-sourced ones. `HEARD_BY` is the whole
-    // point for routing: the station that reported this one is a relay
-    // candidate with LIVE evidence of hearing it.
+    // Spots, including internet-sourced ones: one entry per STATION,
+    // saying what is on the air and where. Who hears whom is not here
+    // -- that is HEARING above, which holds every pair rather than one
+    // per station.
     auto const packSpots = [&now](QVector<Spot> const &src) {
         QVariantList out;
         for (Spot const &sp : src) {
             QVariantMap m;
             m["CALL"] = sp.receiverCall;
             m["GRID"] = sp.receiverGrid;
-            m["WHEN"] = sp.when.toMSecsSinceEpoch();
-            m["AGE_S"] = sp.when.isValid()
-                             ? qint64(sp.when.secsTo(now)) : qint64(-1);
+            putTime(m, QStringLiteral("WHEN"), QStringLiteral("AGE_S"),
+                    sp.when, now);
             m["SNR"] = sp.snr;
-            m["HEARD_BY"] = sp.heardBy;
-            m["HEARD_BY_GRID"] = sp.heardByGrid;
+            // No HEARD_BY here. A spot names ONE station; who heard it
+            // is a relationship, and HEARING above carries all of them
+            // rather than one. Since the map became observation-based
+            // these lists are DERIVED from that same store, so the
+            // field could only restate a subset of it -- and in
+            // practice it went out empty on every spot. Consumers ask
+            // HEARING.
             m["PSKR"] = sp.pskr;
             m["RX_ONLY"] = sp.rxOnly;
             m["MONITOR_ONLY"] = sp.monitorOnly;
             m["REPORTS_ME"] = sp.reportsMe;
-            m["RADIO_WHEN"] = sp.radioWhen.toMSecsSinceEpoch();
+            putTime(m, QStringLiteral("RADIO_WHEN"),
+                    QStringLiteral("RADIO_AGE_S"), sp.radioWhen, now);
             out.append(m);
         }
         return out;
     };
 
+    // [attemptviz] What the map currently believes we are trying, so
+    // the state behind the red/green lines can be READ instead of
+    // inferred from a log line someone pastes back at me (operator,
+    // 2026-08-22: "you should see that already in your diagnostics,
+    // right?" -- I could not).
+    QVariantList attempts;
+    for (Attempt const &a : m_attempts) {
+        QVariantMap m;
+        m["PATH"] = a.path;
+        m["WAIT_S"] = a.waitSecs;
+        m["REPLIED"] = a.replied;
+        putTime(m, QStringLiteral("STARTED"),
+                QStringLiteral("AGE_S"), a.started, now);
+        putTime(m, QStringLiteral("REPLIED_AT"),
+                QStringLiteral("REPLIED_AGE_S"), a.repliedAt, now);
+        attempts.append(m);
+    }
+
     QVariantMap out;
+    out["ATTEMPTS"] = attempts;
     out["BAND"] = b;
     out["MY_CALL"] = m_myCall;
     out["MY_GRID"] = m_myGrid;
-    out["UTC"] = now.toMSecsSinceEpoch();
+    // `now` cannot be invalid, but routing it through putTime too means
+    // there is no line here that anyone can copy as a template for
+    // emitting a time without the validity check.
+    putTime(out, QStringLiteral("UTC"), QString{}, now, now);
     out["HEARING"] = hearing;
     // [oneobs] Derived, not stored: SPOTS_MINE is every station whose
     // observation names ME as the heard party; SPOTS_ALL is every
@@ -2081,8 +2161,13 @@ void SpotMapWindow::redraw() {
         // by colour makes that four state changes instead of several
         // thousand, with identical output. The arrowhead geometry is
         // unchanged.
-        struct Seg { QPointF hearer, heard; bool head; };
+        struct Seg { QPointF hearer, heard; bool head; bool hover; };
         QVector<Seg> segRadio, segPskr;
+        // [hoverlift] Whether a line touches the hovered station is
+        // known here, where both endpoint callsigns are in hand. The
+        // decision to USE it is made at draw time, because it depends
+        // on the density, which is not computed until the loop ends.
+        QString const hoverUp = m_hoverCall.toUpper();
         for (auto h = hearers.constBegin(); h != hearers.constEnd(); ++h) {
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
@@ -2116,8 +2201,12 @@ void SpotMapWindow::redraw() {
                     to = posByCall.value(ed.key());
                     head = true;
                 }
+                bool const touchesHover =
+                    !hoverUp.isEmpty() &&
+                    (h.key().toUpper() == hoverUp ||
+                     ed.key().toUpper() == hoverUp);
                 (isPskr ? segPskr : segRadio)
-                    .append(Seg{from, to, head});
+                    .append(Seg{from, to, head, touchesHover});
             }
         }
         // [inkdensity 2026-08-22] METRIC: THE NUMBER OF YELLOW LINES.
@@ -2202,8 +2291,28 @@ void SpotMapWindow::redraw() {
             }
             p.setBrush(Qt::NoBrush);
         };
-        drawGroup(segPskr, QPen{pskrLineColor, 1}); // internet under
-        drawGroup(segRadio, penRadio); // on-air over ([hearlines])
+        // [hoverlift 2026-08-22, operator] Muting is what makes a dense
+        // field readable, and it is also what buries the one station
+        // being looked at. So while the cursor is on a station AND the
+        // yellow has actually backed off, that station's lines are put
+        // back to full brightness and drawn last, above everything.
+        // Only when pskrCoverage > 0: with no muting there is nothing
+        // to restore, and lifting lines then would be a change with no
+        // cause.
+        bool const lift = pskrCoverage > 0.0 && !hoverUp.isEmpty();
+        if (!lift) {
+            drawGroup(segPskr, QPen{pskrLineColor, 1}); // internet under
+            drawGroup(segRadio, penRadio); // on-air over ([hearlines])
+        } else {
+            QVector<Seg> dim, lit;
+            for (Seg const &s : segPskr)
+                (s.hover ? lit : dim).append(s);
+            drawGroup(dim, QPen{pskrLineColor, 1});
+            drawGroup(segRadio, penRadio);
+            // Unmuted end of the same ramp -- the colour these lines
+            // would have had on an empty map, not a new highlight hue.
+            drawGroup(lit, QPen{QColor{225, 190, 30, 225}, 1});
+        }
     }
 
     m_screenSpots.clear();
@@ -2439,6 +2548,87 @@ void SpotMapWindow::redraw() {
         }
     }
 
+    // [attemptviz 2026-08-22, operator] What we are trying, RIGHT NOW,
+    // drawn LAST so it sits above every other layer including the
+    // hover lift -- an attempt is transient and about this moment, so
+    // nothing should ever obscure it.
+    //
+    // The dash GAP widens as the reply window runs down and the whole
+    // line fades with it, so the path visibly "runs out" instead of
+    // just blinking off. A reply turns the chain solid green for a few
+    // seconds ([attemptviz] GREEN_SECS).
+    if (!m_attempts.isEmpty()) {
+        QHash<QString, QPointF> at;
+        for (ScreenSpot const &ss : m_screenSpots)
+            at.insert(ss.spot.receiverCall.toUpper(), ss.pos);
+        // An attempt is about RIGHT NOW and must not be filtered by the
+        // view. In "hearing <me>" only stations that hear us are
+        // rendered, so a relay hop outside that set had no entry above
+        // and the line silently truncated when the view was switched
+        // (operator, 2026-08-22 -- same requirement as the relay
+        // builder). Fall back to the grid authority, which knows where
+        // a station is regardless of what is currently drawn.
+        auto const placeFromGrid = [&](QString const &call) -> QPointF {
+            QString const g = m_gridByCall.value(call);
+            if (g.isEmpty())
+                return QPointF{};
+            auto const v = Geodesic::vector(m_myGrid, g);
+            if (!v.azimuth().isValid() || !v.distance().isValid())
+                return QPointF{};
+            float const rr =
+                R * (static_cast<float>(v.distance()) / scaleKm);
+            double const rad = static_cast<float>(v.azimuth()) * DEG2RAD;
+            return center + QPointF{std::sin(rad), -std::cos(rad)} * rr;
+        };
+        auto const now = DriftingDateTime::currentDateTimeUtc();
+        p.setBrush(Qt::NoBrush);
+        for (Attempt const &a : m_attempts) {
+            // Chain starts at OUR station; the path holds only the
+            // far end(s), so the first leg is always center -> hop 1.
+            QVector<QPointF> pts{center};
+            for (QString const &c : a.path) {
+                auto it = at.constFind(c);
+                QPointF const q =
+                    it != at.constEnd() ? it.value() : placeFromGrid(c);
+                if (q.isNull())
+                    break;   // no grid anywhere: cannot place this hop
+                pts << q;
+            }
+            // Draw AS FAR AS WE CAN. Requiring the whole chain to be
+            // placeable meant one hop with no grid erased the entire
+            // line, which is how a three-hop attempt drew nothing at
+            // all (operator, 2026-08-22: "no red line"). A partial
+            // path still says what is being tried and in which
+            // direction; silence says nothing.
+            if (pts.size() < 2)
+                continue;
+
+            QPen pen;
+            pen.setWidthF(3.0);
+            // FULLY OPAQUE, both colours. The countdown is carried by
+            // the widening gap alone -- an alpha ramp on top of it just
+            // made the line look washed out (operator, 2026-08-22).
+            // It ends by being removed, not by fading away.
+            if (a.replied) {
+                pen.setColor(QColor(60, 230, 110));
+                pen.setStyle(Qt::SolidLine);
+            } else {
+                double const t =
+                    std::clamp(double(a.started.secsTo(now)) /
+                                   double(qMax(1, a.waitSecs)),
+                               0.0, 1.0);
+                // Dash stays put; the GAP opens from tight to wide.
+                // Units are multiples of the pen width.
+                pen.setColor(QColor(230, 60, 60));
+                pen.setStyle(Qt::CustomDashLine);
+                pen.setDashPattern({2.0, 1.0 + 11.0 * t});
+            }
+            p.setPen(pen);
+            for (int i = 1; i < pts.size(); ++i)
+                p.drawLine(pts.at(i - 1), pts.at(i));
+        }
+    }
+
     update();
 }
 
@@ -2554,6 +2744,103 @@ SpotMapWindow::hitTest(QPointF const &pos) const {
     return best;
 }
 
+// [attemptviz] An outgoing directed call or relay. `path` is the chain
+// WITHOUT us: {target} for a direct call, {relay..., target} otherwise.
+void SpotMapWindow::noteAttempt(QStringList const &path, int waitSecs) {
+    if (path.isEmpty())
+        return;
+    Attempt a;
+    for (QString const &c : path)
+        a.path << c.trimmed().toUpper();
+    a.started = DriftingDateTime::currentDateTimeUtc();
+    a.waitSecs = qMax(15, waitSecs);
+    // A new call SUPERSEDES any outstanding one. The channel is
+    // half-duplex, so we cannot be trying two paths at once, and
+    // leaving the old dashes up would claim we were (operator,
+    // 2026-08-22). Replied attempts survive: those are results, not
+    // attempts, and they run out their own green timeout.
+    for (int i = m_attempts.size() - 1; i >= 0; --i) {
+        if (!m_attempts.at(i).replied)
+            m_attempts.remove(i);
+    }
+    m_attempts.append(a);
+    if (m_attemptTimer && !m_attemptTimer->isActive())
+        m_attemptTimer->start();
+    redraw();
+}
+
+// [attemptviz] Somebody answered. Any live attempt naming that station
+// anywhere in its chain goes green -- a relay answering on the target's
+// behalf is still our path working.
+void SpotMapWindow::noteReply(QString const &from) {
+    QString const f = from.trimmed().toUpper();
+    if (f.isEmpty())
+        return;
+    bool hit = false;
+    for (Attempt &a : m_attempts) {
+        if (a.replied)
+            continue;
+        for (QString const &c : a.path) {
+            if (Radio::same_station(c, f)) {
+                a.replied = true;
+                a.repliedAt = DriftingDateTime::currentDateTimeUtc();
+                hit = true;
+                break;
+            }
+        }
+    }
+    // Somebody answered US without matching a chain we drew -- the
+    // usual case is a broadcast sweep, which has no path to draw but
+    // very much has responders. The operator's rule is "any called
+    // station replies to us, even HB replies", so give it its own
+    // green line rather than dropping it because we never drew a red
+    // one (operator, 2026-08-22: "the incoming responses to the first
+    // call *are* directed (to us) so should show green").
+    if (!hit) {
+        Attempt a;
+        a.path << f;
+        a.started = DriftingDateTime::currentDateTimeUtc();
+        a.replied = true;
+        a.repliedAt = a.started;
+        m_attempts.append(a);
+        hit = true;
+    }
+    if (hit) {
+        if (m_attemptTimer && !m_attemptTimer->isActive())
+            m_attemptTimer->start();
+        redraw();
+    }
+}
+
+// [attemptviz] Expire finished attempts and keep the dashes moving.
+// The timer stops itself when nothing is live, so an idle map costs
+// nothing.
+void SpotMapWindow::tickAttempts() {
+    auto const now = DriftingDateTime::currentDateTimeUtc();
+    constexpr int GREEN_SECS = 12;   // how long a success stays up
+    for (int i = m_attempts.size() - 1; i >= 0; --i) {
+        Attempt const &a = m_attempts.at(i);
+        bool const done =
+            a.replied ? a.repliedAt.secsTo(now) > GREEN_SECS
+                      : a.started.secsTo(now) > a.waitSecs;
+        if (done)
+            m_attempts.remove(i);
+    }
+    if (m_attempts.isEmpty() && m_attemptTimer)
+        m_attemptTimer->stop();
+    redraw();
+}
+
+// [hoverlift] The cursor can leave the chart without a final move event
+// inside it, which would strand the lift on whatever was last hovered.
+void SpotMapWindow::leaveEvent(QEvent *event) {
+    if (!m_hoverCall.isEmpty()) {
+        m_hoverCall.clear();
+        redraw();
+    }
+    QWidget::leaveEvent(event);
+}
+
 void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
     // Drag-to-pan: once the press moves past the drag threshold it's
     // a pan, not a click. Direct redraw() (not the debounced
@@ -2585,6 +2872,19 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         }
     }
     // Hover identity: nearest spot within a comfortable radius.
+    // [hoverlift] Track which station that is, and repaint ONLY when it
+    // changes -- mouseMoveEvent fires continuously, and redrawing the
+    // whole chart per pixel of cursor travel would cost far more than
+    // the effect is worth.
+    {
+        ScreenSpot const *hov = hitTest(event->position());
+        QString const now =
+            hov ? hov->spot.receiverCall.toUpper() : QString{};
+        if (now != m_hoverCall) {
+            m_hoverCall = now;
+            redraw();
+        }
+    }
     if (ScreenSpot const *best = hitTest(event->position())) {
         bool const miles = m_config->miles(); // [units] per Settings
         double const dist = best->spot.distance * (miles ? 0.621371 : 1.0);
@@ -2642,7 +2942,16 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         if (!best->spot.country.isEmpty()) {
             tip += QStringLiteral("\n") + best->spot.country;
         }
-        QToolTip::showText(event->globalPosition().toPoint(), tip, this);
+        // [hovertime 2026-08-22, operator: "cut the hover info timeout
+        // to 50%"] Qt's default when no time is given is
+        //     10000 + 40 * max(0, len - 100) ms
+        // (qtooltip.cpp), so half of it has to be computed the same way
+        // rather than hard-coded -- the default grows with text length
+        // and these tips vary a lot in size.
+        int const qtDefaultMs =
+            10000 + 40 * qMax(0, tip.size() - 100);
+        QToolTip::showText(event->globalPosition().toPoint(), tip, this,
+                           QRect{}, qtDefaultMs / 2);
     } else {
         QToolTip::hideText();
     }

@@ -454,6 +454,28 @@ void UI_Constructor::processCommandActivity() {
         // Log to DIRECTED.txt (includes FROM prefix)
         writeMsgTxt(text, d.snr, d.offset);
 
+        // [attemptviz 2026-08-22] Somebody answered US -- green line.
+        // Gate on "addressed to me", not on matching a live attempt:
+        // a broadcast sweep draws no red path but its responders are
+        // answering us just the same, and HB replies count too
+        // (operator's rule). Directed traffic between OTHER stations
+        // is deliberately excluded -- greening the whole band would
+        // say nothing about our own calls.
+        //
+        // The TO field can arrive carrying the relay marker -- a chain
+        // reply reads "WM8Q> SNR +00 *DE* KL7UT *DE* KB7ITU", and
+        // Radio::base_callsign only strips '/', never '>', so a plain
+        // same_station() compare misses it. That is why the successful
+        // KL7UT chain reply drew no green line (operator, 2026-08-22:
+        // "was it the '>' format?"). Strip the marker before comparing.
+        if (m_spotMapWindow) {
+            QString dest = d.to.trimmed();
+            while (dest.endsWith('>'))
+                dest.chop(1);
+            if (Radio::same_station(dest, m_config.my_callsign()))
+                m_spotMapWindow->noteReply(d.from);
+        }
+
         // Send to TCP API — use full text with FROM prefix for JS8 Spotter compat
         if (canSendNetworkMessage()) {
             sendNetworkMessage(

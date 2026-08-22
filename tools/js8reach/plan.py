@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import grid as G                     # noqa: E402
 from callsign import base            # noqa: E402
+import history                      # noqa: E402
 from live import LiveMap             # noqa: E402
 from tribblenet import (TribbleNet, T_DIRECT, T_HB,  # noqa: E402
                         T_SWEEP)
@@ -121,6 +122,32 @@ def plan(lm, target: str = "", target_grid: str = "",
     tg = target_grid or tn.grid_of(resolved)
     deliv, ret = tn.routes_to(resolved, tg, max_hops)
     literal = lm.literal_call(resolved)
+
+    # ---- 0b. REACHED BUT SILENT is its own answer -------------------
+    # The planner used to know only "route" and "no route". A target we
+    # can demonstrably reach and which never replies is neither, and it
+    # was the most common outcome on 2026-08-21/22 (N9WCW, KG4UHM/6,
+    # KG6NFJ, K2AY -- every one of them had a relay forward confirmed on
+    # air). Recommending another relay there spends airtime testing a
+    # leg already proven to work, and the four causes of the silence --
+    # relay-off, unattended, autoreply disabled, or blocking us -- are
+    # all invisible from here and none of them are fixed by trying a
+    # different hop.
+    import time as _time
+    if history.reached_but_silent(resolved, _time.time()):
+        via = ", ".join(sorted(
+            history.delivered_relays(resolved, _time.time())))
+        steps.append(Step(
+            f"(stop calling {resolved} -- watch instead)", 0.0,
+            [f"our traffic HAS reached {resolved}: forward confirmed on "
+             f"air via {via}",
+             "it has not answered. That is the station, not the path -- "
+             "another relay re-tests a leg we already proved",
+             "silence here is relay-off, unattended, autoreply disabled, "
+             "or blocked; none are distinguishable from our end",
+             "watch for it to transmit, or retry after the band shifts"],
+            kind="note"))
+        return steps
 
     # ---- 1. direct, when it is a real option -----------------------
     direct_known = resolved in tn.deliver.get(tn.me, {})

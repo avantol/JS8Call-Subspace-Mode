@@ -43,11 +43,10 @@ def build(lm, within_s: float = 3600) -> dict:
     """
     hears: dict = collections.defaultdict(dict)
     keys_up = lm.transmitters()
-    for s in lm.spots:
-        if s.call and s.heard_by and 0 <= s.age_s <= within_s:
-            a, b = base(s.heard_by), base(s.call)
-            if a != b and (b not in hears[a] or s.age_s < hears[a][b][0]):
-                hears[a][b] = (s.age_s, s.snr)
+    # Every "A hears B" edge comes from the hearing store. Spots used to
+    # contribute a HEARD_BY edge as well, but a spot names one station,
+    # not a pair -- and the app derives spots from this same store, so
+    # that loop could only restate what follows.
     for h in lm.hearing:
         a = base(h.get("CALL") or "")
         for e in h.get("HEARS") or []:

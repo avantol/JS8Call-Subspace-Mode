@@ -5068,6 +5068,54 @@ void UI_Constructor::enqueueMessage(int priority, QString message, int offset,
                                     Callback c) {
     m_txMessageQueue.enqueue(PrioritizedMessage{
         DriftingDateTime::currentDateTimeUtc(), priority, message, offset, c});
+    // Show the path NOW. Waiting for frames to be built meant nothing
+    // appeared until the next transmit cycle -- the operator issued a
+    // call and the map stayed blank (2026-08-22: "no red line ...
+    // originally zero at cmd generation time").
+    noteAttemptFromText(message, 0);
+}
+
+// [attemptviz] See the header. Parses an outgoing message into a relay
+// chain and hands it to the map.
+void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
+    if (!m_spotMapWindow)
+        return;
+    // The chain arrives spaced out -- "N6GRG> KG4UHM/6 SNR?" -- so
+    // close the gap around the marker before taking the first token,
+    // or the destination is dropped.
+    QString const trimmed =
+        text.trimmed().replace(QStringLiteral("> "), QStringLiteral(">"));
+    // ONLY questions: an attempt is something we are waiting on an
+    // answer for, which is what the countdown means. Our own
+    // autoreplies ("KG7RXU YES -24 (36M)") are directed at a callsign
+    // too, and without this they painted a countdown to a station we
+    // were not calling.
+    if (!trimmed.contains('?'))
+        return;
+    QString const first = trimmed.section(' ', 0, 0);
+    if (first.isEmpty() || first.startsWith('@') || first.contains(':'))
+        return;
+    QStringList const chain = first.split('>', Qt::SkipEmptyParts);
+    if (chain.isEmpty() || chain.first().startsWith('@'))
+        return;
+    // 60 s per relay hop, MEASURED 2026-08-22 on
+    // WM8Q>KJ7VWV>KB7ITU>KL7UT. Before frames exist, assume two.
+    int const frames = txFrames > 0 ? txFrames : 2;
+    int const txSecs = frames * qMax(1, m_TRperiod);
+    // Plus a margin. 70 + 60/hop is the EXPECTED reply instant, so
+    // half the time the answer lands after it -- and a path that
+    // vanishes while we are still legitimately waiting is the wrong
+    // way to be wrong (operator, 2026-08-22: "dashed line disappeared
+    // way too soon"). Two periods covers ordinary slip without
+    // leaving stale paths lying around.
+    // FOUR periods. Two was still ~17 s short of how long we actually
+    // wait in practice (operator saw it vanish early twice). The
+    // expected-reply figure is a median, so the tail past it is half
+    // of all replies; the margin has to cover that tail, not just
+    // rounding.
+    int const marginSecs = 4 * qMax(1, m_TRperiod);
+    m_spotMapWindow->noteAttempt(
+        chain, txSecs + 70 + 60 * (chain.size() - 1) + marginSecs);
 }
 
 void UI_Constructor::resetMessage() {
@@ -5388,6 +5436,11 @@ QString UI_Constructor::createMessageTransmitQueue(QString const &text,
     }
 
     auto frames = buildMessageFrames(text, isData, pDisableTypeahead);
+
+    // [attemptviz] Frames are known now, so refresh the attempt
+    // with the real transmit time -- same parser as the enqueue
+    // call, one authority for both.
+    noteAttemptFromText(text, frames.length());
 
     QStringList lines;
     foreach (auto frame, frames) {

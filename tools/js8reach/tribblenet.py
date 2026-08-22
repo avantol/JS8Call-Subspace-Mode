@@ -48,7 +48,7 @@ proven to key up for us.
 ========================== TIME MODEL ==============================
 From ChunkedArq.h and measured on air (Normal, P=15 s):
   direct call + 1-frame reply      ~70 s
-  each RELAY hop adds              ~45 s per direction
+  each RELAY hop adds              ~60 s per direction (MEASURED)
   broadcast sweep (QUERY CALL)     ~97 s, evaluates the whole pool
   HB request + answers             ~90 s, and REPOPULATES the mesh
 Ordering is by expected time, cheapest first, because probes are
@@ -58,14 +58,21 @@ from __future__ import annotations
 
 import collections
 import math
+import time
 from dataclasses import dataclass, field
 
 import grid as G
-from callsign import base, same
+import forwarders
+import history
+from callsign import base, is_routable, same
 
 # ---- time constants (seconds), see TIME MODEL above ---------------
 T_DIRECT = 70.0
-T_HOP = 45.0          # one relay hop, one direction
+T_HOP = 60.0          # one relay hop, one direction -- MEASURED
+                      # 2026-08-22 on WM8Q>KJ7VWV>KB7ITU>KL7UT:
+                      # forwards at +59 s, +60 s and the reply at
+                      # +60 s after that, dead regular. The old 45
+                      # was a guess and ran the clock out early.
 T_SWEEP = 97.0
 T_HB = 90.0
 
@@ -135,6 +142,10 @@ class TribbleNet:
         self.my_grid = lm.my_grid
         # deliver[u] = {v: Hop}  -- u can DELIVER to v, because v hears u
         self.deliver: dict = collections.defaultdict(dict)
+        self.skipped_unroutable = 0
+        # One clock for the whole plan, so a forwarding record
+        # cannot expire midway through a single search.
+        self.now_epoch = time.time()
         self._build()
 
     # ---------------- construction ---------------------------------
@@ -143,6 +154,19 @@ class TribbleNet:
              snr: int) -> None:
         a, b = base(hearer), base(heard)
         if not a or not b or a == b:
+            return
+        # This graph exists to ROUTE, so only stations that can carry
+        # traffic belong in it. SWL and freeband IDs, pirates, and
+        # receive-only skimmer nodes all appear in the PSKR feed and
+        # none of them can pass a message along (operator's call,
+        # 2026-08-22). Dropped here, at the one place every edge enters,
+        # rather than filtered again at each consumer.
+        #
+        # This does NOT say they are worthless: an SWL hearing a station
+        # is real evidence about that station's propagation. Evidence
+        # lives in LiveMap; routing lives here.
+        if not is_routable(a) or not is_routable(b):
+            self.skipped_unroutable += 1
             return
         if not (0 <= age <= self.within_s):
             return
@@ -173,15 +197,28 @@ class TribbleNet:
         when one exists, and the plan labels it honestly. This is the
         operator's "try anyway": unknown is not the same as
         contradicted (2026-08-21).
+
+        THIRD PARTIES GET THE SAME RULE (operator, 2026-08-22: "don't
+        neglect mix/match source info"). This used to run for ME alone,
+        so a relay was only ever considered when the TARGET was known to
+        hear it -- and "R hears the target" was thrown away. Reaching
+        KK4QIG that cost a real route: the forward pairing found nothing
+        and I went hunting two-hop chains, while pairing the other way
+        gave six one-hop candidates including the one Andy spotted by
+        eye. The inference was applied to us and withheld from everybody
+        else, for no reason.
+
+        Snapshot first: reciprocals must not breed reciprocals.
         """
-        for u, vs in list(self.deliver.items()):
-            if self.me not in vs:
-                continue          # u delivers to us => WE HEAR u
-            if u in self.deliver.get(self.me, {}):
-                continue          # already proven to hear us
-            h = vs[self.me]
-            self.deliver[self.me][u] = Hop(
-                self.me, u, "reciprocal", h.age_s, h.snr)
+        snapshot = [(u, v, h)
+                    for u, vs in self.deliver.items()
+                    for v, h in vs.items()]
+        for u, v, h in snapshot:
+            # deliver[u][v] says v hears u. The guess is the mirror:
+            # u probably hears v, so v could deliver to u.
+            if u in self.deliver.get(v, {}):
+                continue          # real evidence already exists
+            self.deliver[v][u] = Hop(v, u, "reciprocal", h.age_s, h.snr)
 
     def _build(self) -> None:
         # 1. The hearing store: every "A hears B" with provenance.
@@ -192,15 +229,16 @@ class TribbleNet:
                           (e.get("SOURCE") or "mqtt").lower(),
                           float(e.get("AGE_S", -1)),
                           int(e.get("SNR", -99)))
-        # 2. Spots. A spot means: heard_by heard call. A reports_me spot
-        #    means the reporter heard US -- the outbound first hop, and
-        #    the single most valuable fact we have.
+        # 2. Spots, for ONE fact the hearing store cannot state: a
+        #    reports_me spot means the reporter heard US. That is the
+        #    outbound first hop and the single most valuable fact we
+        #    have. The old "heard_by heard call" edge is gone -- it
+        #    restated step 1, because the app derives spots from the
+        #    same store step 1 reads.
         for s in self.lm.spots:
-            src = "mqtt" if s.pskr else "radio"
             if s.reports_me:
-                self._add(s.call, self.me, src, s.age_s, s.snr)
-            elif s.heard_by:
-                self._add(s.heard_by, s.call, src, s.age_s, s.snr)
+                self._add(s.call, self.me,
+                          "mqtt" if s.pskr else "radio", s.age_s, s.snr)
         # 3. Reciprocity, LAST so it can never displace real evidence.
         self._seed_reciprocity()
 
@@ -222,7 +260,8 @@ class TribbleNet:
 
     # ---------------- the search -----------------------------------
 
-    def _dijkstra(self, start: str, target_grid: str) -> dict:
+    def _dijkstra(self, start: str, target_grid: str,
+                  target_call: str = "") -> dict:
         """Least (time x risk) delivery cost from `start` to everything
         reachable, biased toward `target_grid`.
 
@@ -231,6 +270,8 @@ class TribbleNet:
         and independent of the path taken to reach a node.
         """
         start = base(start)
+        done_relays = (history.delivered_relays(target_call, self.now_epoch)
+                       if target_call else set())
         best = {start: (0.0, 0.0, [start], [])}   # cost, secs, path, hops
         seen: set = set()
         frontier = [(0.0, start)]
@@ -246,6 +287,20 @@ class TribbleNet:
                 if v in seen:
                     continue
                 risk = RISK.get(hop.source, 1.8)
+                # Whether v will FORWARD matters more than how loud it
+                # is: on 2026-08-22 seven of nine well-chosen relays
+                # simply did not relay, and path evidence rated them all
+                # alike. Only charged when v is an intermediate hop --
+                # the TARGET is not being asked to relay anything.
+                if v != target_call:
+                    risk *= forwarders.risk(v, self.now_epoch)
+                    # A relay that has ALREADY put our traffic into
+                    # this target teaches us nothing by doing it
+                    # again -- the target is the variable, not the
+                    # hop. Heavily penalised rather than removed, so
+                    # it stays available if nothing else exists.
+                    if v in done_relays:
+                        risk *= 4.0
                 # Direction: charge for ground GIVEN UP, free inside
                 # DETOUR_KM_FREE. Unknown geometry is charged nothing --
                 # missing grids must not silently rule a relay out.
@@ -274,8 +329,8 @@ class TribbleNet:
         """
         t = base(target)
         tg = target_grid or self.grid_of(t)
-        out = self._dijkstra(self.me, tg)
-        back = self._dijkstra(t, self.my_grid)
+        out = self._dijkstra(self.me, tg, t)
+        back = self._dijkstra(t, self.my_grid, self.me)
 
         def mk(tbl, node, direction):
             e = tbl.get(node)

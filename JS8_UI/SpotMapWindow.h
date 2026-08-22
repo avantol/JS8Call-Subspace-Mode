@@ -141,6 +141,7 @@ class SpotMapWindow final : public QWidget {
     void closeEvent(QCloseEvent *) override;
     void showEvent(QShowEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
+    void leaveEvent(QEvent *) override;   // [hoverlift] drop the lift
     void mousePressEvent(QMouseEvent *) override;
     void wheelEvent(QWheelEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
@@ -439,7 +440,36 @@ class SpotMapWindow final : public QWidget {
     QPointF m_autoPanPx;
     QToolButton *m_pskrBtn = nullptr; // [pskrtoggle]
     QToolButton *m_callsBtn = nullptr; // [callsbtn]
+    // [attemptviz 2026-08-22] Live picture of what we are trying RIGHT
+    // NOW. A call we put on the air draws a fat dashed red path along
+    // the relay chain; the dash GAP widens as the reply window runs
+    // down, so the line visibly "runs out" and then vanishes. A reply
+    // from a station we called turns its path fat green for a few
+    // seconds. Purely presentational: nothing here feeds routing.
+    struct Attempt {
+        QStringList path;      // [relay..., target], uppercase
+        QDateTime started;
+        int waitSecs = 70;     // when the dashes finish opening up
+        bool replied = false;  // green, and on its own short timer
+        QDateTime repliedAt;
+    };
+    QVector<Attempt> m_attempts;
+    class QTimer *m_attemptTimer = nullptr;
+    void tickAttempts();
+
+public:
+    // Called by the app: an outgoing directed call/relay, and a reply
+    // from a station we called (HB replies included).
+    void noteAttempt(QStringList const &path, int waitSecs);
+    void noteReply(QString const &from);
+
+private:
     bool m_showPskr = true;
+    // [hoverlift] Station under the cursor, uppercase, empty when none.
+    // When the PSKR lines have been muted for density, this station's
+    // lines are drawn at full brightness and on top, so one station can
+    // be read out of a crowded field without changing the view.
+    QString m_hoverCall;
     void rememberGrid(QString const &call, QString const &grid,
                       QString const &source =
                           QStringLiteral("radio"));
