@@ -455,9 +455,11 @@ void CPlotter::annotateCall(QString const &call,
                            inMyGroup, destIsSubspaceGroup};
     paintLabelAt(p, entry, yOffset);
     m_recentLabels.push_front(entry);
-    // [BUILD 356 labelprobe]
-    qWarning() << "[LABEL] painted call=" << call << "x=" << x
-               << "row=" << currentRow << "upgrade=" << isUpgrade;
+    // [BUILD 356 labelprobe] REMOVED 2026-08-23. An uncategorised
+    // qWarning in the waterfall label PAINT path -- one line per
+    // label, unfilterable, from an investigation that closed at Build
+    // 356. Reinstate as qCDebug under a category if it is ever needed
+    // again; do not put a bare qWarning back in a paint path.
 
     update();
 }

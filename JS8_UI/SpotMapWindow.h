@@ -23,6 +23,7 @@
 
 #include <QColor>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QPixmap>
 #include <QString>
@@ -219,6 +220,13 @@ class SpotMapWindow final : public QWidget {
         // no grid, it's plotted over my station"). Zero is a real
         // distance; it must never double as "no distance".
         float distance = -1.0f;
+        // [snrwho] WHEN THIS STATION REPORTED HEARING ME -- the age of
+        // the X->ME edge, which is NOT the station's last-seen. Other
+        // evidence refreshes `when` constantly, so showing that beside
+        // "hears me at -10" claimed a 23-minute-old report was current
+        // (W3NIC, 2026-08-23: station 51 s, its report of us 1413 s).
+        // One fact, one clock.
+        QDateTime reportsMeWhen;
     };
 
     // [spotwin] STORAGE horizon: spots are retained in memory per
@@ -466,6 +474,13 @@ public:
     // from a station we called (HB replies included).
     void noteAttempt(QStringList const &path, int waitSecs);
     void noteReply(QString const &from);
+    // We have STOPPED WAITING. The map's countdown is its own estimate
+    // of how long an answer might take; the caller knows when it has
+    // actually given up, and that is usually sooner. Clearing then
+    // rather than letting the dashes run out tells the operator the
+    // attempt is over and they can move on (operator, 2026-08-22).
+    // Only un-replied attempts go: a green result is a result.
+    void clearAttempts();
 
 private:
     bool m_showPskr = true;
@@ -474,6 +489,17 @@ private:
     // lines are drawn at full brightness and on top, so one station can
     // be read out of a crowded field without changing the view.
     QString m_hoverCall;
+    // [paintlog] What the last paint actually did, so a slow frame can
+    // be attributed instead of guessed at.
+    mutable int m_lastNoteCount = 0;
+    mutable int m_lastSegCount = 0;
+    mutable qint64 m_lastPaintMs = 0;  // drives requestReplot's interval
+    mutable qint64 m_lastBuildMs = 0;  // render-set rebuild
+    mutable qint64 m_lastGeoMs = 0;    // coastline walk, per frame
+    mutable int m_lastGeoPts = 0;      // points in that walk
+    mutable int m_lastGeoPolys = 0;
+    mutable qint64 m_lastSegMs = 0;    // everything after the lines
+    mutable QElapsedTimer m_segTimer;
     void rememberGrid(QString const &call, QString const &grid,
                       QString const &source =
                           QStringLiteral("radio"));

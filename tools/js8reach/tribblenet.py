@@ -229,16 +229,26 @@ class TribbleNet:
                           (e.get("SOURCE") or "mqtt").lower(),
                           float(e.get("AGE_S", -1)),
                           int(e.get("SNR", -99)))
-        # 2. Spots, for ONE fact the hearing store cannot state: a
-        #    reports_me spot means the reporter heard US. That is the
-        #    outbound first hop and the single most valuable fact we
-        #    have. The old "heard_by heard call" edge is gone -- it
-        #    restated step 1, because the app derives spots from the
-        #    same store step 1 reads.
-        for s in self.lm.spots:
-            if s.reports_me:
-                self._add(s.call, self.me,
-                          "mqtt" if s.pskr else "radio", s.age_s, s.snr)
+        # 2. (nothing) -- the reports_me spot pass is GONE.
+        #
+        # It claimed to carry "one fact the hearing store cannot state".
+        # It could not: measured against the live map, it produced 47
+        # "hears me" edges and the store already had all 47, ZERO
+        # unique. What it did add was FALSE PROVENANCE. It tagged each
+        # hop from the SPOT's pskr flag -- a per-station derived value
+        # -- instead of the edge's own source, and got 45 of 47 wrong,
+        # calling internet-only edges "radio".
+        #
+        # That is not cosmetic. _add() lets provenance outrank recency,
+        # so running after step 1 meant systematically OVERWRITING
+        # correct mqtt edges (risk 1.8) with fake radio ones (risk
+        # 1.0) -- on the outbound first hop, the leg every route
+        # depends on. Every plan was overconfident about exactly the
+        # thing it should be most careful with.
+        #
+        # Same lesson as the heard_by edge before it: a second pass
+        # that "restates" a store will disagree with it, and the
+        # disagreement is the bug.
         # 3. Reciprocity, LAST so it can never displace real evidence.
         self._seed_reciprocity()
 

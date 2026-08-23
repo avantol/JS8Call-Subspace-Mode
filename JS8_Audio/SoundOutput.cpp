@@ -110,10 +110,15 @@ SoundOutput::onPlayback(void * pOutput, ma_uint32 frameCount)
         // The build 288/290 thresholds (100 / 30 ms) were set based
         // on assumed callback periods that didn't match reality.
         if (dt >= 150) {
-            qWarning() << "[AUDIO-CB-PROBE] late callback dt=" << dt
-                       << "ms frames=" << frameCount
-                       << "(>=100ms ⇒ likely preempted; check whether"
-                       << "device buffer underran)";
+            // [#174] RECORD ONLY -- no logging on this thread. See the
+            // header: two atomic updates, no allocation, no I/O.
+            // reportLateCallbacks() drains these from the GUI thread.
+            m_lateCallbacks.fetch_add(1, std::memory_order_relaxed);
+            qint64 worst = m_worstLateMs.load(std::memory_order_relaxed);
+            while (dt > worst &&
+                   !m_worstLateMs.compare_exchange_weak(
+                       worst, dt, std::memory_order_relaxed)) {
+            }
         }
     }
     lastCallbackMs = nowMs;
@@ -144,9 +149,29 @@ SoundOutput::onPlayback(void * pOutput, ma_uint32 frameCount)
     m_callbackDepth.fetch_sub(1, std::memory_order_release);
 }
 
+// [#174] Drain the realtime probe's counters. Runs on the GUI thread
+// (teardown is a normal call, not a callback), so logging here is
+// safe in a way it never was inside onPlayback().
+void
+SoundOutput::reportLateCallbacks()
+{
+    int const late = m_lateCallbacks.exchange(0, std::memory_order_relaxed);
+    if (!late)
+        return;
+    qint64 const worst = m_worstLateMs.exchange(0, std::memory_order_relaxed);
+    qWarning() << "[AUDIO-CB-PROBE]" << late
+               << "late playback callback(s) this session, worst"
+               << worst << "ms (>=150 ms means the audio thread was"
+               << "preempted; the card likely underran)";
+}
+
 void
 SoundOutput::teardown()
 {
+    // Report what the callback recorded before the device goes away --
+    // one line per playback session instead of one per late callback,
+    // and none of it on the realtime thread.
+    reportLateCallbacks();
     if (m_deviceInitialized) {
         // Hand off to the reaper: uninit runs on a detached thread so this
         // never blocks even when miniaudio's PulseAudio worker is wedged in

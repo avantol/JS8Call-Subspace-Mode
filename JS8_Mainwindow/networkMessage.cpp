@@ -598,6 +598,23 @@ if(type == "STATION.SET_SPOT") {
     /** @brief TX.SEND_MESSAGE: Enqueues a message for transmission.
      * Optional param PRIORITY: "HIGH" (default), "NORMAL", or "LOW".
      */
+    /** @brief TX.ATTEMPT_DONE: the caller has STOPPED WAITING on the
+     * calls it made, so the Spots Map should blank their dashed paths
+     * now instead of running its own countdown to the end. The map's
+     * budget is an estimate of how long a reply might take; only the
+     * caller knows when it actually gave up, and it is usually sooner
+     * (operator, 2026-08-22: "blank it the moment we declare failure,
+     * helps the user move along to next thing").
+     *
+     * Replied attempts are untouched -- a green path is a result, not
+     * an outstanding wait. Read-only otherwise; affects display only.
+     */
+    if (type == "TX.ATTEMPT_DONE") {
+        if (m_spotMapWindow)
+            m_spotMapWindow->clearAttempts();
+        return;
+    }
+
     if (type == "TX.SEND_MESSAGE") {
         auto text = message.value();
         if (!text.isEmpty()) {

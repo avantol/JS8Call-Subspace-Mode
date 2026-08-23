@@ -51,11 +51,16 @@ from tribblenet import (TribbleNet, T_DIRECT, T_HB,  # noqa: E402
 
 
 class Step:
-    def __init__(self, text, seconds, why, kind="tx"):
+    # rank: 0 sorts above 1 regardless of duration. Time is the right
+    # tie-break between actions that can both succeed; it is the WRONG
+    # comparison between an action that can produce a contact and one
+    # that structurally cannot.
+    def __init__(self, text, seconds, why, kind="tx", rank=1):
         self.text = text
         self.seconds = seconds
         self.why = why if isinstance(why, list) else [why]
         self.kind = kind
+        self.rank = rank
 
 
 def _fmt_route(r, tn) -> list:
@@ -134,13 +139,17 @@ def plan(lm, target: str = "", target_grid: str = "",
     # all invisible from here and none of them are fixed by trying a
     # different hop.
     import time as _time
-    if history.reached_but_silent(resolved, _time.time()):
-        via = ", ".join(sorted(
-            history.delivered_relays(resolved, _time.time())))
+    # First-hand reach counts as delivery proof, and outranks a relay
+    # forward: "the target reports hearing us" says it ARRIVED, where a
+    # forward only says our traffic set off in the right direction.
+    _hears_us = resolved in tn.deliver.get(tn.me, {})
+    if history.reached_but_silent(resolved, _time.time(), _hears_us):
+        _relays = sorted(history.delivered_relays(resolved, _time.time()))
+        via = (", ".join(_relays) if _relays
+               else f"{resolved} itself reports hearing us")
         steps.append(Step(
             f"(stop calling {resolved} -- watch instead)", 0.0,
-            [f"our traffic HAS reached {resolved}: forward confirmed on "
-             f"air via {via}",
+            [f"our traffic HAS reached {resolved}: {via}",
              "it has not answered. That is the station, not the path -- "
              "another relay re-tests a leg we already proved",
              "silence here is relay-off, unattended, autoreply disabled, "
@@ -149,7 +158,39 @@ def plan(lm, target: str = "", target_grid: str = "",
             kind="note"))
         return steps
 
-    # ---- 1. direct, when it is a real option -----------------------
+    # ---- 1. CAN AN ANSWER GET BACK? --------------------------------
+    # A call with no return path can only ever confirm delivery: the
+    # target may reply and we will not decode it, so silence tells us
+    # nothing. This used to be a trailing note while the direct call
+    # still sorted first on being cheapest, and I followed that
+    # ordering into three one-way European calls on 2026-08-22 --
+    # F4HLO among them, where all 57 edges naming it were internet
+    # -sourced and we had never once decoded it ourselves.
+    #
+    # So the absence of a return path RANKS, it does not annotate. The
+    # sweep goes first because it is the action that FIXES the
+    # condition: every station that answers @ALLCALL demonstrably
+    # hears us, so its replies are exactly the return evidence the
+    # mesh is missing.
+    # An ANSWER outranks any inferred return route: it is not a path
+    # we computed, it is one that already carried. Band-scoped mesh
+    # evidence can be absent while the station is plainly workable --
+    # KN4UDS answered us at 00:52 and still read "no return path" here
+    # because that contact was on another band.
+    contact_possible = (ret is not None
+                        or history.answered_recently(resolved, _time.time()))
+    if not contact_possible:
+        steps.append(Step(
+            f"@ALLCALL QUERY CALL {resolved}?", T_SWEEP,
+            [f"NO RETURN PATH: nothing in the mesh can carry an answer "
+             f"from {resolved} back to us",
+             "a call now can only confirm DELIVERY -- if it replies we "
+             "will not hear it, so silence would prove nothing",
+             "this sweep builds the missing evidence: every responder "
+             "hears US by definition, and reports whether it hears the "
+             "target"],
+            kind="sweep", rank=0))
+
     direct_known = resolved in tn.deliver.get(tn.me, {})
     if direct_known:
         h = tn.deliver[tn.me][resolved]
@@ -157,7 +198,10 @@ def plan(lm, target: str = "", target_grid: str = "",
             f"{literal} SNR?", T_DIRECT,
             [f"{resolved} HEARS US: {h.source}, {h.age_s / 60:.0f} min "
              f"ago" + (f", {h.snr:+d} dB" if h.snr > -99 else ""),
-             "cheapest action that can produce a contact"]))
+             "cheapest action that can produce a contact"
+             if contact_possible else
+             "DELIVERY ONLY -- no return path, so silence proves "
+             "nothing"]))
     elif deliv is None:
         steps.append(Step(
             f"{literal} SNR?", T_DIRECT,
@@ -175,7 +219,20 @@ def plan(lm, target: str = "", target_grid: str = "",
              f"~{deliv.seconds:.0f} s, risk x{deliv.risk:.1f}"]
             + _fmt_route(deliv, tn)))
 
-    if ret and ret.relays:
+    if ret is not None and not ret.relays:
+        # A RELAY-LESS RETURN IS THE BEST CASE, not the absent one.
+        # This branch used to be `if ret and ret.relays`, so a direct
+        # return -- the answer coming straight back to us -- fell
+        # through to the "no return path known" note below and was
+        # reported as the exact opposite of what it is (found while
+        # planning 9A3SWO, 2026-08-22).
+        steps.append(Step(
+            "(direct return)", 0.0,
+            [f"RETURN is DIRECT: {' -> '.join(ret.path)}, "
+             f"~{ret.seconds:.0f} s -- its answer reaches us with no "
+             f"relay involved"]
+            + _fmt_route(ret, tn), kind="note"))
+    elif ret and ret.relays:
         same_path = deliv and list(reversed(ret.path)) == deliv.path
         steps.append(Step(
             "(return path)" if same_path else
@@ -202,7 +259,7 @@ def plan(lm, target: str = "", target_grid: str = "",
              "dominates unicast probing for 2+ candidates"],
             kind="sweep"))
 
-    steps.sort(key=lambda s: (s.kind == "note", s.seconds))
+    steps.sort(key=lambda s: (s.kind == "note", s.rank, s.seconds))
     return steps
 
 

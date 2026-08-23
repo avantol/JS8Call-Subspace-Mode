@@ -94,6 +94,17 @@ class SoundOutput : public QObject {
     // could read the NEW source and steal its first samples. See the
     // matching member in SoundInput.h.
     std::atomic<int> m_callbackDepth{0};
+
+    // [#174] LATE-CALLBACK PROBE, recorded on the realtime thread and
+    // reported off it. The callback used to qWarning() directly, which
+    // put disk I/O on the audio thread at exactly the moment that
+    // thread was already being preempted -- deepening the fault it
+    // exists to detect. Detection is worth keeping (the audio wedge
+    // was a real bug); the I/O is not. Counting is allocation-free
+    // and wait-free, so it is safe where logging never was.
+    std::atomic<int> m_lateCallbacks{0};
+    std::atomic<qint64> m_worstLateMs{0};
+    void reportLateCallbacks();   // GUI thread only
     // [AUDIO-PRIORITY 2026-06-16 build 286] miniaudio puts thread
     // priority on the context, not the device — so we own a context.
     // Init'd once per buildAndStart and torn down with the device.

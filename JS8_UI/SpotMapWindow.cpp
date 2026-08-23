@@ -17,6 +17,7 @@
 #include "SpotMapGeoData.h"
 
 #include <QCloseEvent>
+#include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
@@ -1537,6 +1538,24 @@ void SpotMapWindow::rebuildMapCache(float const R, float const scaleKm,
 // -------------------------------------------------------------------------
 
 void SpotMapWindow::requestReplot() {
+    // [paintperf 2026-08-23] THE DEBOUNCE MUST RESPECT WHAT A FRAME
+    // COSTS. A fixed 150 ms let the PSKR feed ask for ~7 repaints a
+    // second while each one took 615 ms: the GUI thread never finished
+    // before the next request arrived, so it was permanently painting
+    // and the window stalled for half a second at a time.
+    //
+    // Spend at most about half the thread on painting -- wait at least
+    // as long as the last frame took. On a fast machine or a quiet
+    // band this stays at the old 150 ms and nothing changes; on a
+    // dense map it backs off exactly as much as it must.
+    //
+    // Quality is NOT the thing to trade here: drawing the mesh aliased
+    // was visibly worse (operator, 2026-08-23), and this is a
+    // SCHEDULING problem, not a rendering one.
+    int const interval =
+        static_cast<int>(qBound(qint64{150}, m_lastPaintMs, qint64{1000}));
+    if (m_replotTimer.interval() != interval)
+        m_replotTimer.setInterval(interval);
     if (!m_replotTimer.isActive())
         m_replotTimer.start();
 }
@@ -1635,6 +1654,19 @@ void SpotMapWindow::redraw() {
     // requests a replot, so reopening is still immediate.
     if (!isVisible())
         return;
+    // [paintlog 2026-08-23] MEASURE, do not guess. The operator reports
+    // the redraw being slow to START and 32% CPU while dragging; those
+    // are different costs and only numbers separate them. Reports the
+    // GAP since the previous paint (how long we made him wait) and the
+    // paint's own duration, whenever either is bad enough to feel.
+    QElapsedTimer paintTimer;
+    paintTimer.start();
+    m_lastNoteCount = 0;      // per FRAME, not cumulative
+    m_lastGeoMs = 0;
+    static qint64 lastPaintEndMs = 0;
+    qint64 const gapMs =
+        lastPaintEndMs ? QDateTime::currentMSecsSinceEpoch() - lastPaintEndMs
+                       : 0;
     QSize const sz = size() * devicePixelRatio();
     if (sz.isEmpty())
         return;
@@ -1648,7 +1680,13 @@ void SpotMapWindow::redraw() {
     m_pixmap.fill(QColor(16, 16, 24)); // near-black chart background
 
     QPainter p{&m_pixmap};
-    p.setRenderHint(QPainter::Antialiasing);
+    // [paintperf 2026-08-23] MEASURED: build 1 ms, geo 0 ms, draw
+    // 127-627 ms -- the frame IS the rasterisation of ~4590 lines.
+    // Antialiasing multiplies that cost, and while the chart is
+    // sliding under the cursor nobody is inspecting edge quality. It
+    // comes back the instant the drag ends (mouseReleaseEvent forces
+    // that frame).
+    p.setRenderHint(QPainter::Antialiasing, !m_dragging);
     p.setRenderHint(QPainter::TextAntialiasing);
 
     int const w = width();
@@ -1704,6 +1742,8 @@ void SpotMapWindow::redraw() {
     // is, drawn or not, so a line never loses an endpoint because a
     // spot is hidden. That is the whole point of the grid bank (#164).
     QVector<Spot> render;
+    QElapsedTimer buildTimer;   // [paintlog] render-set cost
+    buildTimer.start();
     QHash<QString, QPointF> allPos;   // call -> (azimuth, distance)
     {
         QString const myUp = m_myCall.toUpper();
@@ -1717,12 +1757,19 @@ void SpotMapWindow::redraw() {
         auto const note = [&](QString const &callRaw, bool pskrEv,
                               QDateTime const &when,
                               int snrToMe) -> Spot * {
-            QString const call = callRaw.toUpper();
+            // [paintperf 2026-08-23] NO toUpper() HERE. Both callers
+            // pass keys straight out of m_hearingByBand, which are
+            // canonical uppercase already ([#164] "UPPERCASE at the
+            // door"), so this allocated a fresh QString 5513 times a
+            // frame to produce a string it had been handed. Measured on
+            // the HP650: the whole 95-170 ms frame was this pass.
+            QString const &call = callRaw;
             // [selfhop] I am the triangle, never a dot -- from ANY
             // source, so nothing clickable exists at my position.
             if (call.isEmpty() ||
                 call.compare(myUp, Qt::CaseInsensitive) == 0)
                 return nullptr;
+            ++m_lastNoteCount;
             Spot &r = reg[call];
             if (r.receiverCall.isEmpty()) {
                 r.receiverCall = call;
@@ -1735,16 +1782,33 @@ void SpotMapWindow::redraw() {
             // That removes the old precedence rule (first placement
             // wins unless posAuth) because with a single source there
             // are no competing placements to rank.
-            QString const authGrid = m_gridByCall.value(call);
-            if (!authGrid.isEmpty() && m_myGrid.size() >= 4) {
-                auto const v = Geodesic::vector(m_myGrid, authGrid);
-                if (v.azimuth().isValid() && v.distance().isValid()) {
-                    r.receiverGrid = authGrid;
-                    r.azimuth = static_cast<float>(v.azimuth());
-                    r.distance = static_cast<float>(v.distance());
-                    allPos.insert(call,
-                                  QPointF{static_cast<qreal>(r.azimuth),
-                                          static_cast<qreal>(r.distance)});
+            // ONE RESOLUTION PER STATION PER PAINT. note() runs per
+            // EDGE, so a station with ten edges used to pay ten times.
+            // Geodesic::vector is cached, but the cache is behind a
+            // static QMutex and keyed by a constructed QString, so at
+            // ~1700 edges that was 1700 mutex-locked lookups every
+            // repaint -- and dragging repaints continuously by design.
+            // Measured effect: the map went janky at 32% CPU while
+            // panning (operator, 2026-08-23). allPos already holds the
+            // answer, so consult it before computing.
+            if (auto const seen = allPos.constFind(call);
+                seen != allPos.constEnd()) {
+                r.azimuth = static_cast<float>(seen->x());
+                r.distance = static_cast<float>(seen->y());
+                if (r.receiverGrid.isEmpty())
+                    r.receiverGrid = m_gridByCall.value(call);
+            } else if (m_myGrid.size() >= 4) {
+                QString const authGrid = m_gridByCall.value(call);
+                if (!authGrid.isEmpty()) {
+                    auto const v = Geodesic::vector(m_myGrid, authGrid);
+                    if (v.azimuth().isValid() && v.distance().isValid()) {
+                        r.receiverGrid = authGrid;
+                        r.azimuth = static_cast<float>(v.azimuth());
+                        r.distance = static_cast<float>(v.distance());
+                        allPos.insert(call,
+                                      QPointF{static_cast<qreal>(r.azimuth),
+                                              static_cast<qreal>(r.distance)});
+                    }
                 }
             }
             if (when.isValid() && (!r.when.isValid() || when > r.when))
@@ -1752,9 +1816,15 @@ void SpotMapWindow::redraw() {
             if (!pskrEv && when.isValid() &&
                 (!r.radioWhen.isValid() || when > r.radioWhen))
                 r.radioWhen = when;
-            // [snrwho] A dB value exists ONLY as a report of MY signal.
-            if (snrToMe > -99)
+            // [snrwho] A dB value exists ONLY as a report of MY
+            // signal, and it is only as fresh as the edge it rode in
+            // on -- so the two travel together.
+            if (snrToMe > -99) {
                 r.snr = snrToMe;
+                if (when.isValid() &&
+                    (!r.reportsMeWhen.isValid() || when > r.reportsMeWhen))
+                    r.reportsMeWhen = when;
+            }
             return &r;
         };
 
@@ -1778,6 +1848,8 @@ void SpotMapWindow::redraw() {
             // to nothing (operator, 2026-08-21). Presence still
             // REFRESHES a station the edges below register; it just
             // cannot conjure one on its own.
+            QDateTime hearerAny, hearerRadio;
+            int hearerSnr = -99;
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
                 bool const edgePskr =
@@ -1796,12 +1868,55 @@ void SpotMapWindow::redraw() {
                 if (!m_viewAll && ed.key() != myUp)
                     continue;
                 // The hearer is evidenced by this edge too.
-                note(h.key(), edgePskr, ed.value().when,
-                     h.value().snr);
+                //
+                // [snrwho] THE dB FIGURE BELONGS TO THE X->ME EDGE,
+                // not to the station. HearingEntry::snr is a
+                // station-level value that never ages, so passing it
+                // on every edge made the map assert a relationship it
+                // would not draw: W3NIC showed a dot, "hears me at
+                // -10" and "4 min ago" while its WM8Q edge was 20 min
+                // old and correctly filtered out of a 15-min view
+                // (operator, 2026-08-23). The dot was fresh on OTHER
+                // evidence; only the report-of-me was stale.
+                //
+                // So the report only travels on the edge that carries
+                // it. Every other edge contributes presence and age,
+                // never an SNR -- which is the same rule the MY view
+                // already applies to ageing.
+                // [paintperf 2026-08-23] THE HEARER IS NOTED ONCE,
+                // AFTER THIS LOOP. It is the same station on every
+                // edge, so calling note() per edge did the whole
+                // register-and-place dance 2589 times to advance one
+                // age -- 5513 note() calls for 2772 segments, and on
+                // the HP650 that pass WAS the frame (95-170 ms, with
+                // the geography at 0 ms). Accumulate here, apply once.
+                //
+                // Two clocks, because they mean different things: the
+                // freshest evidence of ANY kind sets `when`, and the
+                // freshest RADIO evidence sets radioWhen ([radioage]).
+                // Collapsing them would let an internet refresh keep a
+                // station alive with the PSKR toggle off.
+                if (!hearerAny.isValid() || ed.value().when > hearerAny)
+                    hearerAny = ed.value().when;
+                if (!edgePskr &&
+                    (!hearerRadio.isValid() || ed.value().when > hearerRadio))
+                    hearerRadio = ed.value().when;
+                if (ed.key() == myUp)
+                    hearerSnr = h.value().snr;
                 if (m_viewAll) // heard-endpoints: All view only
                     note(ed.key(), edgePskr, ed.value().when, -99);
             }
+            // Flush the hearer: at most two calls instead of one per
+            // edge. The radio pass runs FIRST so `when` still ends up
+            // at the freshest of either, while radioWhen only ever
+            // sees on-air evidence.
+            if (hearerRadio.isValid())
+                note(h.key(), /*pskrEv=*/false, hearerRadio, hearerSnr);
+            if (hearerAny.isValid() && hearerAny != hearerRadio)
+                note(h.key(), /*pskrEv=*/true, hearerAny, hearerSnr);
         }
+
+        m_lastBuildMs = buildTimer.elapsed();
 
         // ---- 3. ONE visibility rule ----------------------------------
         auto const &infoBand = m_infoByBand.value(m_currentBand);
@@ -1941,7 +2056,14 @@ void SpotMapWindow::redraw() {
     // (field: "failed to re-scale, many calls off-screen" once,
     // unreproducible — this names pan vs manual-mode vs fit next
     // time). Rate-limited to changes; view switches are rare.
-    {
+    // NOT WHILE DRAGGING. Pan is part of the key, so every drag frame
+    // differed and logged -- 680 warning-level lines with an
+    // 11-argument QString built EVERY frame whether or not it was
+    // logged, plus the disk write, all on the GUI thread during
+    // exactly the repaints we just spent an hour making fast. The
+    // frame after release still records the final pan, which is the
+    // state actually worth having (2026-08-23).
+    if (!m_dragging) {
         static QString lastViewLog;
         QString const cur =
             QStringLiteral("view=%1 mode=%2 scale=%3 pan=%4,%5 "
@@ -1987,12 +2109,24 @@ void SpotMapWindow::redraw() {
         niceCeil(scaleKm * static_cast<float>(maxCornerPx) / R * 1.05f),
         19000.0f);
     rebuildMapCache(R, scaleKm, cutKm);
+    // [paintlog] Attribute the frame. The coastline walk is the one
+    // cost that does NOT scale with traffic, so it is invisible in any
+    // "too many lines" theory -- and culling lines barely moved a slow
+    // box, which is what pointed here.
+    QElapsedTimer geoTimer;
+    geoTimer.start();
     p.save();
     p.translate(center);
     p.setPen(QPen{QColor(70, 100, 80), 1}); // muted land outline
-    for (QPolygonF const &poly : m_mapCache)
+    int geoPts = 0;
+    for (QPolygonF const &poly : m_mapCache) {
+        geoPts += poly.size();
         p.drawPolyline(poly);
+    }
     p.restore();
+    m_lastGeoMs = geoTimer.elapsed();
+    m_lastGeoPts = geoPts;
+    m_lastGeoPolys = static_cast<int>(m_mapCache.size());
 
     // [scalebar 2026-08-15] Outer boundary circle, azimuth ticks and
     // compass dropped (operator) — scale now reads from the bar above
@@ -2029,18 +2163,9 @@ void SpotMapWindow::redraw() {
         return qRound(scaleKm * 0.621371f);
     };
 
-    // Center marker (my station).
-    // [hometri] My station: small point-up triangle (TODO #145) —
-    // visually distinct from spot dots at any zoom, and the anchor
-    // the relay path grows from.
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor(230, 230, 240));
-    {
-        QPolygonF tri; // smaller (operator, 2026-08-14)
-        tri << center + QPointF{0.0, -4.5} << center + QPointF{3.8, 3.0}
-            << center + QPointF{-3.8, 3.0};
-        p.drawPolygon(tri);
-    }
+    // [hometri] My station is drawn LAST, at the end of this function
+    // -- see the triangle block down there. It used to paint here,
+    // before the dots and lines, so a busy centre buried it.
 
     // Dots render oldest first so the newest draw on top (the sort
     // happens AFTER the anchor pass below — audit item 12: anchors
@@ -2217,19 +2342,50 @@ void SpotMapWindow::redraw() {
                                    mix(sparse.alpha(), dense.alpha()));
         }
 
+        // [paintperf 2026-08-23] MEASURED: 5785 segments per frame and
+        // 126-791 ms to paint one, with a 3-30 ms gap before it -- so
+        // the frame itself is the whole cost, not any delay reaching
+        // it. Two things follow.
+        //
+        // CULL. Most of those segments are wholly outside the widget
+        // at any real zoom, and Qt still transforms and clips every
+        // one. A rectangle test is far cheaper than the clip.
+        QRectF const visible{0, 0, static_cast<qreal>(w),
+                             static_cast<qreal>(h)};
+        auto const onScreen = [&visible](Seg const &sg) {
+            return QRectF(sg.heard, sg.hearer)
+                .normalized()
+                .adjusted(-24, -24, 24, 24)
+                .intersects(visible);
+        };
+        // NO ARROWHEADS WHILE DRAGGING. Each head is a QPainterPath
+        // built and filled per segment -- thousands of them per frame,
+        // for a direction cue nobody reads mid-drag. They come back
+        // the moment the drag ends.
+        bool const heads = !m_dragging;
         auto const drawGroup = [&](QVector<Seg> const &segs,
                                    QPen const &pen) {
             if (segs.isEmpty())
                 return;
             p.setPen(pen);
             p.setBrush(Qt::NoBrush);
+            // ONE drawLines() FOR THE WHOLE GROUP. Thousands of
+            // individual drawLine() calls each re-enter the paint
+            // engine; the batched form lets it set up once.
+            QVector<QLineF> batch;
+            batch.reserve(segs.size());
             for (Seg const &sg : segs)
-                p.drawLine(sg.heard, sg.hearer);
+                if (onScreen(sg))
+                    batch.append(QLineF{sg.heard, sg.hearer});
+            if (!batch.isEmpty())
+                p.drawLines(batch);
+            if (!heads)
+                return;
             // Heads share one brush/pen state for the whole group.
             p.setBrush(pen.color());
             p.setPen(Qt::NoPen);
             for (Seg const &sg : segs) {
-                if (!sg.head)
+                if (!sg.head || !onScreen(sg))
                     continue;
                 double const len = QLineF(sg.heard, sg.hearer).length();
                 if (len < 24.0)
@@ -2265,7 +2421,8 @@ void SpotMapWindow::redraw() {
         bool const lift = pskrCoverage > 0.0 && !hoverUp.isEmpty();
         if (!lift) {
             drawGroup(segPskr, QPen{pskrLineColor, 1}); // internet under
-            drawGroup(segRadio, penRadio); // on-air over ([hearlines])
+            m_lastSegCount = segPskr.size() + segRadio.size();
+        drawGroup(segRadio, penRadio); // on-air over ([hearlines])
         } else {
             QVector<Seg> dim, lit;
             for (Seg const &s : segPskr)
@@ -2589,7 +2746,74 @@ void SpotMapWindow::redraw() {
             p.setPen(pen);
             for (int i = 1; i < pts.size(); ++i)
                 p.drawLine(pts.at(i - 1), pts.at(i));
+
+            // [attemptviz] NAME EVERY HOP, always -- the same rule the
+            // relay builder follows. An attempt is about specific
+            // stations, so a path you cannot read the stations off is
+            // half a picture; and it must not depend on the callsign
+            // toggle, because the operator asking "who is that hop?"
+            // is exactly when the toggle is off (operator,
+            // 2026-08-22). Drawn in the path's own colour on a dark
+            // pill so it stays legible over dots and lines.
+            {
+                QFont f = p.font();
+                f.setBold(true);
+                p.setFont(f);
+                QFontMetricsF const fm{f};
+                for (int i = 1; i < pts.size() && i <= a.path.size(); ++i) {
+                    QString const &name = a.path.at(i - 1);
+                    QPointF const at = pts.at(i);
+                    qreal const tw = fm.horizontalAdvance(name);
+                    QRectF const pill{at.x() + 7.0, at.y() - 9.0,
+                                      tw + 8.0, 18.0};
+                    p.setPen(Qt::NoPen);
+                    p.setBrush(QColor(16, 16, 24, 205));
+                    p.drawRoundedRect(pill, 3.0, 3.0);
+                    p.setBrush(Qt::NoBrush);
+                    p.setPen(pen.color());
+                    p.drawText(pill, Qt::AlignCenter, name);
+                }
+                p.setPen(pen);
+            }
         }
+    }
+
+    // [hometri] MY STATION, LAST. Everything else has been painted, so
+    // nothing can bury it -- at greyline the centre is the densest part
+    // of the chart and the triangle was disappearing under dots and
+    // lines (operator, 2026-08-23). It also sits over the origin of
+    // every attempt path, which is where those paths start anyway.
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(230, 230, 240));
+    {
+        QPolygonF tri; // smaller (operator, 2026-08-14)
+        tri << center + QPointF{0.0, -4.5} << center + QPointF{3.8, 3.0}
+            << center + QPointF{-3.8, 3.0};
+        p.drawPolygon(tri);
+    }
+
+    {
+        qint64 const tookMs = paintTimer.elapsed();
+        m_lastPaintMs = tookMs;   // feeds the adaptive debounce
+        lastPaintEndMs = QDateTime::currentMSecsSinceEpoch();
+        // Only a slow FRAME is interesting. The gap is reported for
+        // context but must not TRIGGER, or an idle map logs forever --
+        // long gaps are just nothing happening (2026-08-23: every line
+        // in the first run fired on an idle gap while frames were 3 ms).
+        // 150 ms, not 40. After the adaptive-debounce fix a normal
+        // frame is 55-102 ms on the slow box, so a 40 ms threshold
+        // logged every single one -- turning the watchdog back into
+        // the hot-path noise it was meant to diagnose. This now fires
+        // only for a frame bad enough to be felt.
+        if (tookMs > 150)
+            qCWarning(mqttclient_js8)
+                << "[PAINT] took" << tookMs << "ms (geo" << m_lastGeoMs
+                << "ms /" << m_lastGeoPts << "pts /" << m_lastGeoPolys
+                << "polys, build" << m_lastBuildMs << "ms, draw"
+                << (tookMs - m_lastGeoMs - m_lastBuildMs)
+                << "ms), gap"
+                << gapMs << "ms, notes" << m_lastNoteCount
+                << "segs" << m_lastSegCount;
     }
 
     update();
@@ -2775,6 +2999,16 @@ void SpotMapWindow::noteReply(QString const &from) {
     }
 }
 
+// [attemptviz] See the header: the caller declares failure.
+void SpotMapWindow::clearAttempts() {
+    int const before = m_attempts.size();
+    for (int i = m_attempts.size() - 1; i >= 0; --i)
+        if (!m_attempts.at(i).replied)
+            m_attempts.remove(i);
+    if (m_attempts.size() != before)
+        redraw();
+}
+
 // [attemptviz] Expire finished attempts and keep the dashes moving.
 // The timer stops itself when nothing is live, so an idle map costs
 // nothing.
@@ -2875,10 +3109,19 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
             // No-report spots carry no SNR line at all — the
             // hollow circle already tells the story (operator
             // 2026-08-15).
-            QString const snrPart =
-                reportedToMe > -99
-                    ? tr("hears me at %1 dB · ").arg(reportedToMe)
-                    : QString();
+            // The report carries its OWN age. Showing the station's
+            // last-seen next to it presented a stale report as current.
+            QString snrPart;
+            if (reportedToMe > -99) {
+                snrPart = tr("hears me at %1 dB").arg(reportedToMe);
+                if (best->spot.reportsMeWhen.isValid()) {
+                    qint64 const rAge =
+                        best->spot.reportsMeWhen.secsTo(
+                            DriftingDateTime::currentDateTimeUtc());
+                    snrPart += tr(" (%1 min ago)").arg(rAge / 60);
+                }
+                snrPart += QStringLiteral(" · ");
+            }
             tip = tr("%1 (%2)\n%3%4 %5 · %6 min ago")
                       .arg(best->spot.receiverCall,
                            best->spot.receiverGrid, snrPart)
@@ -3024,6 +3267,15 @@ void SpotMapWindow::mouseReleaseEvent(QMouseEvent *event) {
         if (m_dragging) {
             m_dragging = false;
             unsetCursor();
+            // Arrowheads are suppressed DURING a drag for speed, so the
+            // frame that restores them has to be asked for explicitly.
+            // Without this they returned only on the next natural
+            // repaint -- which on a quiet band is seconds away, and
+            // reads as the map being stuck (operator, 2026-08-23:
+            // "excessive delay before arrows redrawn"). An
+            // optimisation that defers work owes the frame that
+            // finishes it.
+            redraw();
         } else if (m_maybeDrag) {
             // [BUILD 336 TODO #96 first slice] Left-click a spot dot
             // → emit its callsign. Same nearest-within-radius

@@ -94,17 +94,44 @@ def delivered_relays(target: str, now: float) -> set:
             if now - t < DELIVERY_TTL_S}
 
 
-def reached_but_silent(target: str, now: float) -> bool:
-    """Delivery proven, target never answered, and still recent.
+def reached_but_silent(target: str, now: float,
+                       hears_us: bool = False) -> bool:
+    """Reach is PROVEN, the target has not answered, and it is recent.
 
-    This is the state that deserves 'stop calling and watch' rather
-    than another relay: the path works and the station is the variable.
+    Two independent proofs of reach, and the second was missing:
+
+      a relay was seen FORWARDING to the target   -- delivered_relays()
+      the target itself REPORTS HEARING US        -- hears_us
+
+    The second is the stronger of the two. A relay forward only shows
+    our traffic left in the right direction; a first-hand "target hears
+    us at +3" says it arrived. Counting only relay forwards made N7ER
+    invisible to this check (2026-08-22): called twice, silent twice,
+    reporting us at +3 dB the whole time, while the earlier relay proof
+    had aged out -- so the planner kept recommending it.
+
+    Caller supplies `hears_us` because the live mesh, not this file,
+    knows who currently hears us.
     """
     e = _load().get(base(target))
     if not e:
         return False
-    if not delivered_relays(target, now):
+    if not (hears_us or delivered_relays(target, now)):
         return False
     if e.get("answered_at", 0.0) > e.get("silent_at", 0.0):
         return False                      # it has answered since
     return (now - e.get("silent_at", 0.0)) < SILENT_TTL_S
+
+
+# An answer is the strongest proof a return path exists -- stronger than
+# any inferred route, because it already happened. Kept short: paths
+# close, and a contact an hour ago says little about now.
+ANSWERED_TTL_S = 45 * 60
+
+
+def answered_recently(target: str, now: float) -> bool:
+    """Did this station reply to us within the window?"""
+    e = _load().get(base(target))
+    if not e:
+        return False
+    return (now - e.get("answered_at", 0.0)) < ANSWERED_TTL_S

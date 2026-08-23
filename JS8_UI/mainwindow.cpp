@@ -5090,14 +5090,31 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
     // autoreplies ("KG7RXU YES -24 (36M)") are directed at a callsign
     // too, and without this they painted a countdown to a station we
     // were not calling.
-    if (!trimmed.contains('?'))
-        return;
     QString const first = trimmed.section(' ', 0, 0);
+    // A QUESTION, or a RELAY CHAIN. Questions are things we wait on an
+    // answer for. A relay is worth the same treatment whatever its
+    // payload -- the operator built a path by hand and wants to watch
+    // it run, even open-loop with no reply expected (operator,
+    // 2026-08-22). Our own autoreplies are directed at a callsign but
+    // are neither: they carry no '?' and no '>', which is what keeps
+    // them from painting a countdown to a station we are not calling.
+    if (!trimmed.contains('?') && !first.contains('>'))
+        return;
     if (first.isEmpty() || first.startsWith('@') || first.contains(':'))
         return;
     QStringList const chain = first.split('>', Qt::SkipEmptyParts);
     if (chain.isEmpty() || chain.first().startsWith('@'))
         return;
+    // EVERY HOP MUST BE A CALLSIGN. The leading token was taken on
+    // faith, so any free text carrying a '?' registered as an attempt:
+    // typing "WHAT'S ...?" created a path to a station named "WHAT'S"
+    // and, because a new attempt supersedes outstanding ones, wiped
+    // the real relay line that was running (operator's own typing,
+    // 2026-08-22 -- caught in the ATTEMPTS dump, which is what that
+    // dump is for).
+    for (QString const &hop : chain)
+        if (!Radio::is_callsign(hop))
+            return;
     // 60 s per relay hop, MEASURED 2026-08-22 on
     // WM8Q>KJ7VWV>KB7ITU>KL7UT. Before frames exist, assume two.
     int const frames = txFrames > 0 ? txFrames : 2;
