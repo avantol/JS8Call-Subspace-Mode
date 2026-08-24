@@ -4562,7 +4562,18 @@ void UI_Constructor::stopTx() {
 
         // [#161 querycall] Arm the pending-query state the moment
         // OUR query finishes airing (the reply window starts here).
-        captureOutgoingCallQuery(dt.message());
+        //
+        // THE ASSEMBLED MESSAGE, not `dt.message()` -- which is ONE
+        // FRAME. "@ALLCALL QUERY CALL KP4GBF?" goes out as three
+        // frames ("WM8Q: @ALLCALL QUERY CALL" / "KP4GBF?" / "55S") and
+        // not one of them contains a complete query, so the match
+        // could never succeed and the harvest has never armed once in
+        // 332 broadcasts (found 2026-08-24, TODO #178). Falls back to
+        // the frame if the accumulator is empty, so a path that does
+        // not accumulate is no worse off than before.
+        captureOutgoingCallQuery(m_totalTxMessage.isEmpty()
+                                     ? dt.message()
+                                     : m_totalTxMessage);
 
         // Notify API clients that the queued transmission block finished.
         sendNetworkMessage("TX.COMPLETE", dt.message(),
@@ -7342,6 +7353,20 @@ void UI_Constructor::abortCapabilityNegotiation(char const *why) {
 //   "@ALLCALL QUERY CALL W1AW?"          wildcard askee
 void UI_Constructor::captureOutgoingCallQuery(QString const &sentMsg) {
     QString msg = sentMsg.toUpper().simplified();
+    // STRIP OUR OWN CALLSIGN PREFIX. Everything we transmit carries
+    // "<MYCALL>: " in front, and the pattern below is anchored at ^,
+    // so it matched nothing we have ever actually sent:
+    //
+    //   "WM8Q: @ALLCALL QUERY CALL KP4GBF?"  -> no match
+    //   "@ALLCALL QUERY CALL KP4GBF?"        -> match
+    //
+    // Anchoring is right -- un-anchoring would match mid-string in
+    // forms nobody has enumerated -- so the prefix comes off instead,
+    // the same way the RX side treats d.text as the BODY only.
+    static QRegularExpression const kSelfPrefixRe{
+        QStringLiteral(R"(^[A-Z0-9/]+:\s*)")};
+    if (auto const pm = kSelfPrefixRe.match(msg); pm.hasMatch())
+        msg = msg.mid(pm.capturedLength()).trimmed();
     // Both relay grammars: heads with a bare final addressee
     // ("A> B QUERY CALL X?") and heads-only with a trailing '>'
     // ("A>B> QUERY CALL X?" — last head is the executor). The

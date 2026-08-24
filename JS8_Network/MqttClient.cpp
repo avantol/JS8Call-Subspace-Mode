@@ -43,7 +43,7 @@ void MqttClient::setTopics(QStringList const &topicFilters) {
     // clean reconnect — simplest correct behavior for a rare event
     // (callsign change).
     if (m_started && m_state != State::Idle) {
-        qCDebug(mqttclient_js8) << "topics changed; reconnecting";
+        qCWarning(mqttclient_js8) << "[MQTT] topics changed; reconnecting";
         scheduleReconnect(QStringLiteral("topics changed"));
     }
 }
@@ -112,7 +112,16 @@ void MqttClient::setState(State const state, QString const &detail) {
     }
     if (!detail.isEmpty())
         text += QStringLiteral(" (%1)").arg(detail);
-    qCDebug(mqttclient_js8) << "state:" << text;
+    // [mqttstate 2026-08-24] WARNING, not debug. On 2026-08-23 the
+    // internet feed died at 21:35:43 and the app ran on for another two
+    // and a half hours with radio decodes working normally and the PSKR
+    // layer quietly dead. Nineteen hours of diag log contained NOT ONE
+    // line from this client -- not even its connect at startup -- so
+    // there was no way to tell a dead feed from a quiet band, either in
+    // the log or on the map. These transitions are rare by nature
+    // (connect, drop, backoff, keepalive timeout), so they cost nothing
+    // to record and they are the only evidence that the feed is alive.
+    qCWarning(mqttclient_js8) << "[MQTT] state:" << text;
     Q_EMIT stateChanged(text);
 }
 
@@ -189,10 +198,25 @@ void MqttClient::onDisconnected() {
 void MqttClient::onKeepaliveTick() {
     if (m_state != State::Up || !m_socket)
         return;
+    // [mqttheartbeat 2026-08-24] Say how many spots actually arrived.
+    // A socket that stays up while delivering nothing produces no state
+    // change, so without this a dead feed reads exactly like a quiet
+    // band -- which is what happened on 2026-08-23: spots stopped at
+    // 21:35:43 and nothing in nineteen hours of log said so. Once a
+    // minute, so it is cheap, and a run of zeroes is the symptom.
+    qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (nowMs - m_lastHeartbeatMs >= 60000) {
+        if (m_lastHeartbeatMs)
+            qCWarning(mqttclient_js8).nospace()
+                << "[MQTT] " << m_pubCount << " spots in the last "
+                << ((nowMs - m_lastHeartbeatMs) / 1000) << "s";
+        m_lastHeartbeatMs = nowMs;
+        m_pubCount = 0;
+    }
     // Dead-connection detection: any inbound traffic counts as life.
     if (QDateTime::currentMSecsSinceEpoch() - m_lastInboundMs
         > DEAD_AFTER_MS) {
-        qCDebug(mqttclient_js8) << "keepalive timeout";
+        qCWarning(mqttclient_js8) << "[MQTT] keepalive timeout";
         scheduleReconnect(QStringLiteral("keepalive timeout"));
         return;
     }
@@ -371,6 +395,7 @@ void MqttClient::handlePacket(quint8 const firstByte, QByteArray const &body) {
             offset += 2;
         if (offset > body.size())
             return;
+        ++m_pubCount;                       // [mqttheartbeat]
         Q_EMIT messageReceived(topic, body.mid(offset));
         break;
     }

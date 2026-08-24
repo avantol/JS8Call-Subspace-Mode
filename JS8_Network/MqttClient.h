@@ -46,6 +46,16 @@ class MqttClient final : public QObject {
     void messageReceived(QString const &topic, QByteArray const &payload);
     void stateChanged(QString const &humanReadable);
 
+  private:
+    // [mqttheartbeat 2026-08-24] A DEAD FEED MUST NOT LOOK LIKE A QUIET
+    // ONE. State changes alone do not catch this: on 2026-08-23 the
+    // spots stopped at 21:35:43 and the app ran two and a half hours
+    // more with the radio decoding normally, so a socket that stays up
+    // while delivering nothing produces no transition to log. Counting
+    // what actually arrives is the only thing that distinguishes them.
+    int m_pubCount{0};
+    qint64 m_lastHeartbeatMs{0};
+
   private slots:
     void onConnected();
     void onReadyRead();

@@ -957,12 +957,12 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
             // field could only restate a subset of it -- and in
             // practice it went out empty on every spot. Consumers ask
             // HEARING.
-            m["PSKR"] = sp.pskr;
+            // [dumphonest] No PSKR / RADIO_WHEN here: this list does
+            // not compute them, and emitting the defaults told readers
+            // the opposite of the truth. See mk() above.
             m["RX_ONLY"] = sp.rxOnly;
             m["MONITOR_ONLY"] = sp.monitorOnly;
             m["REPORTS_ME"] = sp.reportsMe;
-            putTime(m, QStringLiteral("RADIO_WHEN"),
-                    QStringLiteral("RADIO_AGE_S"), sp.radioWhen, now);
             out.append(m);
         }
         return out;
@@ -1016,6 +1016,15 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
             sp.when = wh;
             sp.reportsMe = reportsMe;
             sp.monitorOnly = (snr <= -99);
+            // [dumphonest] radioWhen and pskr are NOT set here, and a
+            // reader cannot tell that from the output: every entry came
+            // back RADIO_WHEN=null, PSKR=false, which reads as "every
+            // station is internet-only AND none of them is a PSKR spot"
+            // -- two contradictory claims, both artefacts of the
+            // default. It cost two wrong diagnoses on 2026-08-24. The
+            // classification lives in the render pass, so rather than
+            // duplicate it here (and risk the two disagreeing), the
+            // fields are omitted from the dump entirely.
             return sp;
         };
         for (auto h = hzD.constBegin(); h != hzD.constEnd(); ++h) {
@@ -1742,6 +1751,16 @@ void SpotMapWindow::redraw() {
     // is, drawn or not, so a line never loses an endpoint because a
     // spot is hidden. That is the whole point of the grid bank (#164).
     QVector<Spot> render;
+    // [dotlog] WHY A DOT IS NOT THERE. Operator, 2026-08-24: "not only
+    // the line from PSKR data didn't show, the dots from PSKR data
+    // didn't show either." The dots are upstream of the lines, so any
+    // explanation that starts at the line layer is already downstream
+    // of the fault. Every gate a station passes through on its way to
+    // being drawn is counted here, split by evidence class, so the log
+    // names the one that emptied the map instead of leaving it to be
+    // inferred.
+    int dotSeen = 0, dotPskr = 0, dotHidden = 0, dotNoClock = 0,
+        dotOldPskr = 0, dotOldRadio = 0, dotDrawnPskr = 0;
     QElapsedTimer buildTimer;   // [paintlog] render-set cost
     buildTimer.start();
     QHash<QString, QPointF> allPos;   // call -> (azimuth, distance)
@@ -1940,6 +1959,9 @@ void SpotMapWindow::redraw() {
             r.pskr = !r.radioWhen.isValid();
             // [snrwho][allhollow] Hollow unless a report of MY signal.
             r.monitorOnly = (r.snr <= -99);
+            ++dotSeen;                                   // [dotlog]
+            if (r.pskr)
+                ++dotPskr;                               // [dotlog]
             // [pskrtoggle] EVIDENCE CLASS FIRST. An internet-only
             // station is not shown at all while PSKR spots are hidden
             // -- and therefore draws no yellow line, which is the
@@ -1954,12 +1976,22 @@ void SpotMapWindow::redraw() {
             // The old code caught this in a separate spot filter that
             // the unified pass replaced; the rule survives, now stated
             // once, here.
-            if (!m_showPskr && r.pskr)
+            if (!m_showPskr && r.pskr) {
+                ++dotHidden;                             // [dotlog]
                 continue;
+            }
             // [radioage] THE clock, for what remains.
             QDateTime const eff = effectiveWhen(r);
-            if (!eff.isValid() || eff < cutoff)
+            if (!eff.isValid()) {
+                ++dotNoClock;                            // [dotlog]
                 continue;
+            }
+            if (eff < cutoff) {
+                (r.pskr ? dotOldPskr : dotOldRadio)++;   // [dotlog]
+                continue;
+            }
+            if (r.pskr)
+                ++dotDrawnPskr;                          // [dotlog]
             render.append(r);
         }
 
@@ -2216,6 +2248,16 @@ void SpotMapWindow::redraw() {
     std::sort(ordered.begin(), ordered.end(),
               [](Spot const &a, Spot const &b) { return a.when < b.when; });
 
+    qCWarning(mqttclient_js8).nospace()
+        << "[DOTLOG] stations=" << dotSeen << " ofWhichPskr=" << dotPskr
+        << " | dropped: toggleHid=" << dotHidden
+        << " noClock=" << dotNoClock
+        << " tooOldPskr=" << dotOldPskr
+        << " tooOldRadio=" << dotOldRadio
+        << " | drawn=" << render.size()
+        << " ofWhichPskr=" << dotDrawnPskr
+        << " | window=" << m_viewWindowSecs << "s showPskr=" << m_showPskr;
+
     // [inkdensity 2026-08-21] ADAPTIVE PSKR LINE COLOUR.
     // At greyline the internet mesh is ~1400 segments and solid yellow
     // reads as a hairball. PSKReporter displays this same density
@@ -2239,6 +2281,19 @@ void SpotMapWindow::redraw() {
     double pskrCoverage = 0.0;
     if (m_showConnections) {
         auto const cutoffH = now.addSecs(-m_viewWindowSecs);
+        // [linelog] WHY A LINE IS NOT THERE. Operator, 2026-08-24: with
+        // Show-all and Add-PSKR both on, no yellow or grey lines at any
+        // window -- then minutes later they were all back. The layer is
+        // gated THREE times over and none of it was visible: the edge
+        // must be fresher than the window, and BOTH endpoints must be
+        // plotted, which needs each station's own spot fresher than the
+        // same window. Internet edges arrive in bursts (2 in one minute
+        // against 324 in another), so in a lull at a short window all
+        // three rarely hold at once and only the radio mesh survives --
+        // we decode those stations every cycle, so their spots never go
+        // stale. One line per paint says which gate did it.
+        int seenPskr = 0, seenRadio = 0, oldEdge = 0, noEnd = 0,
+            hidPskr = 0, drewPskr = 0, drewRadio = 0;
         QPen const penRadio{QColor(90, 160, 255, 210), 1};   // on-air
         auto const &hearers = m_hearingByBand.value(m_currentBand);
         QString const myUp = m_myCall.toUpper();
@@ -2259,14 +2314,19 @@ void SpotMapWindow::redraw() {
         for (auto h = hearers.constBegin(); h != hearers.constEnd(); ++h) {
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
-                if (ed.value().when < cutoffH)
-                    continue;
                 bool const isPskr =
                     ed.value().source == QStringLiteral("mqtt");
+                (isPskr ? seenPskr : seenRadio)++;   // [linelog]
+                if (ed.value().when < cutoffH) {
+                    ++oldEdge;                       // [linelog]
+                    continue;
+                }
                 // [pskrtoggle] Internet lines are exactly what the
                 // button hides. Radio lines are never affected by it.
-                if (isPskr && !m_showPskr)
+                if (isPskr && !m_showPskr) {
+                    ++hidPskr;                       // [linelog]
                     continue;
+                }
                 QPointF from, to;
                 bool head = false;
                 if (!m_viewAll) {
@@ -2280,8 +2340,11 @@ void SpotMapWindow::redraw() {
                     to = center;
                 } else {
                     if (!posByCall.contains(h.key()) ||
-                        !posByCall.contains(ed.key()))
+                        !posByCall.contains(ed.key())) {
+                        ++noEnd;                     // [linelog]
                         continue;
+                    }
+                    (isPskr ? drewPskr : drewRadio)++;   // [linelog]
                     // [heararrow] h.key() HEARS ed.key(), so the head
                     // points at h.key(): an edge A->B says traffic
                     // flows B to A, and routing reads that direction.
@@ -2297,6 +2360,20 @@ void SpotMapWindow::redraw() {
                     .append(Seg{from, to, head, touchesHover});
             }
         }
+        // [linelog] One line per paint saying which gate emptied the
+        // connections layer. Read it as: of the edges in the store, how
+        // many were too old for the window, how many the PSKR button
+        // hid, and how many had an endpoint that was not plotted --
+        // that last one being the surprise, since it makes the line
+        // layer depend on the DOT layer's freshness as well as its own.
+        qCWarning(mqttclient_js8).nospace()
+            << "[LINELOG] edges pskr=" << seenPskr << " radio=" << seenRadio
+            << " | dropped: old=" << oldEdge << " pskrHidden=" << hidPskr
+            << " endpointMissing=" << noEnd
+            << " | drawn pskr=" << drewPskr << " radio=" << drewRadio
+            << " | window=" << m_viewWindowSecs << "s showPskr="
+            << m_showPskr << " viewAll=" << m_viewAll
+            << " plotted=" << posByCall.size();
         // [inkdensity 2026-08-22] METRIC: THE NUMBER OF YELLOW LINES.
         // Operator's call, after trying ink-coverage and peak-cell
         // density: "just use the number of lines".

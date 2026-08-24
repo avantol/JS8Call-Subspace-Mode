@@ -47,6 +47,13 @@ CREATE TABLE IF NOT EXISTS stations (
                                       -- YES/GRID/STATUS/INFO/HEARTBEAT SNR)
     spont_count  INTEGER DEFAULT 0,   -- unprompted (HEARTBEAT/HB/CQ/text)
     relay_seen   INTEGER DEFAULT 0,   -- observed forwards (*DE* / CALL>)
+    -- Relay requests we watched go out to this station, and how many it
+    -- actually acted on. MEASURED, 2026-08-23: 143 requests on the air,
+    -- 46 forwarded = 32%, against the 0.55 the model had assumed from
+    -- configuration defaults. Per station it runs 0% to 100%, which is
+    -- far too wide a spread to replace with any single prior.
+    relay_asked  INTEGER DEFAULT 0,
+    relay_done   INTEGER DEFAULT 0,
     to_us        INTEGER DEFAULT 0,   -- directed frames addressed to us
     grid         TEXT
 );

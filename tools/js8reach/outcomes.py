@@ -46,7 +46,14 @@ class Session:
 
     def __init__(self, my_call: str, target: str, path=None):
         self.me = base(my_call)
-        self.target = base(target) if target else ""
+        # A BROADCAST HAS NO TARGET. "@ALLCALL QUERY CALL X?" is
+        # addressed to everyone, so there is no station whose silence
+        # means anything -- recording one wrote a history entry for a
+        # station named @ALLCALL (2026-08-23). Responders are still
+        # learned from individually; only the phantom target goes.
+        target = (target or "").strip()
+        self.target = "" if target.startswith("@") else (
+            base(target) if target else "")
         # Path as sent, minus the destination: the stations being ASKED
         # to relay. Only these can be credited or debited.
         self.relays = [base(c) for c in (path or []) if base(c) != self.target]

@@ -54,8 +54,14 @@ PRIOR_WEIGHT = 6.0
 PRIOR_ANSWER_RATE_ENGAGED = 0.82   # same conditional rate
 PRIOR_WEIGHT_ENGAGED = 4.0
 PRIOR_HEARS_US = 0.60        # they hear us | we hear them (HF reciprocity)
-PRIOR_RELAYS = 0.55          # relay_off() defaults OFF => relaying ON,
-                             # but AUTO must also be on to actually key
+# MEASURED, 2026-08-23, not reasoned from configuration defaults. 116
+# relay requests were watched go out on the air and 43 were acted on:
+# 37%, where this constant used to say 55% on the grounds that
+# relay_off() defaults OFF. Per station it runs 0% to 100% -- WO7I 7 of
+# 9, AC7WY 5 of 5, WB7TSQ 2 of 12, KS1DMD 0 of 6 -- so the prior is only
+# the starting point and a station's own record overrides it quickly.
+PRIOR_RELAYS = 0.37
+PRIOR_RELAY_WEIGHT = 2.0     # how many observations the prior is worth
 SESSION_S = 900              # heard within 15 min => mid-session
 UNKNOWN_PATH_P = 0.30        # no location, no history: neutral
 EDGE_MAX_AGE_H = 6.0         # older link evidence claims nothing
@@ -214,12 +220,30 @@ class Model:
                                   f"{p:.2f}"])
 
     def p_fwd(self, call: str) -> Belief:
+        """How likely this station is to pass traffic along.
+
+        From its OWN record where we have one: how many relay requests
+        we watched go out to it, and how many it acted on. That is the
+        thing we actually want to know, and it varies from 0% to 100%
+        across stations -- far too wide to replace with any prior.
+        """
         st = intel.station(self.db, call)
-        seen = st["relay_seen"] if st else 0
+        if not st:
+            return Belief(PRIOR_RELAYS, [f"{call}: unknown -> prior"])
+        asked = st["relay_asked"] or 0
+        done = st["relay_done"] or 0
+        if asked:
+            p = _clamp((PRIOR_RELAYS * PRIOR_RELAY_WEIGHT + done)
+                       / (PRIOR_RELAY_WEIGHT + asked))
+            return Belief(p, [f"{call}: forwarded {done} of {asked} "
+                              f"requests -> p_fwd={p:.2f}"])
+        seen = st["relay_seen"] or 0
         if seen:
-            p = _clamp(0.75 + 0.05 * math.log1p(seen), hi=0.95)
-            return Belief(p, [f"{call}: observed forwarding {seen}x "
-                              f"-> p_fwd={p:.2f}"])
+            # Never asked in our hearing, but seen forwarding for
+            # somebody: it relays, we just have no rate for it.
+            p = _clamp(0.55 + 0.05 * math.log1p(seen), hi=0.85)
+            return Belief(p, [f"{call}: seen forwarding {seen}x, never "
+                              f"observed being asked -> p_fwd={p:.2f}"])
         return Belief(PRIOR_RELAYS,
                       [f"{call}: relay never observed -> prior "
                        f"{PRIOR_RELAYS:.2f} (undiscoverable by any query)"])

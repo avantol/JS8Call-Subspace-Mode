@@ -55,6 +55,10 @@ RE_DIRECTED_LINE = re.compile(
 RE_FROM = re.compile(rf"^(?P<from>{CALLSIGN}):\s+(?P<rest>.*)$")
 RE_CALL = re.compile(CALLSIGN)
 RE_DE = re.compile(rf"\*DE\*\s+(?P<de>{CALLSIGN})")
+# "<S>: <A>> <rest>" -- S is asking A to pass something along. Note the
+# space after the marker: "WD4KAV: WB7TSQ> AC7WY>KE0ZDH HEARING?".
+RE_RELAY_ASK = re.compile(
+    rf"^(?P<s>{CALLSIGN}):\s+(?P<a>{CALLSIGN})>\s*(?P<rest>.+)$")
 RE_TX = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+"
     r"Transmitting\s+(?P<dial>[\d.]+)\s+MHz\s+\w+:\s+(?P<text>.*)$")
@@ -80,6 +84,10 @@ PROBE_WINDOW_S = 300
 RE_REPLY_CMD = re.compile(
     r"^(?:HEARTBEAT\s+SNR|SNR|ACK|YES|NO|GRID|STATUS|INFO|QUERY\s+\w+)"
     r"(?:\s|$)")
+# "<X>: <Y> SNR -06" and its heartbeat form: X hears Y, and this well.
+RE_THIRD_PARTY_SNR = re.compile(
+    r"^(?:HEARTBEAT\s+)?SNR\s+(?P<snr>[+-]?\d+)")
+
 # Blind calls: asking someone a question proves nothing about whether
 # you can hear them. Everything else addressed to a specific station
 # is either a reply or conversation, and both imply reception.
@@ -91,6 +99,29 @@ RE_QUERY_CMD = re.compile(
 def epoch(datestr: str) -> int:
     return int(datetime.strptime(datestr, "%Y-%m-%d %H:%M:%S")
                .replace(tzinfo=timezone.utc).timestamp())
+
+
+# WHICH KINDS OF THIRD-PARTY EVIDENCE GET A TIMESTAMPED EVENT.
+#
+# An "edge" is the standing fact that X can hear Y; an "event" is the
+# dated proof of it, and the replay simulator can only use the dated
+# kind -- it has to know who could hear the target AT THAT MOMENT.
+# Until 2026-08-23 only HEARING lists were kept as events, 591 of them,
+# which left the relay case with 94 usable instants: far too few to
+# judge a strategy on, and the search duly overfitted them.
+#
+#   replied    X answered Y, so X heard Y. Hard proof, dated, 25,984 of
+#              them -- 44x the HEARING evidence, and it was all being
+#              dropped here.
+#   relayfrom  X put Z's traffic on the air behind a *DE*, so X heard
+#              Z. Hard proof, dated.
+#   hearing    X published a list of what it hears. Hard proof, dated.
+#
+# freetext is deliberately NOT here. X sending directed text to Y only
+# proves X CALLED Y -- a blind call proves nothing about reception, and
+# treating it as an edge is the same mistake as the blind-call edges
+# killed off the map in #167.
+EVENT_SOURCES = ("hearing", "replied", "relayfrom")
 
 
 class Miner:
@@ -105,6 +136,8 @@ class Miner:
         self.probes: list[dict] = []
         self.rx_by_call: dict[str, list[int]] = {}
         self.edge_events: list[tuple] = []
+        self.relay_asks: list[tuple] = []
+        self.relay_fwds: dict = {}
         self.skewed = 0
         self.now = int(datetime.now(timezone.utc).timestamp())
 
@@ -117,6 +150,7 @@ class Miner:
             "rev_snr_n": 0, "rev_snr_last": None, "rev_snr_best": None,
             "rev_last": None, "relay_seen": 0, "to_us": 0, "grid": None,
             "resp_count": 0, "spont_count": 0,
+            "relay_asked": 0, "relay_done": 0,
         })
 
     def is_me(self, call: str) -> bool:
@@ -146,6 +180,23 @@ class Miner:
         self.sightings.append((ts, call, snr, dial, offset))
         self.rx_by_call.setdefault(call, []).append(ts)
 
+    def relay_request(self, asked: str, by: str, ts: int) -> None:
+        """Somebody asked `asked` to pass traffic along. Whether it did
+        is settled later, when we see a *DE* from it crediting `by`."""
+        self._st(asked)["relay_asked"] += 1
+        self.relay_asks.append((ts, asked, by))
+
+    def relay_forward(self, station: str, origin: str, ts: int) -> None:
+        self.relay_fwds.setdefault(station, []).append((ts, origin))
+
+    def settle_relays(self) -> None:
+        """Match each request to a forward within 15 minutes."""
+        for ts, asked, by in self.relay_asks:
+            for ft, forigin in self.relay_fwds.get(asked, ()):
+                if 0 <= ft - ts < 900 and forigin == by:
+                    self._st(asked)["relay_done"] += 1
+                    break
+
     def edge(self, hearer: str, heard: str, ts: int, snr: int | None,
              source: str) -> None:
         if hearer == heard or self.is_me(heard):
@@ -153,7 +204,7 @@ class Miner:
         e = self.edges.setdefault((hearer, heard), {
             "last_when": 0, "n": 0, "snr": None, "source": source})
         e["n"] += 1
-        if source == "hearing":
+        if source in EVENT_SOURCES:
             # Keep the individual sighting, not just the aggregate:
             # the simulator needs "who heard T at time t".
             self.edge_events.append((ts, hearer, heard, source))
@@ -198,6 +249,16 @@ class Miner:
                 head = re.match(rf"^(?:{CALLSIGN}|@[A-Z0-9]+)>", rest)
                 if de or head:
                     self._st(sender)["relay_seen"] += 1
+                # Who was ASKED to relay, and by whom. A frame carrying
+                # *DE* is the forward itself, not a request -- crediting
+                # it as both would score every forward as its own answer.
+                if de:
+                    self.relay_forward(sender, de["de"].upper(), ts)
+                else:
+                    ask = RE_RELAY_ASK.match(text)
+                    if ask and not self.is_me(ask["a"]):
+                        self.relay_request(ask["a"].upper(),
+                                           ask["s"].upper(), ts)
                 if de:
                     # An overheard relay in flight: this station is
                     # forwarding traffic it RECEIVED from the *DE*
@@ -248,7 +309,19 @@ class Miner:
                     # doesn't count!"). Queries no longer create edges.
                     tu = tail.upper()
                     if RE_REPLY_CMD.match(tu):
-                        self.edge(sender, to, ts, None, "replied")
+                        # CAPTURE THE SIGNAL REPORT. "A: B SNR -06"
+                        # does not merely prove A hears B, it says HOW
+                        # WELL -- and 58,609 of these were being
+                        # recorded with the number thrown away. It
+                        # matters because a link that only just decodes
+                        # fails on the first pass and costs a whole
+                        # cycle to retry, so a route should prefer a
+                        # hop with margin over one at the floor. 14% of
+                        # the reports are below -18 dB.
+                        m_snr = RE_THIRD_PARTY_SNR.match(tu)
+                        self.edge(sender, to, ts,
+                                  int(m_snr.group("snr")) if m_snr else None,
+                                  "replied")
                     elif tail.strip() and not RE_QUERY_CMD.match(tu):
                         # Directed FREE TEXT: a conversation in
                         # progress, which is a live link -- nobody
@@ -348,6 +421,7 @@ class Miner:
     # ---- write ---------------------------------------------------
 
     def flush(self) -> None:
+        self.settle_relays()
         db = self.db
         db.execute("DELETE FROM stations")
         db.execute("DELETE FROM activity")
@@ -358,13 +432,16 @@ class Miner:
         db.executemany(
             "INSERT INTO stations (call, first_heard, last_heard, "
             "heard_count, snr_n, snr_sum, snr_min, snr_max, rev_snr_n, "
-            "rev_snr_last, rev_snr_best, rev_last, relay_seen, to_us, "
+            "rev_snr_last, rev_snr_best, rev_last, relay_seen, "
+            "relay_asked, relay_done, to_us, "
             "grid, resp_count, spont_count)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(c, s["first_heard"], s["last_heard"], s["heard_count"],
               s["snr_n"], s["snr_sum"], s["snr_min"], s["snr_max"],
               s["rev_snr_n"], s["rev_snr_last"], s["rev_snr_best"],
-              s["rev_last"], s["relay_seen"], s["to_us"], s["grid"],
+              s["rev_last"], s["relay_seen"],
+              s.get("relay_asked", 0), s.get("relay_done", 0),
+              s["to_us"], s["grid"],
               s["resp_count"], s["spont_count"])
              for c, s in self.stations.items()])
         db.executemany(

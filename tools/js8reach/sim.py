@@ -42,12 +42,108 @@ from model import Model      # noqa: E402
 from planner import Planner  # noqa: E402
 
 
+# The chance a pair NOBODY has ever reported is nonetheless a live
+# link. It cannot be measured directly -- observing a link requires one
+# of the two stations to transmit a report about it, which they rarely
+# do -- so it is fitted against real reach on replayed instants. First
+# set at 0.10 by reusing the measured "still live GIVEN evidence"
+# figure, which was wrong in kind; then at 0.03 reasoning that 80% of
+# pairs were never reported, which was wrong in the other direction and
+# cost two points of reach.
+UNSEEN_LINK = 0.12
+
+
+# HOW OFTEN THE PATH WORKS BOTH WAYS, given it works one way.
+# Measured 2026-08-24 over 28,505 observed links, bucketed by how
+# lopsided the two stations are (their out-degree ratio):
+#
+#     within 2x   34.9%      10-50x apart   13.6%
+#     2-10x       25.8%      over 50x        2.5%
+#
+# Nearly half the pairs sit in that bottom bucket -- skimmers with big
+# antennas that hear hundreds and are heard by none -- and they are what
+# drags the headline reciprocity figure to 13%. Between two ordinary
+# stations it is 35% as OBSERVED, and observation undercounts badly,
+# since a link only appears when somebody transmits a report about it.
+# Andy, 2026-08-24: "i don't see that much [asymmetry]... most everyone
+# i can hear i can get a response from."
+#
+# This exists because the return leg was being treated as INDEPENDENT of
+# the forward leg -- two separate 0.2 lookups multiplied to 0.04, which
+# was 25x of the ~110x per-hop penalty all by itself, and it is simply
+# not how radio behaves between comparable stations.
+RECIPROCITY = ((2.0, 0.55), (10.0, 0.42), (50.0, 0.22), (1e9, 0.06))
+
+
+def reciprocity_for(deg_a: int, deg_b: int) -> float:
+    """Chance B hears A, GIVEN that A hears B."""
+    hi = max(deg_a, deg_b, 1)
+    lo = max(min(deg_a, deg_b), 1)
+    ratio = hi / float(lo)
+    for edge, p in RECIPROCITY:
+        if ratio < edge:
+            return p
+    return RECIPROCITY[-1][1]
+
+
 class HorizonModel(Model):
     """Model that can only see observations before `horizon`."""
 
     def __init__(self, db, horizon: int):
         super().__init__(db, horizon)
         self.horizon = horizon
+        self.learned_grids: dict = {}
+        self._degree: dict = {}
+
+    def grid_of(self, call: str) -> str:
+        """A grid we had ALREADY learned by the horizon -- or one a
+        station has just told us in answer to GRID?.
+
+        The base model reads the grid table with no horizon filter, so
+        a replay was handing the strategy every station's location
+        regardless of whether we knew it at the time. That made GRID?
+        worthless by construction: the model already knew the answer to
+        any question it could ask. A grid arrives when we first decode
+        a station, so knowing it means having heard them before now.
+        """
+        c = call.upper()
+        if c in self.learned_grids:
+            return self.learned_grids[c]
+        st = intel.station(self.db, c)
+        if not st or not st["grid"]:
+            return ""
+        if st["first_heard"] and st["first_heard"] >= self.horizon:
+            return ""            # we had not met them yet
+        return st["grid"]
+
+    def out_degree(self, call: str) -> int:
+        got = self._degree.get(call)
+        if got is None:
+            got = self.db.execute(
+                "SELECT COUNT(*) n FROM edges WHERE hearer=? AND "
+                "last_when < ?", (call.upper(), self.horizon)
+            ).fetchone()["n"]
+            self._degree[call] = got
+        return got
+
+    def p_reverse(self, a: str, b: str):
+        """Chance b hears a, GIVEN we have evidence a hears b.
+
+        Not another independent lookup of the same shape -- that was the
+        mistake. Conditioned on how comparable the two stations are,
+        because that is what the data says decides it.
+        """
+        from model import Belief
+        p = reciprocity_for(self.out_degree(a), self.out_degree(b))
+        return Belief(p, [f"{b}->{a}: reverse of a known link, "
+                          f"degrees {self.out_degree(a)}/"
+                          f"{self.out_degree(b)} -> {p:.2f}"])
+
+    def true_grid_of(self, call: str) -> str:
+        """What they WOULD tell us if asked -- ground truth, used only
+        to answer a GRID? that the strategy actually spent time on."""
+        st = intel.station(self.db, call.upper())
+        return (st["grid"] or "") if st else ""
 
     def p_copy(self, call: str, window_s: float):
         from model import Belief, SESSION_S, _clamp
@@ -98,15 +194,70 @@ class HorizonModel(Model):
             "SELECT * FROM edges WHERE hearer=? AND heard=? AND last_when<?",
             (hearer.upper(), heard.upper(), self.horizon)).fetchone()
         if not row:
-            return Belief(0.10, [f"{hearer}->{heard}: no pre-T0 evidence"])
-        age_d = (self.horizon - row["last_when"]) / 86400.0
+            # FALL BACK TO GEOMETRY, as the production model does. This
+            # override was dropping the geographic term the base model
+            # adds, so 86% of candidate/target pairs came back at the
+            # same 0.10 floor, all tied -- which made the "nearest" aim
+            # return stations in pool order rather than by distance, and
+            # made GRID? worthless because nothing consumed a grid.
+            # Grids come from grid_of, which is horizon-filtered, so a
+            # location we had not learned yet still does not count.
+            # NOTHING UNOBSERVED MAY OUTRANK SOMETHING OBSERVED. A
+            # link reported an hour ago is live about 28% of the time
+            # (measured). The geographic prior was returning up to 0.70
+            # for co-located stations and the no-evidence floor was
+            # 0.10 -- the same figure measured as "still live GIVEN
+            # evidence", reused for pairs with no evidence at all. Two
+            # different quantities: 80% of pairs among well-heard
+            # stations were never reported once in five months.
+            #
+            # It also broke multi-hop routing outright. With every pair
+            # floored at 0.10, every station had a direct link to the
+            # target, and since each extra hop multiplies by less than
+            # one, a single hop was always cheapest. The backward search
+            # returned 2,501 one-hop routes and 17 two-hop ones.
+            geo, why = self._geo_link(hearer, heard)
+            if geo > 0.0:
+                return Belief(_clamp(UNSEEN_LINK * 0.7
+                                     + UNSEEN_LINK * 2.5
+                                     * (geo - 0.15) / 0.55,
+                                     lo=UNSEEN_LINK * 0.5,
+                                     hi=0.30), [why])
+            return Belief(UNSEEN_LINK,
+                          [f"{hearer}->{heard}: never reported "
+                           f"in five months of logs"])
+        age_h = (self.horizon - row["last_when"]) / 3600.0
         base = (0.85 if row["source"] in
                 ("hearing", "replied", "relayfrom", "freetext")
                 else 0.55)
-        p = _clamp((base + min(0.10, 0.02 * row["n"]))
-                   * math.exp(-age_d / 21.0) + 0.05)
+        # SIGNAL MARGIN, not merely "a link was reported". A hop that
+        # only just decodes fails on the first pass and costs a whole
+        # cycle to retry, so a route should prefer margin. The decode
+        # floor is -24 dB; 19% of reported links sit below -18. Never
+        # zero -- a marginal path is worse, not impossible.
+        margin = 1.0
+        if row["snr"] is not None:
+            margin = _clamp((row["snr"] + 24.0) / 18.0, lo=0.25, hi=1.0)
+        # HOW LINK EVIDENCE REALLY DECAYS, fitted 2026-08-23 to 86,934
+        # dated observations. The old curve was exp(-age/21 days), which
+        # barely moves in a week; measured, a link's chance of showing
+        # again halves inside a day. The model was three to six times
+        # too optimistic about every link, which is exactly why the
+        # decision rule was confident about routes that do not exist.
+        #
+        # The second term is DIURNAL. Evidence from the same hour
+        # yesterday predicts better than evidence from this morning --
+        # 20.0% at 24 hours against 11.4% at 12 -- because propagation
+        # repeats daily. The model already knew that about whether a
+        # station is on the air; it did not know it about paths.
+        di = max(0.0, math.cos(2.0 * math.pi * age_h / 24.0))
+        live = (0.120
+                + 0.100 * math.exp(-age_h / 5.0)
+                + 0.080 * math.exp(-age_h / 192.0) * di)
+        p = _clamp(live * margin * (base / 0.85)
+                   * (1.0 + min(0.30, 0.06 * row["n"])))
         return Belief(p, [f"{hearer}->{heard}: {row['source']} x{row['n']}, "
-                          f"{age_d:.1f}d pre-T0 -> {p:.2f}"])
+                          f"{age_h/24:.1f}d pre-T0 -> {p:.2f}"])
 
     def p_ans(self, call: str):
         # The simulator still needs a latent "would they answer" draw
@@ -145,7 +296,8 @@ def on_air(db, call: str, t0: float, t1: float) -> bool:
 
 def run_plan(db, plan: list[A.Action], t0: float, model,
              rng: random.Random, cap_s: float = 1800.0,
-             willing: dict[str, bool] | None = None) -> Outcome:
+             willing: dict[str, bool] | None = None,
+             forwarding: dict[str, bool] | None = None) -> Outcome:
     """Execute a plan against ground truth.
 
     `willing` carries the LATENT per-station answer disposition for
@@ -159,6 +311,8 @@ def run_plan(db, plan: list[A.Action], t0: float, model,
     """
     if willing is None:
         willing = {}
+    if forwarding is None:
+        forwarding = {}
     t = t0
     for i, a in enumerate(plan, 1):
         if t - t0 > cap_s:
@@ -185,10 +339,15 @@ def run_plan(db, plan: list[A.Action], t0: float, model,
             willing[a.target] = rng.random() <= model.p_ans(a.target).p
         if not willing[a.target]:
             continue                       # this station isn't answering
-        if a.via and a.via not in willing:
-            # The relay must also be willing to forward at all.
-            willing[a.via] = rng.random() <= model.p_fwd(a.via).p
-        if a.via and not willing[a.via]:
+        if a.via and a.via not in forwarding:
+            # The relay must also be willing to forward at all. Kept in
+            # its OWN dict: "answers me" and "forwards for me" are
+            # different dispositions with different rates, and sharing
+            # one dict keyed by callsign made a station that appeared
+            # first as a target carry its answer draw into its relay
+            # role.
+            forwarding[a.via] = rng.random() <= model.p_fwd(a.via).p
+        if a.via and not forwarding[a.via]:
             continue
         return Outcome(True, t - t0, i, a.hops, a.via)
     return Outcome(False, min(t - t0, cap_s), len(plan), 0, None)
