@@ -1299,6 +1299,13 @@ class UI_Constructor : public QMainWindow {
         qint64 sentMs{};
     };
     QHash<QString, PendingCallQuery> m_pendingCallQueries;
+    // [#178] The message as COMPOSED, kept for the query capture.
+    // m_totalTxMessage is assembled frame by frame and does not hold
+    // the whole thing at end of transmission -- instrumented
+    // 2026-08-25, it contained "AI5TS? FC5" for a query whose first
+    // frame was "WM8Q: @ALLCALL QUERY CALL". Composition is the one
+    // place the text is known complete.
+    QString m_lastComposedMessage;
     static constexpr int kQCallFrameSecs = 15;   // NORMAL frame
     static constexpr int kQCallFramesPerHop = 3;
     static constexpr qint64 kQCallReplyWindowMs =

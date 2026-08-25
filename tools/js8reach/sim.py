@@ -54,32 +54,48 @@ UNSEEN_LINK = 0.12
 
 
 # HOW OFTEN THE PATH WORKS BOTH WAYS, given it works one way.
-# Measured 2026-08-24 over 28,505 observed links, bucketed by how
-# lopsided the two stations are (their out-degree ratio):
 #
-#     within 2x   34.9%      10-50x apart   13.6%
-#     2-10x       25.8%      over 50x        2.5%
+# MEASURED DIRECTIONALLY 2026-08-25, over 28,785 observed links. The
+# question is P(b hears a | a hears b), and what decides it is how good
+# a LISTENER b is compared with a:
 #
-# Nearly half the pairs sit in that bottom bucket -- skimmers with big
-# antennas that hear hundreds and are heard by none -- and they are what
-# drags the headline reciprocity figure to 13%. Between two ordinary
-# stations it is 35% as OBSERVED, and observation undercounts badly,
-# since a link only appears when somebody transmits a report about it.
-# Andy, 2026-08-24: "i don't see that much [asymmetry]... most everyone
-# i can hear i can get a response from."
+#     b hears under 1/10 of what a hears     5.5%   (19,143 pairs)
+#     b hears 1/10 to 1/2                   19.9%
+#     similar, 0.5x to 2x                   31.1%
+#     b hears 2x to 10x more                36.2%
+#     b hears over 10x more                 42.3%
 #
-# This exists because the return leg was being treated as INDEPENDENT of
-# the forward leg -- two separate 0.2 lookups multiplied to 0.04, which
-# was 25x of the ~110x per-hop penalty all by itself, and it is simply
-# not how radio behaves between comparable stations.
-RECIPROCITY = ((2.0, 0.55), (10.0, 0.42), (50.0, 0.22), (1e9, 0.06))
+# Monotone from 3% to 41%, and my first version could not see any of
+# it: it took the RATIO of the two degrees symmetrically, so a pair
+# where the receiver hears ten times more scored the same as one where
+# it hears a tenth as much -- opposite situations collapsed into one
+# bucket at 2.5%. KF5YWQ answering "+14" about AI5TS was scored 0.22
+# when AI5TS hears eleven times more than KF5YWQ does and the truth is
+# about 0.41. The strongest report of the night ranked below a weaker
+# one because of it.
+#
+# The physics is not symmetric and neither is this: a big-eared station
+# hears everyone and is heard by few, so which end has the big ears
+# decides the answer.
+# Re-measured after the callsign fix, on a corpus a third larger:
+# 5.5 / 19.9 / 31.1 / 36.2 / 42.3 across 39,485 links. The shape is
+# unchanged -- monotone in how good a listener the receiver is -- which
+# is reassuring, since the first version was derived from a corpus
+# missing 24% of the traffic and 710 stations.
+RECIPROCITY = ((0.1, 0.055), (0.5, 0.199), (2.0, 0.311),
+               (10.0, 0.362), (float("inf"), 0.423))
 
 
-def reciprocity_for(deg_a: int, deg_b: int) -> float:
-    """Chance B hears A, GIVEN that A hears B."""
-    hi = max(deg_a, deg_b, 1)
-    lo = max(min(deg_a, deg_b), 1)
-    ratio = hi / float(lo)
+def reciprocity_for(deg_sender: int, deg_receiver: int) -> float:
+    """Chance the RECEIVER hears the sender, given the sender hears it.
+
+    Arguments are ordered sender-then-receiver and the answer is NOT
+    symmetric in them -- passing them the wrong way round inverts the
+    result across a 13x range.
+    """
+    a = max(int(deg_sender), 1)
+    b = max(int(deg_receiver), 1)
+    ratio = b / float(a)
     for edge, p in RECIPROCITY:
         if ratio < edge:
             return p
@@ -134,9 +150,10 @@ class HorizonModel(Model):
         because that is what the data says decides it.
         """
         from model import Belief
+        # a hears b; we want P(b hears a), so b is the RECEIVER.
         p = reciprocity_for(self.out_degree(a), self.out_degree(b))
         return Belief(p, [f"{b}->{a}: reverse of a known link, "
-                          f"degrees {self.out_degree(a)}/"
+                          f"listener degrees {self.out_degree(a)}->"
                           f"{self.out_degree(b)} -> {p:.2f}"])
 
     def true_grid_of(self, call: str) -> str:
@@ -268,10 +285,15 @@ class HorizonModel(Model):
                            PRIOR_ANSWER_RATE_ENGAGED, PRIOR_WEIGHT_ENGAGED,
                            _clamp)
         rows = list(self.db.execute(
-            "SELECT answered FROM probes WHERE target=? AND ts<?",
+            "SELECT ts, answered FROM probes WHERE target=? AND ts<?",
             (call.upper(), self.horizon)))
-        n = len(rows)
-        a = sum(r["answered"] for r in rows)
+        # Recency-weighted, half-life 30 days, same rule as the live
+        # model so replay and reality cannot drift apart.
+        n = a = 0.0
+        for r in rows:
+            w = 0.5 ** ((self.horizon - r["ts"]) / (30 * 86400.0))
+            n += w
+            a += w * r["answered"]
         st = intel.station(self.db, call)
         engaged = bool(st and st["to_us"])
         prior = PRIOR_ANSWER_RATE_ENGAGED if engaged else PRIOR_ANSWER_RATE

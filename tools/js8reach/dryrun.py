@@ -65,6 +65,29 @@ def main() -> int:
                     help="how many transmissions to plan ahead "
                          "(NOT relay hops)")
     ap.add_argument("--band", default="")
+    # CONTINUE AN ATTEMPT ALREADY UNDER WAY. Andy, 2026-08-24: "after
+    # doing step 2, can i get an updated step 3 by invoking dryrun
+    # again?" -- not without this: each run started from an empty slate
+    # and re-planned the direct call every time.
+    #
+    #   --sent snr                       the direct call has gone out
+    #   --sent snr,allcall               ... and the @ALLCALL QUERY CALL
+    #   --sent snr,allcall,relay:KA2UGZ  ... and a relay through KA2UGZ
+    #
+    # "allcall", not "shout" -- that was my coinage and it leaked into
+    # a flag an operator has to type. The message on the air is
+    # "@ALLCALL QUERY CALL <target>?", so the flag says allcall.
+    #
+    # The GRAPH updates on its own: replies to a QUERY CALL land in the
+    # database as fresh radio edges with the reported SNR and backdated
+    # age (once #178 is verified), so a later run sees them without
+    # being told. It is only what WE sent that leaves no trace the tool
+    # can read -- the map's ATTEMPTS list expires -- so it is named
+    # here rather than guessed.
+    ap.add_argument("--sent", default="", metavar="LIST",
+                    help="messages already transmitted this attempt, "
+                         "comma separated: snr, grid, allcall, "
+                         "relay:CALL, hearing:CALL")
     args = ap.parse_args()
 
     lm = LiveMap.fetch(band=args.band)
@@ -96,6 +119,28 @@ def main() -> int:
               "failure: on the air this would be direct calls only.")
 
     w = _Pretend(model, board, target)
+
+    # Anything the map still has in flight, plus whatever was named.
+    for a in (getattr(lm, "attempts", None) or []):
+        for hop in (a.get("PATH") or []):
+            h = base(hop).upper()
+            if h and h != target:
+                w.tried[("relay", h)] = w.t - float(a.get("AGE_S", 0) or 0)
+                w.asked.add(h)
+    already = []
+    for tok in (t.strip().lower() for t in args.sent.split(",") if t.strip()):
+        kind, _, who = tok.partition(":")
+        who = base(who).upper() if who else ""
+        key = {"snr": ("snr", target), "grid": ("grid", target),
+               "allcall": ("shout", ""),
+               "shout": ("shout", "")}.get(kind, (kind, who))
+        w.tried[key] = w.t - 60.0
+        if who:
+            w.asked.add(who)
+        already.append(tok)
+    if already:
+        print(f"  continuing: already sent {', '.join(already)}")
+
     d = decide.Decider(model, board, target, model.mycall)
     d._routes = decide.best_routes(d, board.pool)
 

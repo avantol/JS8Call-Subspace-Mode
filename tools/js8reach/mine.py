@@ -47,7 +47,18 @@ GRIDS_DB = Path.home() / ".config" / "JS8Call-grids.db"
 # A callsign as JS8 packs it: letters/digits with at least one digit,
 # optional /P /M /QRP style affix. Deliberately permissive — scoring,
 # not filtering, separates real stations from decode garbage.
-CALLSIGN = r"[A-Z0-9]{2,}[0-9][A-Z0-9]*(?:/[A-Z0-9]+)?"
+# ONE character may precede the digit, not two. Written {2,}, this
+# rejected every 1x2 and 1x3 callsign -- K2AY, W4CAT, K8IMT, K1BRG --
+# and every single-letter-prefix European one -- G0BMH, G3L, F4LNO.
+# It is used by eleven patterns here including RE_FROM, which decides
+# whether a decoded line is attributed to a sender at all, so a
+# non-match silently discarded the line as a continuation frame.
+#
+# MEASURED 2026-08-25 over the whole log: 39,534 of 166,040 directed
+# lines were being dropped -- 23.8% of five months of traffic -- along
+# with 710 stations that appear in it and were never once recorded.
+# Every figure derived from this corpus was computed without them.
+CALLSIGN = r"[A-Z0-9]{1,3}[0-9][A-Z0-9]{1,5}(?:/[A-Z0-9]+)?"
 RE_DIRECTED_LINE = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\t"
     r"(?P<dial>[\d.]+)\t(?P<offset>-?\d+)\t(?P<snr>[+-]?\d+)\t"
@@ -121,7 +132,22 @@ def epoch(datestr: str) -> int:
 # proves X CALLED Y -- a blind call proves nothing about reception, and
 # treating it as an edge is the same mistake as the blind-call edges
 # killed off the map in #167.
-EVENT_SOURCES = ("hearing", "replied", "relayfrom")
+EVENT_SOURCES = ("hearing", "replied", "relayfrom", "querycall")
+
+# "<X>: <MYCALL> YES <snr> (<age>)" -- the answer to a QUERY CALL. It
+# says X hears the station WE ASKED ABOUT, this well, this long ago.
+# The closing paren is OPTIONAL. JS8 truncates a frame that runs out of
+# room and marks it "~~~~~", so a perfectly readable answer arrives as
+# "YES +14 (58M~~~~~". Requiring the paren threw away the strongest
+# report of 2026-08-25 (KF5YWQ at +14) along with NT5DF and WB5BNV --
+# the signal and the age are both fully legible, and the only thing
+# missing is punctuation.
+RE_QCALL_YES = re.compile(
+    rf"^(?P<who>{CALLSIGN}):\s+(?P<me>{CALLSIGN})\s+YES\s+"
+    rf"(?P<snr>[+-]\d{{1,3}})\s*\((?P<age>NOW|\d+[SMHD])")
+# our own outgoing query, which names the target the YES refers to
+RE_QCALL_TX = re.compile(rf"QUERY CALL\s+(?P<target>{CALLSIGN})")
+RE_QCALL_TX_TAIL = re.compile(rf"^(?P<target>{CALLSIGN})\?")
 
 
 class Miner:
@@ -138,6 +164,8 @@ class Miner:
         self.edge_events: list[tuple] = []
         self.relay_asks: list[tuple] = []
         self.relay_fwds: dict = {}
+        self.qcall_sends: list[tuple] = []    # (ts, target) we asked about
+        self.qcall_replies: list[tuple] = []  # (ts, who, snr, ageSecs)
         self.skewed = 0
         self.now = int(datetime.now(timezone.utc).timestamp())
 
@@ -183,18 +211,53 @@ class Miner:
     def relay_request(self, asked: str, by: str, ts: int) -> None:
         """Somebody asked `asked` to pass traffic along. Whether it did
         is settled later, when we see a *DE* from it crediting `by`."""
-        self._st(asked)["relay_asked"] += 1
+        self._st(asked)["relay_asked"] += \
+            0.5 ** ((self.now - ts) / (30 * 86400.0))
         self.relay_asks.append((ts, asked, by))
 
     def relay_forward(self, station: str, origin: str, ts: int) -> None:
         self.relay_fwds.setdefault(station, []).append((ts, origin))
 
+    def harvest_call_queries(self) -> int:
+        """Recover the QUERY CALL answers the app threw away.
+
+        A reply "KF5YWQ: WM8Q YES +14 (58M)" states that KF5YWQ hears
+        the station we asked about, at +14, 58 minutes before it spoke.
+        That is first-hand, dated, third-party evidence -- the single
+        richest routing input the mode produces, and the one the router
+        most needs.
+
+        None of it was ever recorded. #178: the app's capture matched
+        an anchored pattern against one FRAME that also carried our own
+        callsign prefix, so the pending query was never armed and the
+        (correct) binder was never reached. 323 broadcasts with a
+        recoverable target and 675 answers sat unused.
+
+        Both halves survive in the logs -- our transmissions in ALL.TXT
+        and the replies in DIRECTED.TXT -- so the pairing can be redone
+        here. The target usually lands in the SECOND frame ("... QUERY
+        CALL" / "AI5TS?"), which is exactly why the live capture failed,
+        so the frames are stitched before matching.
+        """
+        got = 0
+        for start, target in self.qcall_sends:
+            for rt, who, snr, ageSecs in self.qcall_replies:
+                if not (0 < rt - start <= PROBE_WINDOW_S):
+                    continue
+                self.edge(who, target, rt - ageSecs, snr, "querycall")
+                got += 1
+        return got
+
     def settle_relays(self) -> None:
         """Match each request to a forward within 15 minutes."""
+        # Weighted like the probes: a request halves in weight every 30
+        # days, so the counts stored are effective-recent counts and the
+        # p_fwd formulas need no change. SQLite stores the floats fine.
         for ts, asked, by in self.relay_asks:
+            w = 0.5 ** ((self.now - ts) / (30 * 86400.0))
             for ft, forigin in self.relay_fwds.get(asked, ()):
                 if 0 <= ft - ts < 900 and forigin == by:
-                    self._st(asked)["relay_done"] += 1
+                    self._st(asked)["relay_done"] += w
                     break
 
     def edge(self, hearer: str, heard: str, ts: int, snr: int | None,
@@ -239,6 +302,22 @@ class Miner:
                 rest = fm["rest"].strip()
                 ts = epoch(m["date"])
                 n += 1
+                # [#178] "<X>: <MYCALL> YES <snr> (<age>)" -- the answer
+                # to a QUERY CALL. Kept with its reported age so
+                # harvest_call_queries() can pair it with the outgoing
+                # query and backdate the edge properly. The age is the
+                # whole point: a YES (15S) and a YES (19H) mean utterly
+                # different things and the router had no way to tell.
+                ym = RE_QCALL_YES.match(text.upper())
+                if ym and self.is_me(ym["me"]):
+                    a = ym["age"]
+                    if a == "NOW":
+                        secs = 0
+                    else:
+                        secs = int(a[:-1]) * {"S": 1, "M": 60,
+                                              "H": 3600, "D": 86400}[a[-1]]
+                    self.qcall_replies.append(
+                        (ts, ym["who"].upper(), int(ym["snr"]), secs))
                 if self.is_me(sender):
                     continue  # our own frames come from ALL.TXT
                 self.sighting(sender, ts, int(m["snr"]),
@@ -362,6 +441,26 @@ class Miner:
                 if not m:
                     continue
                 text = m["text"].replace("♦", " ").strip()
+                # [#178] Our own QUERY CALL, for the harvest recovery.
+                # The target usually lands in the SECOND frame ("...
+                # QUERY CALL" / "AI5TS?") -- which is precisely why the
+                # app's live capture failed -- so the frames are
+                # stitched here across consecutive Transmitting lines.
+                ts_tx = epoch(m["date"])
+                up = text.upper()
+                if "QUERY CALL" in up:
+                    qm = RE_QCALL_TX.search(up)
+                    if qm:
+                        self.qcall_sends.append((ts_tx, qm["target"].upper()))
+                        self._qcall_await = None
+                    else:
+                        self._qcall_await = ts_tx
+                elif getattr(self, "_qcall_await", None) is not None:
+                    tm = RE_QCALL_TX_TAIL.match(up)
+                    if tm:
+                        self.qcall_sends.append(
+                            (self._qcall_await, tm["target"].upper()))
+                    self._qcall_await = None
                 pm = RE_PROBE.match(text)
                 if not pm:
                     continue
@@ -421,6 +520,10 @@ class Miner:
     # ---- write ---------------------------------------------------
 
     def flush(self) -> None:
+        n = self.harvest_call_queries()
+        if n:
+            print(f"  recovered {n:,} QUERY CALL answers the app "
+                  f"discarded (#178)")
         self.settle_relays()
         db = self.db
         db.execute("DELETE FROM stations")

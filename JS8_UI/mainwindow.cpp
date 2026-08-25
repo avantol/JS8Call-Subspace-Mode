@@ -4571,9 +4571,15 @@ void UI_Constructor::stopTx() {
         // 332 broadcasts (found 2026-08-24, TODO #178). Falls back to
         // the frame if the accumulator is empty, so a path that does
         // not accumulate is no worse off than before.
-        captureOutgoingCallQuery(m_totalTxMessage.isEmpty()
-                                     ? dt.message()
-                                     : m_totalTxMessage);
+        // [#178] The COMPOSED text, not the frame-by-frame
+        // accumulator. Instrumented 2026-08-25: the accumulator held
+        // "AI5TS? FC5" -- frames two and three -- for a query whose
+        // first frame carried the command. Composition is where the
+        // message exists whole; this is only where the reply window
+        // starts, which is why the arming still happens here.
+        captureOutgoingCallQuery(m_lastComposedMessage.isEmpty()
+                                     ? m_totalTxMessage
+                                     : m_lastComposedMessage);
 
         // Notify API clients that the queued transmission block finished.
         sendNetworkMessage("TX.COMPLETE", dt.message(),
@@ -5469,6 +5475,8 @@ QString UI_Constructor::createMessageTransmitQueue(QString const &text,
     // with the real transmit time -- same parser as the enqueue
     // call, one authority for both.
     noteAttemptFromText(text, frames.length());
+    // [#178] Keep the composed text for the query capture at TX end.
+    m_lastComposedMessage = text;
 
     QStringList lines;
     foreach (auto frame, frames) {
@@ -7353,6 +7361,12 @@ void UI_Constructor::abortCapabilityNegotiation(char const *why) {
 //   "@ALLCALL QUERY CALL W1AW?"          wildcard askee
 void UI_Constructor::captureOutgoingCallQuery(QString const &sentMsg) {
     QString msg = sentMsg.toUpper().simplified();
+    // [#178] SAY WHAT ARRIVED. The fix for the prefix and the frame
+    // both looked correct on the page and the harvest still did not
+    // arm, so this stops the guessing: one line per finished
+    // transmission naming exactly what this function was handed.
+    qCWarning(chunkedarq_js8)
+        << "[QCALL] capture saw:" << msg;
     // STRIP OUR OWN CALLSIGN PREFIX. Everything we transmit carries
     // "<MYCALL>: " in front, and the pattern below is anchored at ^,
     // so it matched nothing we have ever actually sent:
@@ -7375,8 +7389,12 @@ void UI_Constructor::captureOutgoingCallQuery(QString const &sentMsg) {
     static QRegularExpression const kQueryRe{QStringLiteral(
         R"(^(?<heads>(?:[A-Z0-9/]+>\s*)*)(?:(?<askee>@?[A-Z0-9/]+)\s+)?QUERY CALL\s+(?<target>[A-Z0-9/]+)\??)")};
     auto const m = kQueryRe.match(msg);
-    if (!m.hasMatch())
+    if (!m.hasMatch()) {
+        if (msg.contains(QStringLiteral("QUERY CALL")))
+            qCWarning(chunkedarq_js8)
+                << "[QCALL] HAS 'QUERY CALL' BUT DID NOT MATCH:" << msg;
         return;
+    }
     QString askee = m.captured(QStringLiteral("askee"));
     QStringList const heads =
         m.captured(QStringLiteral("heads"))

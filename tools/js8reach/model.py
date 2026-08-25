@@ -60,7 +60,9 @@ PRIOR_HEARS_US = 0.60        # they hear us | we hear them (HF reciprocity)
 # relay_off() defaults OFF. Per station it runs 0% to 100% -- WO7I 7 of
 # 9, AC7WY 5 of 5, WB7TSQ 2 of 12, KS1DMD 0 of 6 -- so the prior is only
 # the starting point and a station's own record overrides it quickly.
-PRIOR_RELAYS = 0.37
+# 87 of 203 relay requests acted on, re-measured 2026-08-25 after the
+# callsign fix exposed 75% more of them. Was 43/116 = 0.37.
+PRIOR_RELAYS = 0.43
 PRIOR_RELAY_WEIGHT = 2.0     # how many observations the prior is worth
 SESSION_S = 900              # heard within 15 min => mid-session
 UNKNOWN_PATH_P = 0.30        # no location, no history: neutral

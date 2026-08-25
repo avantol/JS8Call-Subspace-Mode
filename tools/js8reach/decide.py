@@ -359,11 +359,19 @@ class Decider:
         than the floor: 0.42 against 0.12 on the first case checked.
         """
         fwd = self.link(dest, station)
-        if fwd > 0.13:                 # genuine evidence, not the floor
-            return fwd
-        if self.link(station, dest) > 0.13:
-            return max(fwd, self.reverse(station, dest))
-        return fwd
+        rev = (self.reverse(station, dest)
+               if self.link(station, dest) > 0.13 else 0.0)
+        # TAKE THE BETTER OF THE TWO, not simply the forward one.
+        # Preferring any forward evidence over any reverse evidence
+        # sounds right -- a direct observation of the direction we need
+        # beats an inference about it -- but it discards the stronger
+        # estimate when the observation is stale and the inference is
+        # fresh. KV5R answered "+17, 2 hours" about AI5TS, which puts
+        # the reverse at 0.47; an old forward edge scored 0.29, and the
+        # 0.29 won. Both are estimates of the same quantity and both are
+        # floors rather than ceilings, so the higher one carries more
+        # evidence, not less.
+        return max(fwd, rev)
 
     def reverse(self, a, b):
         """Chance b hears a, given a hears b."""

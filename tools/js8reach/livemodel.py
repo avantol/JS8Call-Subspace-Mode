@@ -120,17 +120,43 @@ class LiveModel:
     # ---- the graph, out of the database ------------------------------
 
     def _edge(self, hearer: str, heard: str):
+        """The freshest evidence that `hearer` hears `heard`, from
+        EITHER store.
+
+        The live database is the app's, and it never received the
+        QUERY CALL answers -- #178 meant the capture never armed, so a
+        station telling us on the air "YES -11 (2H)" about the target
+        left no trace there. Those answers ARE recoverable from the
+        logs and mine.py now does so (817 of them, 178 distinct
+        responder->target pairs). They are first-hand and dated, which
+        is better than anything the live store holds for the same
+        pair, so they are consulted alongside it and the fresher wins.
+
+        This also makes the router independent of whether the app's
+        capture is working -- a path that has been broken since it
+        shipped and has resisted two fixes.
+        """
         key = ("e", hearer, heard)
         got = self._c.get(key)
-        if got is None:
-            got = self.db.execute(
-                "SELECT when_s, snr, source FROM edges WHERE band=? AND "
-                "hearer=? AND heard=? AND when_s > ? "
-                "ORDER BY when_s DESC LIMIT 1",
-                (self.band, hearer.upper(), heard.upper(),
+        if got is not None:
+            return got or None
+        row = self.db.execute(
+            "SELECT when_s, snr, source FROM edges WHERE band=? AND "
+            "hearer=? AND heard=? AND when_s > ? "
+            "ORDER BY when_s DESC LIMIT 1",
+            (self.band, hearer.upper(), heard.upper(),
+             int(self.now - GRAPH_SECS))).fetchone()
+        best = dict(row) if row else None
+        if self.intel is not None:
+            q = self.intel.execute(
+                "SELECT last_when AS when_s, snr, source FROM edges "
+                "WHERE hearer=? AND heard=? AND last_when > ?",
+                (hearer.upper(), heard.upper(),
                  int(self.now - GRAPH_SECS))).fetchone()
-            self._c[key] = got if got else False
-        return got or None
+            if q and (best is None or q["when_s"] > best["when_s"]):
+                best = dict(q)
+        self._c[key] = best if best else False
+        return best
 
     def can_deliver_to(self, node: str) -> list:
         """Stations `node` can hear, so each can hand it a message."""
@@ -178,11 +204,36 @@ class LiveModel:
         return got
 
     def p_reverse(self, a: str, b: str) -> _B:
-        """Does b hear a, GIVEN a hears b? Conditioned on how
-        comparable the two are -- 55% between equals, 6% when one hears
-        fifty times what the other does."""
-        p = reciprocity_for(self.out_degree(a), self.out_degree(b))
-        return _B(p, [f"{b}->{a}: reverse of a known link -> {p:.2f}"])
+        """Does b hear a, GIVEN a hears b?
+
+        Conditioned on how comparable the two stations are -- 55%
+        between equals, 6% when one hears fifty times what the other
+        does -- AND on how strongly the known direction works.
+
+        That second term matters because it is the whole content of a
+        QUERY CALL answer. "YES +14 (58M)" and "YES -23 (11H)" both
+        used to come back as a flat 0.55, discarding the one number the
+        responder went to the trouble of sending. A path that carries
+        +14 one way is far more likely to carry the other way than one
+        that barely closes at -23 against a -24 floor; treating them
+        alike is not a simplification, it is ignoring the measurement.
+        """
+        # `a` hears `b`; the one that must do the hearing now is `b`,
+        # so it is the RECEIVER. Order matters -- reversed, this spans
+        # 3% to 41% the wrong way.
+        base_p = reciprocity_for(self.out_degree(a), self.out_degree(b))
+        row = self._edge(a, b)
+        why = f"{b}->{a}: reverse of a known link"
+        if row and row.get("snr") is not None and row["snr"] > -99:
+            # Margin above the -24 dB decode floor, same scale the
+            # forward direction uses, so the two cannot drift.
+            margin = min(1.0, max(0.25, (row["snr"] + 24.0) / 18.0))
+            p = min(0.95, base_p * (0.45 + 0.85 * margin))
+            why += f", forward snr {row['snr']} -> {p:.2f}"
+        else:
+            p = base_p * 0.7          # known link, unknown quality
+            why += f", quality unknown -> {p:.2f}"
+        return _B(p, [why])
 
     # ---- right now, out of the map dump ------------------------------
 
@@ -238,11 +289,22 @@ class LiveModel:
         if not self.intel:
             return _B(0.55, [f"{call}: no corpus, prior"])
         rows = list(self.intel.execute(
-            "SELECT answered FROM probes WHERE target=?",
+            "SELECT ts, answered FROM probes WHERE target=?",
             (base(call).upper(),)))
-        n = len(rows)
-        a = sum(r["answered"] for r in rows)
-        p = (0.55 * 3.0 + a) / (3.0 + n)
+        # RECENCY-WEIGHTED: a probe's weight halves every 30 days, so a
+        # station that fixed its autoreply in June is not condemned by
+        # March forever, and the corpus self-corrects as our approach
+        # changes what we ask (Andy, 2026-08-25). The prior still
+        # counts as three fresh probes.
+        n = a = 0.0
+        for r in rows:
+            w = 0.5 ** ((self.now - r["ts"]) / (30 * 86400.0))
+            n += w
+            a += w * r["answered"]
+        # 515 of 2,225 probes answered = 23.1% unweighted. The prior
+        # sits above that base rate because we mostly probe stations
+        # chosen for being likely to answer, not a random sample.
+        p = (0.45 * 3.0 + a) / (3.0 + n)
         return _B(min(0.95, max(0.05, p)),
                   [f"{call}: answered {a} of {n} probes we sent"])
 
@@ -251,23 +313,23 @@ class LiveModel:
         go out to them: 116 seen, 43 acted on, 37% overall, but 0% to
         100% per station -- far too wide to replace with one prior."""
         if not self.intel:
-            return _B(0.37, [f"{call}: no corpus, prior"])
+            return _B(0.43, [f"{call}: no corpus, prior"])
         row = self.intel.execute(
             "SELECT relay_asked, relay_done, relay_seen FROM stations "
             "WHERE call=?", (base(call).upper(),)).fetchone()
         if not row:
-            return _B(0.37, [f"{call}: never seen, prior 0.37"])
+            return _B(0.43, [f"{call}: never seen, prior 0.43"])
         asked = row["relay_asked"] or 0
         done = row["relay_done"] or 0
         if asked:
-            p = (0.37 * 2.0 + done) / (2.0 + asked)
+            p = (0.43 * 2.0 + done) / (2.0 + asked)
             return _B(min(0.95, p),
                       [f"{call}: forwarded {done} of {asked} requests"])
         seen = row["relay_seen"] or 0
         if seen:
             p = min(0.85, 0.55 + 0.05 * math.log1p(seen))
             return _B(p, [f"{call}: seen forwarding {seen}x"])
-        return _B(0.37, [f"{call}: relay never observed, prior"])
+        return _B(0.43, [f"{call}: relay never observed, prior"])
 
 
 class LiveBoard:
@@ -287,10 +349,25 @@ class LiveBoard:
         T = base(target).upper()
         me = model.mycall
         seen, pool = set(), []
-        for r in model.db.execute(
-                "SELECT hearer, MAX(when_s) w FROM edges WHERE band=? AND "
-                "heard=? AND when_s > ? GROUP BY hearer ORDER BY w DESC",
-                (model.band, T, int(model.now - GRAPH_SECS))):
+        # BOTH STORES. The live database never received the QUERY CALL
+        # answers (#178), so selecting candidates from it alone left the
+        # stations that had just TOLD US they hear the target out of the
+        # pool entirely -- eight of twelve on 2026-08-25, including the
+        # strongest report of the night. Teaching the scoring to read
+        # the recovered evidence while leaving the selection blind to it
+        # fixed nothing: a station cannot be ranked if it is never a
+        # candidate.
+        rows = list(model.db.execute(
+            "SELECT hearer, MAX(when_s) w FROM edges WHERE band=? AND "
+            "heard=? AND when_s > ? GROUP BY hearer ORDER BY w DESC",
+            (model.band, T, int(model.now - GRAPH_SECS))))
+        if model.intel is not None:
+            rows += list(model.intel.execute(
+                "SELECT hearer, MAX(last_when) w FROM edges WHERE heard=? "
+                "AND last_when > ? GROUP BY hearer ORDER BY w DESC",
+                (T, int(model.now - GRAPH_SECS))))
+        rows.sort(key=lambda r: -(r["w"] or 0))
+        for r in rows:
             h = r["hearer"].upper()
             if h in seen or h == me or h == T:
                 continue
