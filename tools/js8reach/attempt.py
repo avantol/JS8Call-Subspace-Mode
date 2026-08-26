@@ -238,6 +238,7 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                 print(f"{now_s()}      VERDICT +{dt:.1f}s: {who} busy or "
                       f"disabled -- retry from the top later; next move "
                       f"can key the coming boundary", flush=True)
+                radio.attempt_done()      # red line off, immediately
                 break
             if started_at is not None and \
                     time.time() - started_at > comp + period_grace():

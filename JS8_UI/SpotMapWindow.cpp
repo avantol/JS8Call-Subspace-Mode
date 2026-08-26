@@ -2791,6 +2791,17 @@ void SpotMapWindow::redraw() {
                     break;   // no grid anywhere: cannot place this hop
                 pts << q;
             }
+            // [attemptpaint 2026-08-26] Say what was PLACED. The
+            // state side provably registers attempts (live check,
+            // ATTEMPTS populated) yet the operator saw no red line --
+            // so if it recurs, the gap must be here, and this line
+            // names it: how many of the chain's points found a
+            // position. Low volume: only while an attempt is alive.
+            qCWarning(mqttclient_js8).nospace()
+                << "[ATTEMPT-PAINT] path=" << a.path.join(">")
+                << " placed=" << pts.size() << "/"
+                << (a.path.size() + 1)
+                << (a.replied ? " GREEN" : " red");
             // Draw AS FAR AS WE CAN. Requiring the whole chain to be
             // placeable meant one hop with no grid erased the entire
             // line, which is how a three-hop attempt drew nothing at

@@ -5115,10 +5115,39 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
     // 2026-08-22). Our own autoreplies are directed at a callsign but
     // are neither: they carry no '?' and no '>', which is what keeps
     // them from painting a countdown to a station we are not calling.
-    if (!trimmed.contains('?') && !first.contains('>'))
+    if (!trimmed.contains('?') && !first.contains('>')) {
+        qCWarning(mainwindow_js8) << "[ATTEMPT] not a question/chain:"
+                                  << trimmed.left(40);
         return;
-    if (first.isEmpty() || first.startsWith('@') || first.contains(':'))
+    }
+    if (first.isEmpty() || first.startsWith('@') || first.contains(':')) {
+        qCWarning(mainwindow_js8) << "[ATTEMPT] gated (group/prefix):"
+                                  << trimmed.left(40);
         return;
+    }
+    // [meshonly 2026-08-26] MESH ACTIONS ONLY (operator: "be sure
+    // those lines don't show during non-mesh network actions"). A
+    // human QSO question -- "HW CPY?", free text ending in '?' -- is
+    // directed at a callsign and passes every gate above, but it is
+    // conversation, not reaching. The red/green layer narrates the
+    // MESH: reaching queries and relay chains. Anything else directed
+    // at a single station must open with a reaching command.
+    if (!first.contains('>')) {
+        QString const rest = trimmed.section(' ', 1).trimmed().toUpper();
+        static QStringList const kMesh = {
+            QStringLiteral("SNR?"), QStringLiteral("GRID?"),
+            QStringLiteral("HEARING?"), QStringLiteral("QUERY"),
+            QStringLiteral("STATUS?"), QStringLiteral("INFO?")};
+        bool mesh = false;
+        for (QString const &m : kMesh)
+            if (rest.startsWith(m)) { mesh = true; break; }
+        if (!mesh) {
+            qCWarning(mainwindow_js8)
+                << "[ATTEMPT] non-mesh question, no line:"
+                << trimmed.left(40);
+            return;
+        }
+    }
     QStringList const chain = first.split('>', Qt::SkipEmptyParts);
     if (chain.isEmpty() || chain.first().startsWith('@'))
         return;
@@ -5132,8 +5161,13 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
     for (QString const &hop : chain)
         if (!Radio::is_callsign(hop))
             return;
-    // 60 s per relay hop, MEASURED 2026-08-22 on
-    // WM8Q>KJ7VWV>KB7ITU>KL7UT. Before frames exist, assume two.
+    // SLOT MODEL (2026-08-26, replacing the 2026-08-22 figures which
+    // carried ALL.TXT's one-period stamp bias): a responder keys at
+    // our TX-end boundary, so the reply slot closes ~one period after
+    // TX-end; each relay hop adds its ~3-frame forward. This timeout
+    // is only the BACKSTOP -- the executor clears the line the moment
+    // it declares a verdict via TX.ATTEMPT_DONE; this catches manual
+    // sends with no executor watching.
     int const frames = txFrames > 0 ? txFrames : 2;
     int const txSecs = frames * qMax(1, m_TRperiod);
     // Plus a margin. 70 + 60/hop is the EXPECTED reply instant, so
@@ -5147,9 +5181,12 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
     // expected-reply figure is a median, so the tail past it is half
     // of all replies; the margin has to cover that tail, not just
     // rounding.
-    int const marginSecs = 4 * qMax(1, m_TRperiod);
-    m_spotMapWindow->noteAttempt(
-        chain, txSecs + 70 + 60 * (chain.size() - 1) + marginSecs);
+    int const period = qMax(1, m_TRperiod);
+    int const waitSecs = txSecs + 3 * period * (chain.size() - 1)
+                         + 2 * period + 6;
+    qCWarning(mainwindow_js8) << "[ATTEMPT] noted:" << chain.join(">")
+                              << "wait" << waitSecs;
+    m_spotMapWindow->noteAttempt(chain, waitSecs);
 }
 
 void UI_Constructor::resetMessage() {
