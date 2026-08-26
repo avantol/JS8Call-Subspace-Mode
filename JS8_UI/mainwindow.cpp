@@ -5100,8 +5100,19 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
     // The chain arrives spaced out -- "N6GRG> KG4UHM/6 SNR?" -- so
     // close the gap around the marker before taking the first token,
     // or the destination is dropped.
-    QString const trimmed =
+    QString trimmed =
         text.trimmed().replace(QStringLiteral("> "), QStringLiteral(">"));
+    // [#178 family] STRIP OUR OWN PREFIX FIRST. By the time the API
+    // path reaches this hook the message reads "WM8Q: KD2M SNR?", and
+    // the ':' gate below -- meant for autoreply-formatted text --
+    // rejected every python-driven attempt: no red line, ever, on the
+    // executor path. Caught by [ATTEMPT] gated logging on its first
+    // run, 2026-08-26. Same bug family as the QUERY CALL capture:
+    // an anchored parse meeting a self-prefixed message.
+    static QRegularExpression const kSelfPrefix{
+        QStringLiteral(R"(^[A-Z0-9/]+:\s*)")};
+    if (auto const pm = kSelfPrefix.match(trimmed); pm.hasMatch())
+        trimmed = trimmed.mid(pm.capturedLength()).trimmed();
     // ONLY questions: an attempt is something we are waiting on an
     // answer for, which is what the countdown means. Our own
     // autoreplies ("KG7RXU YES -24 (36M)") are directed at a callsign

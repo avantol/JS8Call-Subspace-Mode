@@ -63,6 +63,12 @@ class Radio:
             {"type": "TX.SEND_MESSAGE", "value": text,
              "params": {"_ID": -1}}).encode() + b"\n")
 
+    def attempt_done(self) -> None:
+        """Clear the map's red attempt line NOW -- the verdict is in."""
+        self.sock.sendall(json.dumps(
+            {"type": "TX.ATTEMPT_DONE", "value": "",
+             "params": {"_ID": -1}}).encode() + b"\n")
+
     def events(self):
         """Yield (type, value) without blocking longer than 0.5 s."""
         try:
