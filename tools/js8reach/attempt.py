@@ -63,6 +63,11 @@ class Radio:
             {"type": "TX.SEND_MESSAGE", "value": text,
              "params": {"_ID": -1}}).encode() + b"\n")
 
+    def send_raw(self, type_: str, value: str) -> None:
+        self.sock.sendall(json.dumps(
+            {"type": type_, "value": value,
+             "params": {"_ID": -1}}).encode() + b"\n")
+
     def attempt_done(self) -> None:
         """Clear the map's red attempt line NOW -- the verdict is in."""
         self.sock.sendall(json.dumps(
@@ -273,6 +278,15 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         print(f"{now_s()}  REACHED {T} on move "
                               f"{move_no}, {nowt-w.t0:.0f}s total, "
                               f"{sent} transmissions", flush=True)
+                        # THE DELIVERABLE (operator, 2026-08-26): the
+                        # proven path as a ready template in the
+                        # outgoing box, identical to the map relay
+                        # builder's "HOP1>HOP2>DEST [MESSAGE]".
+                        path = (list(mv.chain) + [T])                             if mv.kind == "relay" else [T]
+                        tpl = ">".join(path) + " [MESSAGE]"
+                        radio.send_raw("TX.SET_TEXT", tpl)
+                        print(f"{now_s()}  template ready in the "
+                              f"outgoing box: {tpl}", flush=True)
                         return 0
                     if mv.kind == "relay" and mv.via and \
                             v.upper().startswith(mv.via.upper() + ":") \
