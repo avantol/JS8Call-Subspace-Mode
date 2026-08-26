@@ -274,7 +274,16 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
             if tx_end is None:
                 continue
             dt = time.time() - tx_end
-            slots = 2 if mv.kind == "hb" else 1     # documented late slot
+            # Phase 2 (a forward has completed, the TARGET must answer)
+            # gets THREE slots, from the one real relayed answer on
+            # record: KQ4DNM replied 46 s after KO4JJW's forward
+            # (decode the forward + its own queue + a two-frame relayed
+            # reply). One slot there would have abandoned the only
+            # relay contact ever made, at the moment it was succeeding
+            # (operator: "did KQ4DNM answer us in time?" -- yes, at
+            # +46, and that number is why this is 3).
+            slots = (3 if (mv.kind == "relay" and fwd_done_at)
+                     else 2 if mv.kind == "hb" else 1)
             verdict_wall = slot_B + 15.0 * slots - 0.7
             if started_at is None and time.time() > verdict_wall:
                 who = ("the whole group" if group else responder)
