@@ -89,6 +89,14 @@ RE_PROBE = re.compile(
 # QUERY CALL window (mainwindow.h kQCallReplyWindowMs) = 300 s.
 PROBE_WINDOW_S = 300
 
+# EVERY latency_s IN THE PROBES TABLE IS ~ONE PERIOD TOO LARGE. ALL.TXT
+# "Transmitting" stamps are floored to the period boundary and written
+# BEFORE key-up (mainwindow.cpp:11228), so TX times read ~15 s early
+# and latencies inflate by the same. Constant bias, not noise: the
+# distribution's SHAPE is right, its absolute values are not. Do not
+# quote them to sub-period precision; the live driver measures true
+# TX-end from the TX.COMPLETE socket event instead.
+
 # Frames that only exist because somebody asked: the fingerprint of an
 # always-on responder. "HEARTBEAT SNR" is an ACK to a heartbeat, i.e.
 # a reply, unlike a bare "HEARTBEAT".

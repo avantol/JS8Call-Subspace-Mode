@@ -203,6 +203,14 @@ class LiveModel:
             self._c[key] = got
         return got
 
+    def has_link_evidence(self, a: str, b: str) -> bool:
+        """Is there an actual observation that a hears b -- as distinct
+        from the probability being high? A fresh -17 report computes to
+        ~0.11, BELOW the 0.12 unknown floor, so testing the magnitude
+        called real evidence "none" and skipped the reciprocity
+        inference. Existence and strength are different questions."""
+        return self._edge(a, b) is not None
+
     def p_reverse(self, a: str, b: str) -> _B:
         """Does b hear a, GIVEN a hears b?
 

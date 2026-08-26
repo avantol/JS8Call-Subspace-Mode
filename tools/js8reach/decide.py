@@ -93,11 +93,132 @@ T_HEARING = A.rtt(1, 4)      # 112s  what is that station hearing?
 T_RELAY = [A.rtt(2, 2, h) for h in range(5)]   # index by hops
 
 
+# WHEN TO STOP WAITING, measured, per query kind. From 515 answered
+# probes in the corpus plus tonight's live relays: an answer that is
+# coming has usually landed by p50; at p80 the odds are 4-to-1 against;
+# past p95 it is over. All seconds from OUR TX-END. Relays add the
+# forward checkpoint: KD7WPQ and KO4JJW both keyed our traffic 58 s
+# after TX-end, twice each side of midnight.
+#
+# These exist so no wait is ever hand-picked again (Andy, 2026-08-25:
+# "does the algorithm state wait times?" -- it does now).
+# RE-DERIVED from the fine-grained distribution (Andy, 2026-08-26:
+# "you'll probably see a large majority of immediate replies"). He was
+# right -- it is BIMODAL: 61% of all eventual SNR? answers land within
+# 45 s (the autoreply, one period + one frame), then a thin tail of
+# humans and re-decodes. Waiting 45 -> 102 s buys 15 points; idling for
+# the tail is wasted air-silence. So ESCALATE means "send the next
+# move now" -- the tail still gets decoded and attributed passively
+# while we act, which is what abandon_s is for: stop ATTRIBUTING, not
+# stop listening.
+# WAITS ARE COMPUTED FROM THE EXPECTED REPLY, not tabled. The reply to
+# a query has a knowable shape: a turnaround period, then N frames of
+# 15 s each. N per kind:
+#   snr / grid    1 frame -- the answer packs (98.4% measured bare)
+#   ask_call      2 -- "YES +nn (age)": the age rides as text
+#   shout         2 -- same shape, everyone answers in parallel
+#   hearing       1 + the LIST as text: 4 calls ~ 3 text frames, so 4
+# check  = turnaround + reply airtime (the earliest a complete answer
+#          can exist); escalate = one period of grace past it; abandon
+#          = 240 s flat, the human tail, attribution only.
+#
+# These are CEILINGS FOR SILENCE. Any COMPLETE reply -- the last frame
+# carries the end-of-message bit -- ends the wait the instant it lands
+# (Andy, 2026-08-26: "we short-cut the max wait in all cases whenever
+# we get an end-of-msg indication, correct?" -- correct, the watchers
+# act on the assembled line, and the marks only cap failure).
+# THE PERIOD IS A PARAMETER, NOT A CONSTANT. Policy (Andy, 2026-08-26):
+# every FIRST message to a station goes at Normal speed -- it is the
+# one submode everything decodes, and a first contact must not gamble
+# on the far end's settings. Higher speeds may come later for the
+# first hop once a station is known, so every delay below is derived
+# from `period` rather than from the number 15.
+#
+# The shape (matches the app's own reply deadline, ChunkedArq.h):
+#   reply complete ~ period * (1 + reply_frames) after our TX-end.
+#
+#   There is NO turnaround period. The far end decodes our signal at
+#   ~12.6 s -- BEFORE our own period ends -- and keys at the very
+#   boundary our TX ends on (AC7WY, live, 2026-08-26: our frame ended
+#   :55:00, its reply occupied :55:00-:15, decoded here +11 s after
+#   our TX-end). The old "+2 periods" came from ALL.TXT, whose TX
+#   stamps are FLOORED to the boundary and written pre-key -- a
+#   constant one-period inflation dressed as a turnaround
+#   (mainwindow.cpp:11228, addSecs(-(sec % TRperiod))). The extra
+#   period in `escalate` covers a far end that misses its first
+#   boundary; the relay forward checkpoint is 3 periods (the "58 s"
+#   carried the same +15 bias).
+PERIOD_NORMAL = 15.0
+
+REPLY_FRAMES = {"snr": 1, "grid": 1, "ask_call": 2, "shout": 2,
+                "hearing": 4, "relay": 1,
+                # heartbeat acks key on OUR TX-end boundary, single
+                # frame, all together: the verdict exists one period
+                # after TX-end (11 acks in the first window, measured
+                # 2026-08-25 02:29Z; and the operator caught me hand-
+                # sleeping 150 s for it anyway).
+                "hb": 1}
+
+
+def reply_frames_for(call: str) -> int:
+    """Frames the packed reply `CALL: US SNR +nn` needs -- knowable
+    from the callsign alone. Standard calls (up to two prefix chars, a
+    digit, up to three letters, /P or /M via the flag) pack into one
+    frame; anything odder rides as text and spills into a second."""
+    import re
+    c = (call or "").upper()
+    if re.fullmatch(r"[A-Z0-9]{1,2}[0-9][A-Z]{1,3}(?:/[PM])?", c):
+        return 1
+    return 2
+
+
+def waits_for(kind: str, reply_from: str = "", hops: int = 0,
+              period: float = PERIOD_NORMAL) -> tuple:
+    """(check, verdict, abandon) seconds after our TX-end -- gating on
+    the answer having STARTED, not on it being complete.
+
+    A verdict means BUSY OR DISABLED -- the station (or, for a group
+    query, every station) had its slot and did not key. The remedy is
+    a fresh attempt from the top later, never a longer wait now.
+
+    RX.ACTIVITY delivers every frame the moment it decodes
+    (processRxActivity.cpp:25), and every responder keys at OUR TX-end
+    boundary, so the FIRST FRAME of any reply -- however long the whole
+    reply is -- is due one period after TX-end. That makes the silence
+    verdict UNIFORM: one period, plus decode margin, plus one more
+    period only where the app documents a late slot (the HB 25%
+    interval switch). A HEARING? list no longer buys its sender 78 s
+    of silence; it gets the same ~21 s as everything else, and the
+    long wait runs only once a reply is provably inbound
+    (completion_secs below).
+    """
+    check = period + 3               # first frame of the answer due
+    verdict = period + 6             # nothing started: BUSY OR DISABLED
+    if kind == "hb":
+        # One extra slot -- NOT an RNG: the ack reply path enqueues
+        # immediately but at PriorityLow+1 (mainwindow.cpp:6700), so
+        # any hotter traffic in the responder's queue displaces it by
+        # a slot. (The 25% addSecs(15) at mainwindow.cpp:5825 is the
+        # OWN-heartbeat scheduler, a different path.)
+        verdict = 2 * period + 6
+    abandon = 20 * period if kind == "shout" else 16 * period
+    return (check, verdict, abandon)
+
+
+def completion_secs(kind: str, reply_from: str = "",
+                    period: float = PERIOD_NORMAL) -> float:
+    """Once a reply has STARTED, how long until it should be complete
+    and assembled: its own airtime plus margin."""
+    frames = REPLY_FRAMES.get(kind, 2)
+    frames += reply_frames_for(reply_from) - 1 if reply_from else 0
+    return period * frames + 6
+
+
 class Move:
     """One message, ready to send."""
 
     def __init__(self, kind, cost, via=None, chain=None, why="",
-                 factors=None):
+                 factors=None, reply_from=""):
         self.kind = kind          # snr | shout | hearing | grid | relay
         self.cost = cost
         self.via = via
@@ -111,6 +232,7 @@ class Move:
         # a decision that cannot be argued with, and every wrong number
         # found tonight was found by someone reading one.
         self.factors = factors or []
+        self.waits = waits_for(kind, reply_from, len(self.chain))
 
     def wire(self, me, target):
         if self.kind == "snr":
@@ -131,8 +253,12 @@ class Move:
 
 def explain(mv, target: str, me: str = "WM8Q") -> str:
     """The decision, factor by factor, for a human to check."""
+    c, e, a = mv.waits
     lines = [f"  SEND   {mv.wire(me, target)}",
-             f"  COST   {mv.cost:.0f} s"]
+             f"  COST   {mv.cost:.0f} s   "
+             f"check +{c}s / escalate +{e}s / abandon +{a}s"
+             + ("   (the +58s forward is the checkpoint)"
+                if mv.kind == "relay" else "")]
     if mv.factors:
         width = max(len(n) for n, _r, _s in mv.factors)
         lines.append("")
@@ -263,7 +389,19 @@ def best_routes(d, pool, max_hops=4, width=240) -> dict:
                 continue
             out = d.delivers_to(cand, node)   # node hears cand: cand -> node
             back = d.reverse(node, cand)   # and the reply comes back
-            live = d.copy(cand) * d.fwd(cand) * d._toward(cand)
+            # DIRECTION IS A PRIOR, NOT A FACT. Geometry earns its
+            # place as the only evidence for links nobody has observed
+            # -- the code says so where _geo_link is defined. So once a
+            # link IS observed, in either direction, the prior has done
+            # its job and must step aside: AC7WY was paying a 2x
+            # direction penalty on a REPORTED one-hop link to the
+            # target, which is discounting a fact for looking
+            # improbable (Andy pressed twice: "why did the algo not use
+            # AC7WY?" -- this is why).
+            ev = getattr(d.model, "has_link_evidence", None)
+            observed = bool(ev and (ev(cand, node) or ev(node, cand)))
+            direction = 1.0 if observed else d._toward(cand)
+            live = d.copy(cand) * d.fwd(cand) * direction
             step = out * back * live
             if step <= 1e-9:
                 continue
@@ -359,8 +497,17 @@ class Decider:
         than the floor: 0.42 against 0.12 on the first case checked.
         """
         fwd = self.link(dest, station)
-        rev = (self.reverse(station, dest)
-               if self.link(station, dest) > 0.13 else 0.0)
+        # Evidence EXISTENCE, not magnitude. The old gate (> 0.13)
+        # meant a fresh but weak observation -- AC7WY hearing the
+        # target at -17 computes to ~0.11 -- read as "no evidence",
+        # so reciprocity was never applied and the route fell to the
+        # floor. Andy's question ("why was AC7WY not considered?")
+        # found it. Magnitude answers "how good"; only existence
+        # answers "do we know anything".
+        ev = getattr(self.model, "has_link_evidence", None)
+        seen = (ev(station, dest) if ev
+                else self.link(station, dest) > 0.13)
+        rev = self.reverse(station, dest) if seen else 0.0
         # TAKE THE BETTER OF THE TWO, not simply the forward one.
         # Preferring any forward evidence over any reverse evidence
         # sounds right -- a direct observation of the direction we need
@@ -496,7 +643,7 @@ class Decider:
               10.0 if last is None else 10 * self._stale(w.t - last))]
         out = [(pd / T_SNR,
                 Move("snr", T_SNR, why="any reply from them is contact",
-                     factors=f))]
+                     factors=f, reply_from=self.target))]
         if self._routes is None:
             self._routes = best_routes(self, self.board.pool, self.max_hops)
         for cand, (chain, p) in self._routes.items():
@@ -533,7 +680,8 @@ class Decider:
                  ("route length", f"{len(chain)} hop",
                   10.0 / len(chain))]
             out.append((p / cost, Move("relay", cost, via=cand,
-                                       chain=chain, why=why, factors=f)))
+                                       chain=chain, why=why, factors=f,
+                                       reply_from=self.target)))
         out.sort(key=lambda x: -x[0])
         return out
 
