@@ -876,4 +876,9 @@ class Decider:
                 best_probe = (score, mv)
         if best_probe and best_probe[0] > 0:
             return best_probe[1]
-        return Move("snr", T_SNR, why="nothing else to try")
+        # NOTHING LEFT. The old fallback re-sent the direct call here,
+        # bypassing the once-only rule -- against W3ED (0 candidates)
+        # it repeated "W3ED SNR?" every move until killed (operator
+        # rule: "no repeat direct SNR. once is enough"). No move IS
+        # the move: the attempt ends as busy-or-disabled.
+        return None

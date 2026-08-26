@@ -165,6 +165,11 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
         else:
             w.t = time.time()
             mv = d.choose(w)
+            if mv is None:
+                print(f"{now_s()}  nothing left to try -- every option "
+                      f"is spent; verdict: busy or disabled, retry "
+                      f"from the top later", flush=True)
+                break
         while time.time() < hold_until:
             time.sleep(0.5)
             for typ, val in radio.events():
