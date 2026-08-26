@@ -170,139 +170,113 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
         if mv.via:
             w.asked.add(mv.via)
 
-        # ---- wait, event-driven, gated on ANSWER-STARTED ------------
-        # RX.ACTIVITY hands us every frame at decode time, so the first
-        # frame of any reply is due one period after TX-end. Silence
-        # verdict is uniform (~21 s); the long window runs only once a
-        # reply is provably inbound.
-        # WHO must start answering inside the slot. For a directed
-        # message: that station. For a GROUP query: anyone -- and if
-        # nobody starts, the whole group is BUSY OR DISABLED and the
-        # verdict covers them all at once (Andy, 2026-08-26). Either
-        # way the remedy is identical: try again from the top later,
-        # never wait longer now.
+        # ---- ONE DEADLINE, extended only by observed progress -------
+        # The operator's construction (2026-08-26), replacing my
+        # per-stage clocks after both of their hand-off bugs: a single
+        # deadline computed from the WHOLE caused chain at TX-end;
+        # tripwires only ever SHORTEN it (a relay that never keys ends
+        # it in one slot); each caused message actually OBSERVED to
+        # start EXTENDS it to that event plus the remainder of the
+        # chain. One number to maintain -- pieces of the chain cannot
+        # be lost between clocks, and a late forward (K4GMX +104 s)
+        # extends naturally instead of eating the budget.
+        import math
+        def slot_end(t, n):
+            """Wall time of the n-th slot boundary after t, minus the
+            0.7 s enqueue margin."""
+            return ((math.floor((t - 1.0) / 15.0) + 1) * 15.0
+                    + 15.0 * n - 0.7)
         group = mv.kind == "shout"
         responder = (mv.via or T).upper()
         tx_end = None
-        started_at = None            # first frame from the responder
-        fwd_done_at = None           # relay only: forward assembled
+        deadline = None
+        fwd_started = fwd_done = ans_started = None
         rx_fwd = re.compile(rf"\*DE\*\s+{model.mycall}", re.I)
         rx_ans = re.compile(rf"^{re.escape(T)}\s*:", re.I)
         rx_yes = re.compile(rf":\s*{model.mycall}\s+YES\b", re.I)
-        check, verdict, abandon = mv.waits
         comp = decide.completion_secs(mv.kind, T)
-        hard_cap = time.time() + 90 + abandon
-        # SLOT-ANCHORED VERDICT (Andy, 2026-08-26: "we should have had
-        # a verdict in the range of 12.6+1 to 12.6+2 s... we could get
-        # the next msg out without delaying another frame"). The reply
-        # occupies exactly one slot: [B, B+15], B = the boundary after
-        # our TX-end. Its decode posts at B+11..14 (early passes run
-        # before the signal even ends). So the silence verdict belongs
-        # INSIDE the slot -- at B + period - 0.7 -- leaving 0.7 s to
-        # enqueue the next move, which then keys at B+15: no period is
-        # ever lost to a dead call. The HB 25% late slot gets one more.
-        slot_B = None                   # set when TX-END arrives
+        hard_cap = time.time() + 90 + 16 * 15
         while time.time() < hard_cap:
             for typ, val in radio.events():
                 v = val.strip()
+                nowt = time.time()
                 if typ == "TX.COMPLETE" and tx_end is None:
-                    tx_end = time.time()
-                    import math
-                    # true signal end is ~0.5 s before the event lands;
-                    # the boundary is the next 15 s multiple after it
-                    slot_B = (math.floor((tx_end - 1.0) / 15.0) + 1) * 15.0
-                    print(f"{now_s()}      TX-END (slot B "
-                          f"{time.strftime('%H:%M:%S', time.gmtime(slot_B))})",
+                    tx_end = nowt
+                    # initial deadline = the FIRST caused message's
+                    # slot (the tripwire); hb gets its documented two
+                    deadline = slot_end(tx_end, 2 if mv.kind == "hb"
+                                        else 1)
+                    print(f"{now_s()}      TX-END; deadline "
+                          f"{time.strftime('%H:%M:%S', time.gmtime(deadline))}",
                           flush=True)
-                elif typ == "RX.ACTIVITY" and tx_end and started_at is None \
-                        and (re.match(rf"[A-Z0-9/]+:\s*{model.mycall}\b",
-                                      v.upper())
-                             if group else
-                             v.upper().startswith(responder + ":")):
-                    started_at = time.time()
-                    print(f"{now_s()}      answer STARTED "
-                          f"+{started_at-tx_end:.0f}s: {v[:50]}", flush=True)
+                elif typ == "RX.ACTIVITY" and tx_end:
+                    up = v.upper()
+                    if mv.kind == "relay" and mv.via \
+                            and fwd_started is None \
+                            and up.startswith(mv.via.upper() + ":"):
+                        fwd_started = nowt
+                        # forward observed: extend for its remaining
+                        # ~2 frames plus the target's 3 answer slots
+                        deadline = max(deadline, nowt + 30.0 + 45.0)
+                        print(f"{now_s()}      forward STARTED "
+                              f"+{nowt-tx_end:.0f}s -- deadline extended",
+                              flush=True)
+                    elif ans_started is None and \
+                            (re.match(rf"[A-Z0-9/]+:\s*{model.mycall}\b",
+                                      up) if group else
+                             up.startswith(responder + ":")
+                             if mv.kind != "relay" else
+                             up.startswith(T + ":")):
+                        ans_started = nowt
+                        deadline = max(deadline, nowt + comp + 15.0)
+                        print(f"{now_s()}      answer STARTED "
+                              f"+{nowt-tx_end:.0f}s -- deadline extended",
+                              flush=True)
                 elif typ == "RX.DIRECTED":
-                    off = f"+{time.time()-tx_end:.0f}s" if tx_end else ""
-                    # A LATE FORWARD from a relay we had already given
-                    # up on (Andy, 2026-08-26: "we gave up on K4GMX too
-                    # soon"). The route was never dead, only slow --
-                    # its target-reply slot is now live, so hold our
-                    # own key-up two slots to keep the air clear for
-                    # the answer instead of transmitting over it.
+                    off = f"+{nowt-tx_end:.0f}s" if tx_end else ""
                     for pv in past_vias:
                         if v.upper().startswith(pv + ":") \
                                 and rx_fwd.search(v):
-                            hold_until = time.time() + 30.0
+                            hold_until = nowt + 30.0
                             print(f"{now_s()}      LATE FORWARD from "
                                   f"{pv}: holding TX two slots for its "
                                   f"reply", flush=True)
                     if rx_ans.match(v):
-                        print(f"{now_s()}  ANSWER {off}: {v[:70]}", flush=True)
-                        print(f"{now_s()}  REACHED {T} on move "
-                              f"{move_no}, {time.time()-w.t0:.0f}s "
-                              f"total, {move_no} transmissions",
+                        print(f"{now_s()}  ANSWER {off}: {v[:70]}",
                               flush=True)
+                        print(f"{now_s()}  REACHED {T} on move "
+                              f"{move_no}, {nowt-w.t0:.0f}s total, "
+                              f"{move_no} transmissions", flush=True)
                         return 0
                     if mv.kind == "relay" and mv.via and \
                             v.upper().startswith(mv.via.upper() + ":") \
                             and rx_fwd.search(v):
-                        fwd_done_at = time.time()
-                        print(f"{now_s()}      forward complete {off}: "
-                              f"{v[:60]}", flush=True)
-                        # phase 2: the TARGET's answer must now start;
-                        # rearm the started-gate for it -- INCLUDING
-                        # the slot boundary. Leaving slot_B at move
-                        # start meant verdict_wall was already in the
-                        # past, so the verdict fired at +0.0s and the
-                        # target's reply slot was never waited for
-                        # after ANY successful forward (found by the
-                        # operator asking "or did it?", 2026-08-26 --
-                        # against a real target this abandoned every
-                        # relay at the moment it succeeded).
-                        import math
-                        responder = T
-                        started_at = None
-                        tx_end = fwd_done_at        # new anchor
-                        slot_B = (math.floor((fwd_done_at - 1.0) / 15.0)
-                                  + 1) * 15.0
+                        fwd_done = nowt
+                        deadline = max(deadline, slot_end(nowt, 3))
+                        print(f"{now_s()}      forward complete {off}; "
+                              f"target has three slots", flush=True)
                     if rx_yes.search(v):
                         who = base(v.split(":")[0]).upper()
                         w.learned[who] = 0.9
                         print(f"{now_s()}      learned {off}: {v[:60]}",
                               flush=True)
-            if tx_end is None:
+            if tx_end is None or time.time() < deadline:
                 continue
-            dt = time.time() - tx_end
-            # Phase 2 (a forward has completed, the TARGET must answer)
-            # gets THREE slots, from the one real relayed answer on
-            # record: KQ4DNM replied 46 s after KO4JJW's forward
-            # (decode the forward + its own queue + a two-frame relayed
-            # reply). One slot there would have abandoned the only
-            # relay contact ever made, at the moment it was succeeding
-            # (operator: "did KQ4DNM answer us in time?" -- yes, at
-            # +46, and that number is why this is 3).
-            slots = (3 if (mv.kind == "relay" and fwd_done_at)
-                     else 2 if mv.kind == "hb" else 1)
-            verdict_wall = slot_B + 15.0 * slots - 0.7
-            if started_at is None and time.time() > verdict_wall:
-                who = ("the whole group" if group else responder)
-                note = (" -- moving on, STILL LISTENING (late forwards "
-                        "observed to +104s: K4GMX)" if mv.kind == "relay"
-                        else "")
-                print(f"{now_s()}      VERDICT +{dt:.1f}s: {who} busy or "
-                      f"disabled -- retry from the top later{note}",
-                      flush=True)
-                radio.attempt_done()      # red line off, immediately
-                if mv.kind == "relay" and mv.via:
-                    past_vias.append(mv.via.upper())
-                break
-            if started_at is not None and \
-                    time.time() - started_at > comp + period_grace():
-                print(f"{now_s()}      answer started but never "
-                      f"assembled (+{time.time()-started_at:.0f}s) -- "
-                      f"frames lost; moving on", flush=True)
-                break
+            state = ("relay silent -- never keyed"
+                     if mv.kind == "relay" and fwd_started is None else
+                     "forwarded, but the target never answered"
+                     if fwd_done is not None else
+                     "answer started but never assembled -- frames lost"
+                     if ans_started is not None else
+                     ("the whole group is" if group else responder + " is")
+                     + " busy or disabled")
+            print(f"{now_s()}      VERDICT "
+                  f"+{time.time()-tx_end:.0f}s: {state} -- retry from "
+                  f"the top later", flush=True)
+            radio.attempt_done()
+            if mv.kind == "relay" and mv.via:
+                past_vias.append(mv.via.upper())
+            break
     print(f"{now_s()}  NOT REACHED after {move_no} moves "
           f"({time.time()-w.t0:.0f}s total) -- verdict: busy or "
           f"disabled; retry from the top later (rerun this command)",
