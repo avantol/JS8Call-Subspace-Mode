@@ -94,6 +94,26 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
         if chosen is None:
             return 2
         target = chosen
+    # [#173] The screen applies to NAMED targets too -- warn, never
+    # refuse. KD2M was run as a named target and the ledger said
+    # nothing about it being a receive-only monitor; the grid path
+    # would have warned. A named monitor proceeds (the operator chose
+    # it) but the ledger must say what it is.
+    row = model.db.execute(
+        "SELECT rx_only, radio_when, snr_to_me FROM stations WHERE "
+        "band=? AND call=?", (model.band, base(target).upper())).fetchone()
+    if row is not None:
+        if row["rx_only"]:
+            extra = (f" (it hears us at {row['snr_to_me']:+d} -- delivery "
+                     f"provable)" if row["snr_to_me"] and
+                     row["snr_to_me"] > -99 else "")
+            print(f"{now_s()}  WARNING: {base(target).upper()} has never "
+                  f"been heard transmitting -- receive-only monitor; "
+                  f"expect no reply{extra}", flush=True)
+        elif not row["radio_when"]:
+            print(f"{now_s()}  WARNING: {base(target).upper()} never "
+                  f"heard on radio this session -- internet-only "
+                  f"evidence", flush=True)
     board = LiveBoard(model, target)
     d = decide.Decider(model, board, target, model.mycall)
     d._routes = decide.best_routes(d, board.pool)
