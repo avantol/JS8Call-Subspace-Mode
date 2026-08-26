@@ -68,6 +68,67 @@ class Radio:
             {"type": type_, "value": value,
              "params": {"_ID": -1}}).encode() + b"\n")
 
+    def request(self, type_: str, reply_type: str, params=None,
+                timeout: float = 5.0) -> dict:
+        """Send `type_` and return the params of the first `reply_type`
+        seen. Other events read while waiting are DROPPED -- only used
+        before/after the attempt, never inside the wait loop."""
+        p = {"_ID": -1}
+        p.update(params or {})
+        self.sock.sendall(json.dumps(
+            {"type": type_, "value": "", "params": p}).encode() + b"\n")
+        end = time.time() + timeout
+        while time.time() < end:
+            self.sock.settimeout(max(0.05, end - time.time()))
+            try:
+                data = self.sock.recv(65536)
+            except socket.timeout:
+                continue
+            if not data:
+                break
+            self.buf += data
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                try:
+                    m = json.loads(line.decode())
+                except ValueError:
+                    continue
+                if m.get("type") == reply_type:
+                    return m.get("params", {})
+        return {}
+
+    NORMAL = 0
+
+    def pin_normal_speed(self):
+        """First messages to a station are ALWAYS Normal (operator
+        rule). The N9EAT run inherited Subspace speed from the app
+        (submode 16, 3.75s frames) -- every TX aired at the wrong
+        speed and no relay keyed. Returns the original speed so the
+        caller can restore it, or None if already Normal."""
+        cur = self.request("MODE.GET_SPEED", "MODE.SPEED").get("SPEED")
+        if cur in (None, self.NORMAL):
+            return None
+        r = self.request("MODE.SET_SPEED", "MODE.SET_SPEED",
+                         {"SPEED": self.NORMAL})
+        if r.get("REFUSED"):
+            print(f"{now_s()}  WARNING: cannot set Normal speed "
+                  f"({r.get('REASON')}) -- app stays at {cur}; "
+                  f"NOT transmitting at the wrong speed", flush=True)
+            raise SystemExit(3)
+        print(f"{now_s()}  speed pinned to Normal (app was at {cur}; "
+              f"restored on exit)", flush=True)
+        return cur
+
+    def restore_speed(self, speed) -> None:
+        if speed is None:
+            return
+        r = self.request("MODE.SET_SPEED", "MODE.SET_SPEED",
+                         {"SPEED": speed})
+        state = ("REFUSED: " + str(r.get("REASON"))
+                 if r.get("REFUSED") else "done")
+        print(f"{now_s()}  speed restored to {speed} -- {state}",
+              flush=True)
+
     def attempt_done(self) -> None:
         """Clear the map's red attempt line NOW -- the verdict is in."""
         self.sock.sendall(json.dumps(
@@ -147,6 +208,12 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
     w.learned = {}; w.relocated = set(); w.gave_up = False
 
     radio = Radio()
+    # Speed pin + guaranteed restore on every exit path (REACHED's
+    # return, the exhausted break, exceptions). atexit does not run
+    # on SIGKILL -- an operator hard-kill leaves the app at Normal,
+    # which is the safe direction.
+    import atexit
+    atexit.register(radio.restore_speed, radio.pin_normal_speed())
     # THE LITERAL CALLSIGN, affixes preserved. base() here would have
     # turned WM8Q/P into WM8Q -- our own call -- transmitting
     # "WM8Q: WM8Q SNR?" and matching our own autoreplies as the
