@@ -121,8 +121,10 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
             mv = d.choose(w)
         wire = mv.wire(model.mycall, T)
         check, escalate, abandon = mv.waits
-        print(f"{now_s()}  [{move_no}] SEND {wire}   "
-              f"(check +{check:.0f}s escalate +{escalate:.0f}s)", flush=True)
+        print(f"{now_s()}  [{move_no}] SEND {wire}", flush=True)
+        # the WHY, factor by factor, before it airs -- so correctness
+        # can be judged from the ledger alone
+        print(decide.explain(mv, T, model.mycall), flush=True)
         radio.send(wire)
         w.tried[(mv.kind, mv.via or (T if mv.kind in ("snr", "grid")
                                      else ""))] = time.time()
@@ -185,7 +187,9 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                     off = f"+{time.time()-tx_end:.0f}s" if tx_end else ""
                     if rx_ans.match(v):
                         print(f"{now_s()}  ANSWER {off}: {v[:70]}", flush=True)
-                        print(f"{now_s()}  REACHED {T} on move {move_no}",
+                        print(f"{now_s()}  REACHED {T} on move "
+                              f"{move_no}, {time.time()-w.t0:.0f}s "
+                              f"total, {move_no} transmissions",
                               flush=True)
                         return 0
                     if mv.kind == "relay" and mv.via and \
@@ -222,7 +226,9 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                       f"frames lost; moving on", flush=True)
                 break
     print(f"{now_s()}  NOT REACHED after {move_no} moves "
-          f"({time.time()-w.t0:.0f}s total)", flush=True)
+          f"({time.time()-w.t0:.0f}s total) -- verdict: busy or "
+          f"disabled; retry from the top later (rerun this command)",
+          flush=True)
     return 1
 
 
@@ -232,7 +238,8 @@ def main() -> int:
     ap.add_argument("--band", default="")
     ap.add_argument("--via", default="",
                     help="force move 1 to relay via this station")
-    ap.add_argument("--max-moves", type=int, default=3)
+    ap.add_argument("--max-moves", type=int, default=6,
+                    help="courtesy cap on transmissions per attempt")
     a = ap.parse_args()
     return run(a.target, a.band, a.via, a.max_moves)
 
