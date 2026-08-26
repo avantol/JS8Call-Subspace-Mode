@@ -69,8 +69,15 @@ class Radio:
             {"type": "TX.ATTEMPT_DONE", "value": "",
              "params": {"_ID": -1}}).encode() + b"\n")
 
-    def events(self):
-        """Yield (type, value) without blocking longer than 0.5 s."""
+    def events(self, wake_in: float = 0.5):
+        """Yield (type, value); block until an event arrives OR
+        `wake_in` seconds pass -- the caller sets wake_in to the time
+        remaining until its deadline, so the decision fires ON the
+        deadline instead of up to half a second late (operator, 2026-
+        08-26: "set a timer for period boundary minus frame setup
+        time; when that timer fires and we have no from-frame, we do
+        something else"). Evidence is push; only absence is timed."""
+        self.sock.settimeout(max(0.005, min(0.5, wake_in)))
         try:
             chunk = self.sock.recv(65536)
             if chunk:
@@ -197,7 +204,8 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
         comp = decide.completion_secs(mv.kind, T)
         hard_cap = time.time() + 90 + 16 * 15
         while time.time() < hard_cap:
-            for typ, val in radio.events():
+            wake = (deadline - time.time()) if deadline else 0.5
+            for typ, val in radio.events(wake):
                 v = val.strip()
                 nowt = time.time()
                 if typ == "TX.COMPLETE" and tx_end is None:
