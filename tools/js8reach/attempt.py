@@ -112,19 +112,25 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
     # nothing about it being a receive-only monitor; the grid path
     # would have warned. A named monitor proceeds (the operator chose
     # it) but the ledger must say what it is.
+    # LITERAL CALL ONLY -- no base() fallback. The fallback matched
+    # OUR OWN row for WM8Q/P and printed its warning as the target's
+    # (operator: "there's that rule again. a base call is nearly never
+    # correct"). WM8Q/P's record is WM8Q/P's; absence of a row is the
+    # true answer, not a licence to borrow the base call's.
     row = model.db.execute(
         "SELECT rx_only, radio_when, snr_to_me FROM stations WHERE "
-        "band=? AND call=?", (model.band, base(target).upper())).fetchone()
+        "band=? AND call=?",
+        (model.band, target.upper().strip())).fetchone()
     if row is not None:
         if row["rx_only"]:
             extra = (f" (it hears us at {row['snr_to_me']:+d} -- delivery "
                      f"provable)" if row["snr_to_me"] and
                      row["snr_to_me"] > -99 else "")
-            print(f"{now_s()}  WARNING: {base(target).upper()} has never "
+            print(f"{now_s()}  WARNING: {target.upper().strip()} has never "
                   f"been heard transmitting -- receive-only monitor; "
                   f"expect no reply{extra}", flush=True)
         elif not row["radio_when"]:
-            print(f"{now_s()}  WARNING: {base(target).upper()} never "
+            print(f"{now_s()}  WARNING: {target.upper().strip()} never "
                   f"heard on radio this session -- internet-only "
                   f"evidence", flush=True)
     board = LiveBoard(model, target)
@@ -136,7 +142,12 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
     w.learned = {}; w.relocated = set(); w.gave_up = False
 
     radio = Radio()
-    T = base(target).upper()
+    # THE LITERAL CALLSIGN, affixes preserved. base() here would have
+    # turned WM8Q/P into WM8Q -- our own call -- transmitting
+    # "WM8Q: WM8Q SNR?" and matching our own autoreplies as the
+    # answer. Affixes are part of the on-air identity (standing rule);
+    # base() is for record lookups only.
+    T = target.upper().strip()
     past_vias: list = []          # relays already asked this attempt
     hold_until = 0.0              # leave air clear for a late reply
     print(f"{now_s()}  target {T} on {model.band}; "
