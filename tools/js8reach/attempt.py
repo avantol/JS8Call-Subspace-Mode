@@ -251,10 +251,21 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         print(f"{now_s()}      forward complete {off}: "
                               f"{v[:60]}", flush=True)
                         # phase 2: the TARGET's answer must now start;
-                        # rearm the started-gate for it.
+                        # rearm the started-gate for it -- INCLUDING
+                        # the slot boundary. Leaving slot_B at move
+                        # start meant verdict_wall was already in the
+                        # past, so the verdict fired at +0.0s and the
+                        # target's reply slot was never waited for
+                        # after ANY successful forward (found by the
+                        # operator asking "or did it?", 2026-08-26 --
+                        # against a real target this abandoned every
+                        # relay at the moment it succeeded).
+                        import math
                         responder = T
                         started_at = None
                         tx_end = fwd_done_at        # new anchor
+                        slot_B = (math.floor((fwd_done_at - 1.0) / 15.0)
+                                  + 1) * 15.0
                     if rx_yes.search(v):
                         who = base(v.split(":")[0]).upper()
                         w.learned[who] = 0.9
