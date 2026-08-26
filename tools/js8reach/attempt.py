@@ -153,6 +153,7 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
     print(f"{now_s()}  target {T} on {model.band}; "
           f"{len(board.pool)} candidates", flush=True)
 
+    sent = 0                      # transmissions actually made
     for move_no in range(1, max_moves + 1):
         if force_via and move_no == 1:
             chain = board.chain.get(force_via.upper()) or [force_via.upper()]
@@ -183,6 +184,7 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                     return 0
         wire = mv.wire(model.mycall, T)
         check, escalate, abandon = mv.waits
+        sent += 1
         print(f"{now_s()}  [{move_no}] SEND {wire}", flush=True)
         # the WHY, factor by factor, before it airs -- so correctness
         # can be judged from the ledger alone
@@ -270,7 +272,7 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                               flush=True)
                         print(f"{now_s()}  REACHED {T} on move "
                               f"{move_no}, {nowt-w.t0:.0f}s total, "
-                              f"{move_no} transmissions", flush=True)
+                              f"{sent} transmissions", flush=True)
                         return 0
                     if mv.kind == "relay" and mv.via and \
                             v.upper().startswith(mv.via.upper() + ":") \
@@ -301,7 +303,7 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
             if mv.kind == "relay" and mv.via:
                 past_vias.append(mv.via.upper())
             break
-    print(f"{now_s()}  NOT REACHED after {move_no} moves "
+    print(f"{now_s()}  NOT REACHED after {sent} transmissions "
           f"({time.time()-w.t0:.0f}s total) -- verdict: busy or "
           f"disabled; retry from the top later (rerun this command)",
           flush=True)
