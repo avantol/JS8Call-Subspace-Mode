@@ -130,6 +130,8 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
 
     radio = Radio()
     T = base(target).upper()
+    past_vias: list = []          # relays already asked this attempt
+    hold_until = 0.0              # leave air clear for a late reply
     print(f"{now_s()}  target {T} on {model.band}; "
           f"{len(board.pool)} candidates", flush=True)
 
@@ -145,6 +147,17 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
         else:
             w.t = time.time()
             mv = d.choose(w)
+        while time.time() < hold_until:
+            time.sleep(0.5)
+            for typ, val in radio.events():
+                if typ == "RX.DIRECTED" and \
+                        re.match(rf"{re.escape(T)}\s*:", val.strip(),
+                                 re.I):
+                    print(f"{now_s()}  ANSWER (late route): "
+                          f"{val[:70]}", flush=True)
+                    print(f"{now_s()}  REACHED {T} via a late forward",
+                          flush=True)
+                    return 0
         wire = mv.wire(model.mycall, T)
         check, escalate, abandon = mv.waits
         print(f"{now_s()}  [{move_no}] SEND {wire}", flush=True)
@@ -211,6 +224,19 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                           f"+{started_at-tx_end:.0f}s: {v[:50]}", flush=True)
                 elif typ == "RX.DIRECTED":
                     off = f"+{time.time()-tx_end:.0f}s" if tx_end else ""
+                    # A LATE FORWARD from a relay we had already given
+                    # up on (Andy, 2026-08-26: "we gave up on K4GMX too
+                    # soon"). The route was never dead, only slow --
+                    # its target-reply slot is now live, so hold our
+                    # own key-up two slots to keep the air clear for
+                    # the answer instead of transmitting over it.
+                    for pv in past_vias:
+                        if v.upper().startswith(pv + ":") \
+                                and rx_fwd.search(v):
+                            hold_until = time.time() + 30.0
+                            print(f"{now_s()}      LATE FORWARD from "
+                                  f"{pv}: holding TX two slots for its "
+                                  f"reply", flush=True)
                     if rx_ans.match(v):
                         print(f"{now_s()}  ANSWER {off}: {v[:70]}", flush=True)
                         print(f"{now_s()}  REACHED {T} on move "
@@ -241,10 +267,15 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
             verdict_wall = slot_B + 15.0 * slots - 0.7
             if started_at is None and time.time() > verdict_wall:
                 who = ("the whole group" if group else responder)
+                note = (" -- moving on, STILL LISTENING (late forwards "
+                        "observed to +104s: K4GMX)" if mv.kind == "relay"
+                        else "")
                 print(f"{now_s()}      VERDICT +{dt:.1f}s: {who} busy or "
-                      f"disabled -- retry from the top later; next move "
-                      f"can key the coming boundary", flush=True)
+                      f"disabled -- retry from the top later{note}",
+                      flush=True)
                 radio.attempt_done()      # red line off, immediately
+                if mv.kind == "relay" and mv.via:
+                    past_vias.append(mv.via.upper())
                 break
             if started_at is not None and \
                     time.time() - started_at > comp + period_grace():
