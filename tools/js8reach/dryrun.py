@@ -91,8 +91,16 @@ def main() -> int:
     args = ap.parse_args()
 
     lm = LiveMap.fetch(band=args.band)
-    target = base(args.target).upper()
     model = LiveModel(lm, band=args.band)
+    # [#180] grid targets resolve to a screened, reachability-ranked
+    # station first; the plan below is then for that station.
+    import gridtarget
+    if gridtarget.is_grid(args.target):
+        chosen, _mon = gridtarget.resolve(model, args.target)
+        if chosen is None:
+            return 1
+        args.target = chosen
+    target = base(args.target).upper()
     board = LiveBoard(model, target)
 
     known = model.rows_on_band()

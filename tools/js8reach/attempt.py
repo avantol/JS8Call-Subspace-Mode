@@ -83,6 +83,17 @@ class Radio:
 def run(target: str, band: str, force_via: str, max_moves: int) -> int:
     lm = LiveMap.fetch(band=band)
     model = LiveModel(lm, band=band)
+    # [#180] A GRID is a first-class target: resolve it to the best
+    # reachable station in the square (screened -- a receive-only
+    # monitor warns and sinks, never silently chosen), then run the
+    # normal loop. A square with only monitors that report us is a
+    # PARTIAL SUCCESS (delivery in proven), reported as such.
+    import gridtarget
+    if gridtarget.is_grid(target):
+        chosen, monitors = gridtarget.resolve(model, target)
+        if chosen is None:
+            return 2
+        target = chosen
     board = LiveBoard(model, target)
     d = decide.Decider(model, board, target, model.mycall)
     d._routes = decide.best_routes(d, board.pool)
