@@ -433,8 +433,18 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         print(f"{now_s()}      forward complete {off}; "
                               f"target has three slots", flush=True)
                     if rx_yes.search(v):
-                        who = base(v.split(":")[0]).upper()
+                        # LITERAL call ("a base call is nearly never
+                        # correct") -- the model's keys are literal.
+                        who = v.split(":")[0].strip().upper()
                         w.learned[who] = 0.9
+                        # THE MISSING WIRE (found 02:52Z 08-27): the
+                        # hook that pins this station's link to the
+                        # target and rebuilds the route tree existed
+                        # and had NO caller -- KQ4DNM and KD6FLM both
+                        # answered "YES I hear KG5KBO" and the router
+                        # then chose two 0.12-prior strangers. Every
+                        # YES now reranks the routes it should.
+                        d.told_us_it_hears_target(who)
                         print(f"{now_s()}      learned {off}: {v[:60]}",
                               flush=True)
                     doff = prm.get("OFFSET")
