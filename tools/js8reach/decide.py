@@ -513,9 +513,17 @@ class Decider:
         # floor. Andy's question ("why was AC7WY not considered?")
         # found it. Magnitude answers "how good"; only existence
         # answers "do we know anything".
+        # A pinned fresh YES (told_us_it_hears_target) lives in THIS
+        # cache and nowhere else -- the model's DB is a snapshot from
+        # run start. The gate asked only the DB, so a station that
+        # told us seconds ago it hears the target still scored the
+        # 0.12 no-evidence floor (K7JLJ run 03:09Z: five YES answers,
+        # router chose a stranger). Evidence is evidence wherever it
+        # is recorded.
+        pinned = self._c.get(("lk", station, dest), 0.0) >= FRESH_LINK
         ev = getattr(self.model, "has_link_evidence", None)
-        seen = (ev(station, dest) if ev
-                else self.link(station, dest) > 0.13)
+        seen = pinned or (ev(station, dest) if ev
+                          else self.link(station, dest) > 0.13)
         rev = self.reverse(station, dest) if seen else 0.0
         # TAKE THE BETTER OF THE TWO, not simply the forward one.
         # Preferring any forward evidence over any reverse evidence
