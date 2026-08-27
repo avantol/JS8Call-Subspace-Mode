@@ -348,9 +348,16 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                             and fwd_started is None \
                             and up.startswith(mv.via.upper() + ":"):
                         fwd_started = nowt
-                        # forward observed: extend for its remaining
-                        # ~2 frames plus the target's 3 answer slots
-                        deadline = max(deadline, nowt + 30.0 + 45.0)
+                        # SLOT-ANCHORED (audit 2026-08-27): worst case
+                        # is a 3-frame forward (2 slots left) + the
+                        # target's 3 answer slots; the answer's first
+                        # frame then delivers at B+73.2. The old
+                        # wall-clock +75 from a decode 2.4s before the
+                        # boundary expired at B+72.6 -- 0.6s SHORT in
+                        # that corner. slot_end(nowt,5)=B+74.3 covers
+                        # it with the standard 1.1s delivery margin;
+                        # forward-complete re-anchors tighter anyway.
+                        deadline = max(deadline, slot_end(nowt, 5))
                         print(f"{now_s()}      forward STARTED "
                               f"+{nowt-tx_end:.0f}s -- deadline extended",
                               flush=True)
