@@ -754,18 +754,34 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
                     latestDeliveredSilent =
                         qMax(latestDeliveredSilent, o.ms);
                 }
+        // Transmission evidence from ANY witness clears the gate --
+        // a PSKR spot, a YES answer's age, a HEARING list, our own
+        // decode: every edge naming the target as HEARD proves it
+        // transmitted, and all but PSKR work with no internet
+        // (operator: "suppose no-internet, how would we hear that
+        // the station had transmitted?").
+        qint64 lastTxEvidence = 0;
         auto const ts = g_book.stations.value(T);
-        qint64 const lastRadioMs =
-            ts.source == QLatin1String("radio") ? ts.lastSeenMs : 0;
+        if (ts.source == QLatin1String("radio"))
+            lastTxEvidence = ts.lastSeenMs;
+        for (auto it = g_book.edges.constBegin();
+             it != g_book.edges.constEnd(); ++it) {
+            auto const he = it.value().constFind(T);
+            if (he != it.value().constEnd())
+                lastTxEvidence = qMax(lastTxEvidence,
+                                      he.value().whenMs);
+        }
         if (deliveredSilent >= 2 &&
-            lastRadioMs < latestDeliveredSilent) {
+            lastTxEvidence < latestDeliveredSilent) {
             m_reach.relaysBlocked = true;
+            m_reach.gateSilenceMs = latestDeliveredSilent;
             reachLog(QStringLiteral("WARNING: %1 has %2 unanswered "
-                                    "asks on record and has not been "
-                                    "heard transmitting since -- one "
-                                    "direct call only; no relay "
-                                    "attempts and no QUERY CALL until "
-                                    "it is heard transmitting")
+                                    "asks on record and no station "
+                                    "has heard it since -- relays "
+                                    "restricted to routes with "
+                                    "evidence newer than that "
+                                    "silence; the shout stays "
+                                    "available to ask the band")
                          .arg(T).arg(deliveredSilent));
         }
     }
@@ -1263,7 +1279,7 @@ void UI_Constructor::reachNextMove() {
     // so collapsed trust or floor-grade booked routes escalate to
     // asking the band NATURALLY, and a strong fresh booked route
     // keeps the 98 seconds in hand.
-    if (!overBudget && !m_reach.relaysBlocked &&
+    if (!overBudget &&
         !m_reach.triedAt.contains(QStringLiteral("shout"))) {
         double const trust = bandTrust(m_reach.band, now);
         double const qAns = 0.29;              // measured answer rate
@@ -1334,10 +1350,26 @@ void UI_Constructor::reachNextMove() {
 
     // ---- step 3: routes, best first (decide.py:884-887) -----------
     for (auto const &x : ranked) {
-        if (m_reach.relaysBlocked)
-            break;
         if (x.mv.kind != QLatin1String("relay"))
             continue;
+        if (m_reach.relaysBlocked) {
+            // restricted: only routes resting on evidence NEWER than
+            // the last delivered-silence (down-weighting to zero for
+            // the stale book only -- operator: "i thought i
+            // suggested down-weighting")
+            QString const lastHop = x.mv.chain.isEmpty()
+                                        ? x.mv.via
+                                        : x.mv.chain.last();
+            bool const fresh =
+                bookEdge(lastHop, T).whenMs > m_reach.gateSilenceMs ||
+                bookEdge(T, lastHop).whenMs > m_reach.gateSilenceMs;
+            if (!fresh)
+                continue;
+            reachLog(QStringLiteral("    restricted target, but %1's "
+                                    "route evidence postdates the "
+                                    "silence -- spendable")
+                         .arg(x.mv.via));
+        }
         QString const relKey = x.mv.chain.isEmpty()
                                    ? x.mv.via : x.mv.chain.last();
         qint64 const tried = m_reach.triedAt.value(
@@ -1486,10 +1518,10 @@ void UI_Constructor::reachNextMove() {
     // ---- nothing left (decide.py:896-901) -------------------------
     if (m_reach.relaysBlocked) {
         reachStop(QStringLiteral("direct call unanswered; delivery to "
-                                 "%1 was already proven and it has "
-                                 "not transmitted since -- no relay "
-                                 "attempts until it is heard "
-                                 "transmitting")
+                                 "%1 was already proven, no station "
+                                 "has heard it since, and no route "
+                                 "carries newer evidence -- retry "
+                                 "when it is heard transmitting")
                       .arg(m_reach.target));
         return;
     }
