@@ -454,6 +454,13 @@ void UI_Constructor::processCommandActivity() {
         // Log to DIRECTED.txt (includes FROM prefix)
         writeMsgTxt(text, d.snr, d.offset);
 
+        // [reachport] The executor's assembled-message feed -- the
+        // canonical text, before every reply gate. YES answers reach
+        // the hearing store via bindCallQueryReply on this same pass;
+        // the executor's router reads the store live.
+        if (m_reach.active)
+            reachOnDirected(d, text);
+
         // [attemptviz 2026-08-22] Somebody answered US -- green line.
         // Gate on "addressed to me", not on matching a live attempt:
         // a broadcast sweep draws no red path but its responders are

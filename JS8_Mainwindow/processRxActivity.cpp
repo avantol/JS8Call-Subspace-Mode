@@ -20,6 +20,11 @@ void UI_Constructor::processRxActivity() {
     while (!m_rxActivityQueue.isEmpty()) {
         ActivityDetail d = m_rxActivityQueue.dequeue();
 
+        // [reachport] The executor's per-frame watcher feed -- same
+        // stream RX.ACTIVITY pushes to API clients, in process.
+        if (m_reach.active)
+            reachOnFrame(d);
+
         if (canSendNetworkMessage()) {
             sendNetworkMessage(
                 "RX.ACTIVITY", d.text,

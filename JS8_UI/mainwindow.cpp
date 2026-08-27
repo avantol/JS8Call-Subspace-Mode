@@ -4588,6 +4588,11 @@ void UI_Constructor::stopTx() {
                             {"UTC", QVariant(
                                 DriftingDateTime::currentDateTimeUtc()
                                     .toMSecsSinceEpoch())}});
+
+        // [reachport] The executor's TX-end anchor -- signal end,
+        // the same instant TX.COMPLETE reports to API clients.
+        if (m_reach.active)
+            reachOnTxComplete();
     }
 
     pttReleaseTimer.start(

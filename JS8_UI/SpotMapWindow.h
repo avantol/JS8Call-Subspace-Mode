@@ -100,6 +100,31 @@ class SpotMapWindow final : public QWidget {
         return m_gridByCall.value(call.toUpper());
     }
 
+    // [reachport] Typed reads over the RAM store for the in-app
+    // reaching executor -- the store stays the ONE authority
+    // (GridDb.h: "RAM is the single in-session authority"); these are
+    // the knownGrid() precedent applied to edges and presence. NO
+    // QVariant round-trip: the executor asks the same questions the
+    // frozen python asked of dumpState(), in process.
+    struct HearerView {
+        QString hearer;      // upper-case callsign
+        QString grid;
+        qint64  whenMs = 0;  // edge sighting time (ms since epoch)
+        int     snr = -99;   // third-party: how well hearer copies
+        QString source;      // "radio" | "hearing" | "mqtt"
+    };
+    QVector<HearerView> hearersOf(QString const &band,
+                                  QString const &heard) const;
+    struct StationView {
+        QString call;        // upper-case
+        QString grid;
+        qint64  lastSeenMs = 0;
+        int     snrToMe = -99;   // their report of OUR signal
+        bool    hearsMe = false; // heard-map contains us
+        QString source;
+    };
+    QVector<StationView> activeStations(QString const &band) const;
+
     // heardWhen: optional BACKDATED sighting time for the heard
     // edges ([#161] age-bearing replies) — invalid = now; an edge's
     // `when` only ever moves FORWARD. heardSnr: third-party SNR for

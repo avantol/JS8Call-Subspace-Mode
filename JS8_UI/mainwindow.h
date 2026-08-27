@@ -1316,6 +1316,55 @@ class UI_Constructor : public QMainWindow {
     bool bindCallQueryReply(QString const &responder,
                             QString const &replyText, int dial);
 
+    // [reachport 2026-08-27] THE REACHING EXECUTOR, ported from the
+    // frozen python (tools/js8reach @ c6e2e7e3) after a night proved
+    // the split-brain problem: reply-knowledge lived in five places
+    // over the TCP straw. Here each fact has its native owner: the
+    // hearing store is the model (bindCallQueryReply already files
+    // age-graded YES edges), the assembler is the watcher substrate,
+    // stopTx is the TX-end anchor. Engine body: reachExecutor.cpp.
+    struct ReachWatcher {
+        qint64 lastMs = 0;   // last frame delivery on this offset
+        bool   done = false; // assembled
+    };
+    struct ReachState {
+        bool        active = false;
+        QString     target;         // LITERAL, upper (affixes kept)
+        QString     band;
+        int         moveNo = 0;
+        int         sent = 0;
+        int         maxMoves = 6;
+        QString     kind;           // "snr" | "shout" | "relay"
+        QString     via;            // relay move only
+        QStringList triedRelays;
+        bool        triedDirect = false;
+        bool        triedShout = false;
+        qint64      startMs = 0;
+        qint64      txEndMs = 0;    // signal end (stopTx, per spec)
+        qint64      deadlineMs = 0;
+        qint64      fwdStartedMs = 0;
+        qint64      fwdDoneMs = 0;
+        qint64      ansStartedMs = 0;
+        QMap<int, ReachWatcher> watchers;   // offset -> watcher
+        int         savedSubmode = -1;      // speed restored on stop
+        QString     lastWire;
+    };
+    ReachState m_reach;
+    QTimer *m_reachTimer = nullptr;
+    void reachStart(QString const &target, int maxMoves = 6);
+    void reachStop(QString const &reason);
+    void reachNextMove();
+    void reachSend(QString const &wire);
+    void reachOnTxComplete();
+    void reachOnFrame(ActivityDetail const &d);
+    void reachOnDirected(CommandDetail const &d, QString const &line);
+    void reachTick();
+    void reachArmTimer();
+    void reachLog(QString const &line);
+    qint64 reachSlotEndMs(qint64 tMs, int n) const;
+    double reachPLink(qint64 whenMs, int snr) const;
+    void reachPlaceTemplate(QStringList const &path);
+
     QDateTime m_lastTxStartTime;
     QDateTime m_lastTxStopTime;
     QDateTime m_txQueueStartTime;  // wall-clock when first frame TX began (for countdown)

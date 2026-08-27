@@ -615,6 +615,24 @@ if(type == "STATION.SET_SPOT") {
         return;
     }
 
+    /** @brief TX.REACH: run one reaching attempt at the callsign in
+     * `value` -- the in-app port of tools/js8reach/attempt.py
+     * ([reachport], reachExecutor.cpp). Optional param MAX_MOVES.
+     * Ledger lines land in the diag log under [REACH].
+     * TX.REACH_STOP halts the attempt and restores speed.
+     */
+    if (type == "TX.REACH") {
+        auto ok = false;
+        auto const mm =
+            message.params().value("MAX_MOVES", QVariant(6)).toInt(&ok);
+        reachStart(message.value(), ok ? mm : 6);
+        return;
+    }
+    if (type == "TX.REACH_STOP") {
+        reachStop(QStringLiteral("stopped by operator"));
+        return;
+    }
+
     if (type == "TX.SEND_MESSAGE") {
         auto text = message.value();
         if (!text.isEmpty()) {

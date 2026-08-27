@@ -898,6 +898,49 @@ void putTime(QVariantMap &m, QString const &key, QString const &ageKey,
 
 } // namespace
 
+// [reachport] Typed reads for the in-app executor; see header.
+QVector<SpotMapWindow::HearerView>
+SpotMapWindow::hearersOf(QString const &band, QString const &heard) const {
+    QVector<HearerView> out;
+    QString const H = heard.toUpper();
+    auto const &hb = m_hearingByBand.value(band);
+    for (auto it = hb.constBegin(); it != hb.constEnd(); ++it) {
+        auto const he = it.value().heard.constFind(H);
+        if (he == it.value().heard.constEnd())
+            continue;
+        HearerView v;
+        v.hearer = it.key();
+        v.grid = he.value().grid.isEmpty()
+                     ? m_gridByCall.value(it.key())
+                     : he.value().grid;
+        v.whenMs = he.value().when.isValid()
+                       ? he.value().when.toMSecsSinceEpoch() : 0;
+        v.snr = he.value().snr;
+        v.source = he.value().source;
+        out.append(v);
+    }
+    return out;
+}
+
+QVector<SpotMapWindow::StationView>
+SpotMapWindow::activeStations(QString const &band) const {
+    QVector<StationView> out;
+    QString const me = m_myCall.toUpper();
+    auto const &hb = m_hearingByBand.value(band);
+    for (auto it = hb.constBegin(); it != hb.constEnd(); ++it) {
+        StationView v;
+        v.call = it.key();
+        v.grid = m_gridByCall.value(it.key());
+        v.lastSeenMs = it.value().lastSeen.isValid()
+                           ? it.value().lastSeen.toMSecsSinceEpoch() : 0;
+        v.snrToMe = it.value().snr;
+        v.hearsMe = !me.isEmpty() && it.value().heard.contains(me);
+        v.source = it.value().source;
+        out.append(v);
+    }
+    return out;
+}
+
 QVariantMap SpotMapWindow::dumpState(QString const &band) const {
     QString const b = band.isEmpty() ? m_currentBand : band;
     auto const now = DriftingDateTime::currentDateTimeUtc();
