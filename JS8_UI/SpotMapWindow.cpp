@@ -3591,12 +3591,26 @@ void SpotMapWindow::mouseReleaseEvent(QMouseEvent *event) {
                 // seeding the outgoing box.
                 if (m_relaySelect) {
                     QString const call = best->spot.receiverCall;
-                    // Each station may appear in the path only once —
-                    // a hop revisited is a loop, not a route.
-                    if (!m_relayPath.contains(call)) {
+                    // [relayscreen 2026-08-27, operator ruling] A
+                    // non-amateur or hyphenated receive node cannot
+                    // carry traffic: refused. A station without
+                    // recent transmit evidence is ALLOWED (downgrade
+                    // philosophy, never exclude) with the fact
+                    // stated.
+                    bool const hyphen = call.contains(QLatin1Char('-'));
+                    if (hyphen || !Radio::is_callsign(call)) {
+                        showToast(tr("%1 cannot relay (receive-only "
+                                     "node or not an amateur call)")
+                                      .arg(call));
+                    } else if (!m_relayPath.contains(call)) {
                         m_relayPath.append(call);
                         m_relayPathSpots.append(best->spot); // [relaykeep]
-                        showRelayPathToast();
+                        if (best->spot.rxOnly)
+                            showToast(tr("%1 added -- no transmission "
+                                         "observed recently")
+                                          .arg(call));
+                        else
+                            showRelayPathToast();
                         updateRelayButtons();
                         requestReplot();
                     }

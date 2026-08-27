@@ -1006,6 +1006,22 @@ void UI_Constructor::reachNextMove() {
     // routes; when none remain, THEN stop.
     bool const overBudget = m_reach.moveNo >= m_reach.maxMoves;
     reachRefreshBook();   // [livebook] the store may know more now
+    // [relayalive 2026-08-27, operator: "do not exclude is
+    // consistent" -- downgrade instead] A relaying station must
+    // transmit; its on-the-air factor runs on its newest TRANSMIT
+    // evidence (heard by anyone, 24h book + corpus), through the
+    // same curve. Internet-reporting presence no longer counts as
+    // relay-aliveness (the KC2DAC case: raise 1.00, alive 0.95,
+    // never keyed once).
+    QHash<QString, qint64> lastTxMs;
+    for (auto itE = g_book.edges.constBegin();
+         itE != g_book.edges.constEnd(); ++itE)
+        for (auto e = itE.value().constBegin();
+             e != itE.value().constEnd(); ++e) {
+            auto &t = lastTxMs[e.key()];
+            if (e.value().whenMs > t)
+                t = e.value().whenMs;
+        }
     QString const me = m_config.my_callsign().trimmed().toUpper();
     QString const T = m_reach.target;
     QString const myGrid = m_config.my_grid().left(6);
@@ -1115,8 +1131,20 @@ void UI_Constructor::reachNextMove() {
                 double const trust = bandTrust(m_reach.band, now);
                 double const fwdEff = qMin(0.95, qMax(
                     0.02, stFwd(cand, m_reach.band, now) * (trust / kFwdPrior)));
-                double const live =
-                    pCopy(cand, now) * fwdEff * direction;
+                double const candTx = [&] {
+                    BookStation b = g_book.stations.value(cand);
+                    b.lastSeenMs = lastTxMs.value(cand, 0);
+                    double const age =
+                        b.lastSeenMs > 0
+                            ? (now - b.lastSeenMs) / 1000.0 : -1.0;
+                    if (age < 0)
+                        return 0.02;
+                    return age <= 900.0
+                        ? 0.95
+                        : qMax(0.05, 0.95 * std::exp(
+                              -(age - 900.0) / SESSION_S));
+                }();
+                double const live = candTx * fwdEff * direction;
                 double const step = out * back * live;
                 if (step <= 1e-9)
                     continue;
@@ -1156,7 +1184,17 @@ void UI_Constructor::reachNextMove() {
             QString const first = chain.first();
             QString const lastHop = chain.last();
             double const raise_ = pHearsUs(this, first, me, now);
-            double const copy_ = pCopy(first, now);
+            double copy_;
+            {
+                qint64 const t = lastTxMs.value(first, 0);
+                double const age =
+                    t > 0 ? (now - t) / 1000.0 : -1.0;
+                copy_ = age < 0 ? 0.02
+                        : age <= 900.0
+                            ? 0.95
+                            : qMax(0.05, 0.95 * std::exp(
+                                  -(age - 900.0) / SESSION_S));
+            }
             double const trust = bandTrust(m_reach.band, now);
             double const fwd_ = qMin(0.95, qMax(
                 0.02, stFwd(first, m_reach.band, now) * (trust / kFwdPrior)));
