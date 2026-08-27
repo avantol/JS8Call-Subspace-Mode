@@ -734,6 +734,40 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
                                 " session -- internet-only evidence")
                      .arg(T));
     }
+    // [freshgate 2026-08-27, operator: "it's crowding out other
+    // possibilities"] Two delivered-and-silent verdicts on record
+    // with NO transmission from the target since the latest one =
+    // the record says unattended. The attempt then spends ONE direct
+    // call (keeps the evidence current) and refuses relays, shouts
+    // and probes -- two proven deliveries unanswered is the same
+    // once-is-enough doctrine applied to the delivered ask. The gate
+    // clears itself: it compares recorded times, so the target being
+    // heard transmitting again reopens everything.
+    {
+        qint64 latestDeliveredSilent = 0;
+        int deliveredSilent = 0;
+        for (auto it = g_ansOutcomes.constBegin();
+             it != g_ansOutcomes.constEnd(); ++it)
+            for (auto const &o : it.value())
+                if (o.station == T && !o.answered) {
+                    ++deliveredSilent;
+                    latestDeliveredSilent =
+                        qMax(latestDeliveredSilent, o.ms);
+                }
+        auto const ts = g_book.stations.value(T);
+        qint64 const lastRadioMs =
+            ts.source == QLatin1String("radio") ? ts.lastSeenMs : 0;
+        if (deliveredSilent >= 2 &&
+            lastRadioMs < latestDeliveredSilent) {
+            m_reach.relaysBlocked = true;
+            reachLog(QStringLiteral("WARNING: %1 has %2 unanswered "
+                                    "asks on record and has not been "
+                                    "heard transmitting since -- one "
+                                    "direct call only; relays stay "
+                                    "in hand until it transmits")
+                         .arg(T).arg(deliveredSilent));
+        }
+    }
     reachLog(QStringLiteral("target %1 on %2; %3 candidates")
                  .arg(T, m_reach.band)
                  .arg(g_book.pool.size()));
@@ -1228,7 +1262,7 @@ void UI_Constructor::reachNextMove() {
     // so collapsed trust or floor-grade booked routes escalate to
     // asking the band NATURALLY, and a strong fresh booked route
     // keeps the 98 seconds in hand.
-    if (!overBudget &&
+    if (!overBudget && !m_reach.relaysBlocked &&
         !m_reach.triedAt.contains(QStringLiteral("shout"))) {
         double const trust = bandTrust(m_reach.band, now);
         double const qAns = 0.29;              // measured answer rate
@@ -1299,6 +1333,8 @@ void UI_Constructor::reachNextMove() {
 
     // ---- step 3: routes, best first (decide.py:884-887) -----------
     for (auto const &x : ranked) {
+        if (m_reach.relaysBlocked)
+            break;
         if (x.mv.kind != QLatin1String("relay"))
             continue;
         QString const relKey = x.mv.chain.isEmpty()
@@ -1369,7 +1405,7 @@ void UI_Constructor::reachNextMove() {
     }
 
     // ---- step 4: probes (decide.py:762-777, :889-895) -------------
-    if (!overBudget) {
+    if (!overBudget && !m_reach.relaysBlocked) {
         MoveCand bestProbe;
         double bestScore = 0.0;
         // HEARING? at the least-known raisable station
@@ -1447,6 +1483,14 @@ void UI_Constructor::reachNextMove() {
     }
 
     // ---- nothing left (decide.py:896-901) -------------------------
+    if (m_reach.relaysBlocked) {
+        reachStop(QStringLiteral("direct call unanswered; %1's record "
+                                 "says unattended (delivery already "
+                                 "proven) -- relays stay in hand until "
+                                 "it is heard transmitting")
+                      .arg(m_reach.target));
+        return;
+    }
     reachStop(overBudget
                   ? QStringLiteral("NOT REACHED -- move budget spent "
                                    "and no fresh route remains; busy "

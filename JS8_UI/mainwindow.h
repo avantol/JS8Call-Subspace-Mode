@@ -1363,6 +1363,7 @@ class UI_Constructor : public QMainWindow {
         qint64      moveCapMs = 0;          // 330 s per-move hard cap
         QHash<QString, qint64> triedAt;     // "kind:who" -> ms tried
         QStringList askedHearing, askedGrid;
+        bool        relaysBlocked = false;  // freshgate
     };
     ReachState m_reach;
     QTimer *m_reachTimer = nullptr;
