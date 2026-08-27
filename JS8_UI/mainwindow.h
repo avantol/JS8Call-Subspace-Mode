@@ -1372,6 +1372,7 @@ class UI_Constructor : public QMainWindow {
     void reachRestoreSpeed();
     void reachNextMove();
     void reachExplain(void const *cand);
+    QString reachResolveGrid(QString const &square);
     void reachSend(QString const &wire);
     void reachOnTxComplete();
     void reachOnFrame(ActivityDetail const &d);

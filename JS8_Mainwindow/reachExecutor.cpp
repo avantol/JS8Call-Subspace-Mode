@@ -101,6 +101,13 @@ bool isReceiveOnly(QString const &call) {
 bool isRoutable(QString const &call) {
     return isAmateurCall(call) && !isReceiveOnly(call);
 }
+// gridtarget.py:44 GRID_RE
+bool isGridSquare(QString const &s) {
+    static QRegularExpression const re(
+        QStringLiteral("^[A-R]{2}[0-9]{2}([A-X]{2})?$"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re.match(s.trimmed()).hasMatch();
+}
 
 // ---- the per-attempt route book --------------------------------------
 // Snapshot at reachStart from THREE sources, freshest edge wins:
@@ -434,10 +441,10 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
         connect(m_reachTimer, &QTimer::timeout,
                 this, &UI_Constructor::reachTick);
     }
-    QString const T = target.toUpper().trimmed();  // LITERAL, never base
-    if (!Radio::is_callsign(T)) {
-        reachLog(QStringLiteral("%1 is not a callsign -- grid targets "
-                                "are deferred (#180)").arg(T));
+    QString T = target.toUpper().trimmed();        // LITERAL, never base
+    if (!Radio::is_callsign(T) && !isGridSquare(T)) {
+        reachLog(QStringLiteral("%1 is neither a callsign nor a grid "
+                                "square").arg(T));
         return;
     }
     m_reach = ReachState{};
@@ -527,6 +534,23 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
                             q.value(4).toString());
     }
 
+    // [#180 gridtarget, ported verbatim from gridtarget.py] A GRID
+    // is a first-class target: resolve it to the best reachable
+    // occupant, screened (receive-only warns and sinks, never
+    // refused), then run the normal loop. A square whose only
+    // occupants are monitors that report us is a PARTIAL SUCCESS:
+    // delivery-in provable, two-way not.
+    if (isGridSquare(m_reach.target)) {
+        QString const chosen = reachResolveGrid(m_reach.target);
+        if (chosen.isEmpty()) {
+            reachStop(QStringLiteral("no reachable station in %1")
+                          .arg(m_reach.target));
+            return;
+        }
+        m_reach.target = chosen;
+        T = chosen;
+    }
+
     // ---- pool: the python's two crude facts, screened -------------
     // (livemodel.py:343-413 LiveBoard: hearers of the target ordered
     // by freshness, then geography near the target; is_routable on
@@ -600,6 +624,163 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
                  .arg(T, m_reach.band)
                  .arg(g_book.pool.size()));
     reachNextMove();
+}
+
+// [#180] gridtarget.py collect/rank/resolve, ported verbatim onto
+// the native stores: the book's stations (grid, presence age, radio
+// evidence = source "radio", rx_only = never seen as sender,
+// reports_me = hears-us with a report) plus the intel corpus for
+// stations the live stores aged out. Distance via Geodesic, whose
+// 120 km floor on 4-char squares applies naturally. Rank class:
+// radio <1h/<6h/<48h/older = 0/1/2/3; internet-only +10; receive-
+// only +20 (sinks hardest, never refused). Ledger mirrors the python.
+QString UI_Constructor::reachResolveGrid(QString const &square) {
+    qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
+    struct Cand {
+        QString call, grid, warn;
+        double km = 0;
+        qint64 radioAgeS = -1, anyAgeS = -1;
+        bool rxOnly = false, reportsMe = false;
+        int snrToMe = -99;
+        int cls = 4;
+    };
+    QHash<QString, Cand> seen;
+    for (auto it = g_book.stations.constBegin();
+         it != g_book.stations.constEnd(); ++it) {
+        auto const &b = it.value();
+        if (b.grid.size() < 4)
+            continue;
+        auto const v = Geodesic::vector(square, b.grid.left(6));
+        if (!v.distance().isValid() || float(v.distance()) > 250.0f)
+            continue;
+        Cand c;
+        c.call = it.key();
+        c.grid = b.grid;
+        c.km = double(v.distance());
+        if (b.lastSeenMs > 0) {
+            c.anyAgeS = (now - b.lastSeenMs) / 1000;
+            if (b.source == QLatin1String("radio"))
+                c.radioAgeS = c.anyAgeS;
+        }
+        c.rxOnly = !b.txAlive;
+        c.reportsMe = b.hearsMe && b.snrToMe > -99;
+        c.snrToMe = b.snrToMe;
+        c.warn = c.rxOnly ? QStringLiteral("receive-only monitor")
+                 : c.radioAgeS < 0
+                     ? QStringLiteral("never heard on radio")
+                     : QString{};
+        seen.insert(c.call, c);
+    }
+    if (g_book.intelOpen) {
+        QSqlQuery q(QSqlDatabase::database(
+            QStringLiteral("reach_intel")));
+        q.prepare(QStringLiteral(
+            "SELECT call, grid, last_heard FROM stations WHERE grid "
+            "IS NOT NULL AND grid<>''"));
+        if (q.exec())
+            while (q.next()) {
+                QString const call = q.value(0).toString().toUpper();
+                if (seen.contains(call))
+                    continue;
+                QString const gr = q.value(1).toString();
+                if (gr.size() < 4)
+                    continue;
+                auto const v = Geodesic::vector(square, gr.left(6));
+                if (!v.distance().isValid() ||
+                    float(v.distance()) > 250.0f)
+                    continue;
+                Cand c;
+                c.call = call;
+                c.grid = gr;
+                c.km = double(v.distance());
+                qint64 const lh = q.value(2).toLongLong();
+                if (lh > 0)
+                    c.radioAgeS = now / 1000 - lh;
+                c.warn = QStringLiteral(
+                    "corpus only, not seen this session");
+                seen.insert(call, c);
+            }
+    }
+    QVector<Cand> cands;
+    for (auto &c : seen) {
+        int cls = 4;
+        if (c.radioAgeS >= 0)
+            cls = c.radioAgeS < 3600 ? 0
+                  : c.radioAgeS < 6 * 3600 ? 1
+                  : c.radioAgeS < 48 * 3600 ? 2 : 3;
+        else if (c.anyAgeS >= 0 && c.anyAgeS < 3600)
+            cls = 2;
+        if (c.radioAgeS < 0 && c.anyAgeS >= 0)
+            cls += 10;
+        if (c.rxOnly)
+            cls += 20;   // cannot answer by construction: sinks hardest
+        c.cls = cls;
+        cands.append(c);
+    }
+    std::sort(cands.begin(), cands.end(),
+              [](Cand const &a, Cand const &b) {
+                  if (a.cls != b.cls)
+                      return a.cls < b.cls;
+                  return a.km < b.km;
+              });
+    if (cands.isEmpty()) {
+        reachLog(QStringLiteral("  no station known within 250 km of "
+                                "%1 on %2")
+                     .arg(square, m_reach.band));
+        return {};
+    }
+    reachLog(QStringLiteral("  %1: %2 candidates (120 km floor "
+                            "applies to 4-char squares)")
+                 .arg(square).arg(cands.size()));
+    for (int i = 0; i < qMin(8, int(cands.size())); ++i) {
+        auto const &c = cands[i];
+        QString age = c.radioAgeS < 0 ? QStringLiteral("radio never")
+                      : c.radioAgeS < 7200
+                          ? QStringLiteral("radio %1m")
+                                .arg(c.radioAgeS / 60)
+                          : QStringLiteral("radio %1h")
+                                .arg(c.radioAgeS / 3600.0, 0, 'f', 1);
+        reachLog(QStringLiteral("    %1 %2 %3 km  %4%5")
+                     .arg(c.call, -9)
+                     .arg(c.grid, -8)
+                     .arg(c.km, 4, 'f', 0)
+                     .arg(age)
+                     .arg(c.warn.isEmpty()
+                              ? QString{}
+                              : QStringLiteral("   !! ") + c.warn));
+    }
+    Cand const *pick = nullptr;
+    for (auto const &c : cands)
+        if (!c.rxOnly) {
+            pick = &c;
+            break;
+        }
+    for (auto const &c : cands)
+        if (c.rxOnly && c.reportsMe)
+            reachLog(QStringLiteral("  note: %1 (monitor, %2 km) "
+                                    "reports us at %3 dB -- delivery "
+                                    "into %4 provable even without a "
+                                    "contact")
+                         .arg(c.call)
+                         .arg(c.km, 0, 'f', 0)
+                         .arg(Varicode::formatSNR(c.snrToMe))
+                         .arg(square));
+    if (!pick) {
+        reachLog(QStringLiteral("  every known station in %1 is a "
+                                "receive-only monitor: nothing can "
+                                "answer; partial success at best")
+                     .arg(square));
+        return {};
+    }
+    reachLog(QStringLiteral("  -> %1 (%2, %3 km) enters the normal "
+                            "loop as the target%4")
+                 .arg(pick->call, pick->grid)
+                 .arg(pick->km, 0, 'f', 0)
+                 .arg(pick->warn.isEmpty()
+                          ? QString{}
+                          : QStringLiteral("   (WARNED: ") + pick->warn
+                                + QStringLiteral(")")));
+    return pick->call;
 }
 
 void UI_Constructor::reachStop(QString const &reason) {
