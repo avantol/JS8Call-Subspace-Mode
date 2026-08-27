@@ -158,7 +158,7 @@ Book g_book;
 // Applied as a multiplier on every relay's forward factor, so ranking,
 // expected time, and the shout gate all inherit the skepticism at the
 // NEXT move -- mid-attempt, and across retries in the session.
-struct RelayOutcome { qint64 ms; bool forwarded; };
+struct RelayOutcome { qint64 ms; bool forwarded; QString station; };
 QHash<QString, QVector<RelayOutcome>> g_relayOutcomes;  // per band
 
 double bandTrust(QString const &band, qint64 nowMs) {
@@ -374,10 +374,33 @@ double stAns(QString const &call, qint64 nowMs) {
         s.ansHabit = intelAns(call, nowMs);
     return s.ansHabit;
 }
-double stFwd(QString const &call) {
+// [stationhabit 2026-08-27, operator: "when we see that NZ1ON won't
+// answer, doesn't that de-weight it? same for K9IMM, we keep
+// calling"] The corpus p_fwd formula fed the SESSION's own events
+// live: each ask and each observed forward records per station, and
+// the habit blends corpus base with recency-weighted session
+// outcomes -- (base*2 + done)/(2 + asked). NOT a cached negative
+// (that invariant covers link-silence ambiguity): asked-vs-done is
+// the same measured rate the corpus itself mines, arriving sooner.
+// K9IMM after four unanswered asks: 0.43 -> 0.14; one real forward
+// restores it instantly. Cache lives in the book, which rebuilds
+// every move.
+double stFwd(QString const &call, QString const &band, qint64 nowMs) {
     auto &s = g_book.stations[call];
-    if (s.fwdHabit < 0)
-        s.fwdHabit = intelFwd(call);
+    if (s.fwdHabit < 0) {
+        double const base = intelFwd(call);
+        double n = 0.0, a = 0.0;
+        for (auto const &o : g_relayOutcomes.value(band)) {
+            if (o.station != call)
+                continue;
+            double const w = std::pow(
+                0.5, (nowMs - o.ms) / (SESSION_S * 1000.0));
+            n += w;
+            a += w * (o.forwarded ? 1.0 : 0.0);
+        }
+        s.fwdHabit = qMin(0.95, qMax(0.02,
+            (base * 2.0 + a) / (2.0 + n)));
+    }
     return s.fwdHabit;
 }
 
@@ -976,7 +999,7 @@ void UI_Constructor::reachNextMove() {
                     observed ? 1.0 : toward(myGrid, cGrid, tGrid);
                 double const trust = bandTrust(m_reach.band, now);
                 double const fwdEff = qMin(0.95, qMax(
-                    0.02, stFwd(cand) * (trust / kFwdPrior)));
+                    0.02, stFwd(cand, m_reach.band, now) * (trust / kFwdPrior)));
                 double const live =
                     pCopy(cand, now) * fwdEff * direction;
                 double const step = out * back * live;
@@ -1021,7 +1044,7 @@ void UI_Constructor::reachNextMove() {
             double const copy_ = pCopy(first, now);
             double const trust = bandTrust(m_reach.band, now);
             double const fwd_ = qMin(0.95, qMax(
-                0.02, stFwd(first) * (trust / kFwdPrior)));
+                0.02, stFwd(first, m_reach.band, now) * (trust / kFwdPrior)));
             double const deliver = deliversTo(this, lastHop, T);
             double back = 1.0;
             QString prev = T;
@@ -1445,7 +1468,8 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         m_reach.fwdStartedMs == 0 &&
         up.startsWith(m_reach.via + QLatin1String(":"))) {
         m_reach.fwdStartedMs = now;
-        g_relayOutcomes[m_reach.band].append({now, true});
+        g_relayOutcomes[m_reach.band].append(
+            {now, true, m_reach.via});
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                   reachSlotEndMs(now, 5));
         reachLog(QStringLiteral("    forward STARTED +%1s -- deadline "
@@ -1789,7 +1813,8 @@ void UI_Constructor::reachTick() {
     if (m_reach.kind == QLatin1String("relay") &&
         m_reach.fwdStartedMs == 0)
         g_relayOutcomes[m_reach.band].append(
-            {DriftingDateTime::currentMSecsSinceEpoch(), false});
+            {DriftingDateTime::currentMSecsSinceEpoch(), false,
+             m_reach.via});
     if (capped)
         state = QStringLiteral("move hard cap (330s) reached");
     else if (m_reach.kind == QLatin1String("relay") &&
