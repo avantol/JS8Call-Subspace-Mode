@@ -372,6 +372,16 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         if k not in watchers:
                             print(f"{now_s()}      reply started at "
                                   f"{k} Hz: {v[:40]}", flush=True)
+                            # THE CLAIM RIDES IN FRAME 1: "X: WM8Q
+                            # YES" is already the whole answer to
+                            # QUERY CALL -- only the SNR/age tail can
+                            # be lost. N6GRG's YES died unassembled
+                            # (03:09Z) and the router never learned
+                            # it; a died reply still teaches.
+                            if rx_yes.search(v):
+                                who = v.split(":")[0].strip().upper()
+                                w.learned[who] = 0.9
+                                d.told_us_it_hears_target(who)
                         watchers.setdefault(
                             k, {"last": nowt, "done": False})
                         watchers[k]["last"] = nowt
