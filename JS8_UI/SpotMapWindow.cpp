@@ -1938,6 +1938,16 @@ void SpotMapWindow::redraw() {
             // cannot conjure one on its own.
             QDateTime hearerAny, hearerRadio;
             int hearerSnr = -99;
+            // [snrage 2026-08-27] The report-of-me's OWN clock. The
+            // paintperf batching regressed the W3NIC rule (operator
+            // caught it again on KA9GAP: "hears me at -3 dB (2 min
+            // ago)" for a 41-minute-old report): hearerSnr was
+            // flushed with the freshest evidence time of ANY edge,
+            // so reportsMeWhen took the presence clock instead of
+            // the report's. The dB value travels ONLY with the
+            // X->ME edge's timestamp.
+            QDateTime meEdgeWhen;
+            bool meEdgePskr = false;
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
                 bool const edgePskr =
@@ -1989,8 +1999,11 @@ void SpotMapWindow::redraw() {
                 if (!edgePskr &&
                     (!hearerRadio.isValid() || ed.value().when > hearerRadio))
                     hearerRadio = ed.value().when;
-                if (ed.key() == myUp)
+                if (ed.key() == myUp) {
                     hearerSnr = h.value().snr;
+                    meEdgeWhen = ed.value().when;
+                    meEdgePskr = edgePskr;
+                }
                 if (m_viewAll) // heard-endpoints: All view only
                     note(ed.key(), edgePskr, ed.value().when, -99);
             }
@@ -1999,9 +2012,11 @@ void SpotMapWindow::redraw() {
             // at the freshest of either, while radioWhen only ever
             // sees on-air evidence.
             if (hearerRadio.isValid())
-                note(h.key(), /*pskrEv=*/false, hearerRadio, hearerSnr);
+                note(h.key(), /*pskrEv=*/false, hearerRadio, -99);
             if (hearerAny.isValid() && hearerAny != hearerRadio)
-                note(h.key(), /*pskrEv=*/true, hearerAny, hearerSnr);
+                note(h.key(), /*pskrEv=*/true, hearerAny, -99);
+            if (meEdgeWhen.isValid() && hearerSnr > -99)
+                note(h.key(), meEdgePskr, meEdgeWhen, hearerSnr);
         }
 
         m_lastBuildMs = buildTimer.elapsed();

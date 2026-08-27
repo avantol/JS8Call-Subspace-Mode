@@ -1,0 +1,6 @@
+#!/bin/bash
+# Live view of the reaching executor's log lines. Follows the newest
+# diagnostic log; re-run after restarting JS8Call (new log file).
+exec tail -F "$(ls -t ~/.config/js8call-diag-*.log | head -1)" \
+    | grep --line-buffered '\[REACH\]' \
+    | sed -u 's/^.*\[REACH\] //'
