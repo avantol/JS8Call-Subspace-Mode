@@ -1484,10 +1484,11 @@ void UI_Constructor::reachNextMove() {
 
     // ---- nothing left (decide.py:896-901) -------------------------
     if (m_reach.relaysBlocked) {
-        reachStop(QStringLiteral("direct call unanswered; %1's record "
-                                 "says unattended (delivery already "
-                                 "proven) -- relays stay in hand until "
-                                 "it is heard transmitting")
+        reachStop(QStringLiteral("direct call unanswered; delivery to "
+                                 "%1 was already proven and it has "
+                                 "not transmitted since -- no relay "
+                                 "attempts until it is heard "
+                                 "transmitting")
                       .arg(m_reach.target));
         return;
     }

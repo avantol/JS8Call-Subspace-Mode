@@ -197,6 +197,18 @@ void UI_Constructor::processCommandActivity() {
                 if (Radio::is_callsign(de) &&
                     de.compare(d.from, Qt::CaseInsensitive) != 0)
                     feedHearing(d.from, {de});
+                // [fwdjournal 2026-08-27] A station observed
+                // forwarding OUR traffic is a forward outcome
+                // whoever asked -- the operator's manual K0EMP relay
+                // proved the executor-only journaling was discarding
+                // real habit data. Journal it always.
+                if (m_spotMapWindow &&
+                    Radio::same_station(
+                        de, m_config.my_callsign().trimmed()))
+                    m_spotMapWindow->queueReachEvent(
+                        {m_config.bands()->find(dialFrequency()),
+                         d.from.toUpper(), QStringLiteral("fwd"),
+                         QString{}, 0, true});
             }
         }
         // [onairspot] A frame addressed TO ME proves the sender hears
