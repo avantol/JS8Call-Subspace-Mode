@@ -1243,6 +1243,38 @@ void UI_Constructor::reachNextMove() {
                                now);
         m_reach.pastVias.append(x.mv.via);
         reachExplain(&x.mv);
+        // [top3 2026-08-27] Runners-up, compact -- and the best
+        // multi-hop candidate even when it loses, so the backward
+        // walk's chain-finding is inspectable in every decision
+        // (operator: "has the backward-path been evaluated?").
+        {
+            int shown = 0;
+            for (auto const &r : ranked) {
+                if (r.mv.kind != QLatin1String("relay") ||
+                    r.mv.via == x.mv.via)
+                    continue;
+                if (shown++ >= 2)
+                    break;
+                reachLog(QStringLiteral("    also: %1>%2  %3/1000s")
+                             .arg(r.mv.chain.join(QLatin1Char('>')),
+                                  T)
+                             .arg(r.score * 1000.0, 0, 'f', 4));
+            }
+            double bestMh = 0.0;
+            QString bestMhChain;
+            for (auto const &r : ranked)
+                if (r.mv.chain.size() > 1 && r.score > bestMh) {
+                    bestMh = r.score;
+                    bestMhChain = r.mv.chain.join(QLatin1Char('>'));
+                }
+            reachLog(bestMhChain.isEmpty()
+                         ? QStringLiteral("    best multi-hop: none "
+                                          "found by the walk")
+                         : QStringLiteral("    best multi-hop: %1>%2 "
+                                          " %3/1000s (not chosen)")
+                               .arg(bestMhChain, T)
+                               .arg(bestMh * 1000.0, 0, 'f', 4));
+        }
         reachSend(QStringLiteral("%1: %2>%3 SNR?")
                       .arg(me, m_reach.chain.join(QLatin1Char('>')),
                            T));
