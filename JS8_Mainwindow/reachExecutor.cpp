@@ -1296,6 +1296,24 @@ void UI_Constructor::reachNextMove() {
             if (m_reach.triedAt.contains(
                     QStringLiteral("relay:") + x.mv.via))
                 continue;
+            // [gaterefine2] In restricted mode the baseline must be
+            // a SPENDABLE route -- the shout was being outbid by
+            // routes the restriction then refused to spend (measured
+            // 21:19Z: composite lost to N6CYB 0.0432, which was
+            // withheld; the attempt quit without asking the band the
+            // warning promised it could).
+            if (m_reach.relaysBlocked) {
+                QString const lastHop = x.mv.chain.isEmpty()
+                                            ? x.mv.via
+                                            : x.mv.chain.last();
+                bool const fresh =
+                    bookEdge(lastHop, T).whenMs >
+                        m_reach.gateSilenceMs ||
+                    bookEdge(T, lastHop).whenMs >
+                        m_reach.gateSilenceMs;
+                if (!fresh)
+                    continue;
+            }
             if (x.score > bestBooked) {
                 bestBooked = x.score;
                 bestCall = x.mv.via;
