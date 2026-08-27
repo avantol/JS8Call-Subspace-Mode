@@ -1406,7 +1406,8 @@ void UI_Constructor::reachTick() {
                                "assembled -- frames lost");
     else if (m_reach.fwdDoneMs != 0)
         state = QStringLiteral("forwarded, but no return started -- "
-                               "target silent or via holding nothing");
+                               "target silent, or the relaying "
+                               "station has nothing to send");
     else if (m_reach.ansStartedMs != 0) {
         bool allDone = !m_reach.watchers.isEmpty();
         for (auto const &w : m_reach.watchers)
