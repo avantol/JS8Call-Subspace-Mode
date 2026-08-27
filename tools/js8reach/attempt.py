@@ -472,7 +472,12 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                      if mv.kind == "relay" and fwd_started is None else
                      "forwarded, but the target never answered"
                      if fwd_done is not None else
-                     "answer started but never assembled -- frames lost"
+                     ("every started reply assembled -- the target "
+                      "itself never answered"
+                      if watchers and all(wt["done"]
+                                          for wt in watchers.values())
+                      else "answer started but never assembled -- "
+                           "frames lost")
                      if ans_started is not None else
                      ("the whole group is" if group else responder + " is")
                      + " busy or disabled")
