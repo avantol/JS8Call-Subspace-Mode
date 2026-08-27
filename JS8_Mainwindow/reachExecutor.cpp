@@ -43,11 +43,10 @@
  */
 
 #include "JS8_UI/mainwindow.h"
-#include "JS8_UI/SpotMapWindow.h"
+#include "JS8_UI/SpotMapWindow.h"   // also provides Geodesic.h
+                                    // (which has no include guard)
 #include "JS8_Main/DriftingDateTime.h"
-#include "JS8_Main/Geodesic.h"
 #include "JS8_Mode/JS8Submode.h"
-#include "Radio.hpp"
 
 #include <QTimer>
 #include <cmath>
