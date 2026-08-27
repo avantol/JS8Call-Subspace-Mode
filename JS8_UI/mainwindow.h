@@ -1354,12 +1354,22 @@ class UI_Constructor : public QMainWindow {
         QMap<int, ReachWatcher> watchers;   // offset -> watcher
         int         savedSubmode = -1;      // speed restored on stop
         QString     lastWire;
+        // [reachport2] full-port state (audit 2026-08-27)
+        QString     forcedVia;              // --via equivalent
+        QStringList pastVias;               // late-forward memory
+        qint64      holdUntilMs = 0;        // late-forward TX hold
+        qint64      moveCapMs = 0;          // 330 s per-move hard cap
+        QHash<QString, qint64> triedAt;     // "kind:who" -> ms tried
+        QStringList askedHearing, askedGrid;
     };
     ReachState m_reach;
     QTimer *m_reachTimer = nullptr;
-    void reachStart(QString const &target, int maxMoves = 6);
+    void reachStart(QString const &target, int maxMoves = 6,
+                    QString const &via = QString{});
     void reachStop(QString const &reason);
+    void reachRestoreSpeed();
     void reachNextMove();
+    void reachExplain(void const *cand);
     void reachSend(QString const &wire);
     void reachOnTxComplete();
     void reachOnFrame(ActivityDetail const &d);

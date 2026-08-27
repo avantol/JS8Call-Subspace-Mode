@@ -121,9 +121,24 @@ class SpotMapWindow final : public QWidget {
         qint64  lastSeenMs = 0;
         int     snrToMe = -99;   // their report of OUR signal
         bool    hearsMe = false; // heard-map contains us
+        bool    txAlive = false; // seen as a SENDER (it keys up);
+                                 // false = reception-only footprint
         QString source;
     };
     QVector<StationView> activeStations(QString const &band) const;
+
+    // [reachport2] Whole-band adjacency for the executor's route book
+    // (one snapshot per attempt), and the persistent tier at the
+    // python's 24 h horizon -- the RAM store prunes at 1 h, which is
+    // the exact ratio livemodel's docstring warns halves the graph.
+    struct EdgeView {
+        QString hearer, heard;
+        qint64  whenMs = 0;
+        int     snr = -99;
+        QString source;
+    };
+    QVector<EdgeView> allEdges(QString const &band) const;
+    QVector<GridDb::EdgeRow> edges24h() const;
 
     // heardWhen: optional BACKDATED sighting time for the heard
     // edges ([#161] age-bearing replies) — invalid = now; an edge's

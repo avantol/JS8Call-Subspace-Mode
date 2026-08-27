@@ -927,6 +927,7 @@ SpotMapWindow::activeStations(QString const &band) const {
     QVector<StationView> out;
     QString const me = m_myCall.toUpper();
     auto const &hb = m_hearingByBand.value(band);
+    auto const &info = m_infoByBand.value(band);
     for (auto it = hb.constBegin(); it != hb.constEnd(); ++it) {
         StationView v;
         v.call = it.key();
@@ -935,10 +936,35 @@ SpotMapWindow::activeStations(QString const &band) const {
                            ? it.value().lastSeen.toMSecsSinceEpoch() : 0;
         v.snrToMe = it.value().snr;
         v.hearsMe = !me.isEmpty() && it.value().heard.contains(me);
+        v.txAlive = info.value(it.key()).sawAsSender;
         v.source = it.value().source;
         out.append(v);
     }
     return out;
+}
+
+QVector<SpotMapWindow::EdgeView>
+SpotMapWindow::allEdges(QString const &band) const {
+    QVector<EdgeView> out;
+    auto const &hb = m_hearingByBand.value(band);
+    for (auto it = hb.constBegin(); it != hb.constEnd(); ++it) {
+        for (auto he = it.value().heard.constBegin();
+             he != it.value().heard.constEnd(); ++he) {
+            EdgeView v;
+            v.hearer = it.key();
+            v.heard = he.key();
+            v.whenMs = he.value().when.isValid()
+                           ? he.value().when.toMSecsSinceEpoch() : 0;
+            v.snr = he.value().snr;
+            v.source = he.value().source;
+            out.append(v);
+        }
+    }
+    return out;
+}
+
+QVector<GridDb::EdgeRow> SpotMapWindow::edges24h() const {
+    return m_gridDb.loadEdges(24 * 3600);
 }
 
 QVariantMap SpotMapWindow::dumpState(QString const &band) const {

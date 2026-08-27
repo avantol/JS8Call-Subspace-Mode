@@ -365,6 +365,10 @@ void UI_Constructor::manualBandHop(const StationList::Station station) {
 
 //--------------------------------------------------- UI_Constructor destructor
 UI_Constructor::~UI_Constructor() {
+    // [reachport2] audit item 14: the python's atexit restored the
+    // operator's speed on EVERY exit; app quit mid-attempt must too.
+    if (m_reach.active)
+        reachStop(QStringLiteral("app shutting down"));
 #ifdef JS8_ENABLE_FT2
     m_l2DecodeTimer.stop();
     m_l2DecodeWatcher.waitForFinished();

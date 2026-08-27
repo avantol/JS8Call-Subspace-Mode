@@ -625,7 +625,8 @@ if(type == "STATION.SET_SPOT") {
         auto ok = false;
         auto const mm =
             message.params().value("MAX_MOVES", QVariant(6)).toInt(&ok);
-        reachStart(message.value(), ok ? mm : 6);
+        reachStart(message.value(), ok ? mm : 6,
+                   message.params().value("VIA").toString());
         return;
     }
     if (type == "TX.REACH_STOP") {
