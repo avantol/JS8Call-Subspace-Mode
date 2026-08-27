@@ -362,6 +362,9 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         up.startswith(T + ":"))
                     if addressed and poff is not None:
                         k = wkey(int(poff))
+                        if k not in watchers:
+                            print(f"{now_s()}      reply started at "
+                                  f"{k} Hz: {v[:40]}", flush=True)
                         watchers.setdefault(
                             k, {"last": nowt, "done": False})
                         watchers[k]["last"] = nowt
@@ -378,8 +381,13 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         if k in watchers and not watchers[k]["done"]:
                             watchers[k]["last"] = nowt
                             if deadline is not None:
-                                deadline = max(deadline,
-                                               slot_end(nowt, 1))
+                                nd = slot_end(nowt, 1)
+                                if nd > deadline:
+                                    print(f"{now_s()}      {k} Hz "
+                                          f"still airing -- deadline "
+                                          f"+{nd-deadline:.0f}s",
+                                          flush=True)
+                                deadline = max(deadline, nd)
                     if addressed and ans_started is None:
                         ans_started = nowt
                         # SLOT-ANCHORED ceiling: detection is ~12.6s
@@ -458,6 +466,11 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                      if ans_started is not None else
                      ("the whole group is" if group else responder + " is")
                      + " busy or disabled")
+            if watchers:
+                nd_ = sum(1 for wt in watchers.values() if wt["done"])
+                print(f"{now_s()}      replies: {len(watchers)} "
+                      f"started, {nd_} assembled, "
+                      f"{len(watchers)-nd_} died", flush=True)
             print(f"{now_s()}      VERDICT "
                   f"+{time.time()-tx_end:.0f}s: {state} -- retry from "
                   f"the top later", flush=True)
