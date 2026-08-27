@@ -130,11 +130,18 @@ struct BookStation {
     double ansHabit = -1.0;   // -1 = not looked up yet
     double fwdHabit = -1.0;
 };
+struct LearnedEdge {
+    QString hearer, heard, source;
+    qint64 whenMs;
+    int snr;
+};
 struct Book {
     QHash<QString, QHash<QString, BookEdge>> edges;  // hearer -> heard
     QHash<QString, BookStation> stations;
     QSet<QString> transmitters;   // seen keying (phantom-edge filter)
     QStringList pool;             // ordered, limited
+    QVector<LearnedEdge> learned; // live YES overlays, re-applied on
+                                  // every refresh
     QString intelPath;
     bool intelOpen = false;
 };
@@ -427,53 +434,21 @@ QString factorLine(QString const &name, QString const &raw,
 
 } // namespace
 
-void UI_Constructor::reachStart(QString const &target, int maxMoves,
-                                QString const &via) {
-    if (m_reach.active) {
-        reachLog(QStringLiteral("already reaching %1 -- stop it first")
-                     .arg(m_reach.target));
-        return;
-    }
-    if (!m_reachTimer) {
-        m_reachTimer = new QTimer(this);
-        m_reachTimer->setSingleShot(true);
-        m_reachTimer->setTimerType(Qt::PreciseTimer);
-        connect(m_reachTimer, &QTimer::timeout,
-                this, &UI_Constructor::reachTick);
-    }
-    QString T = target.toUpper().trimmed();        // LITERAL, never base
-    if (!Radio::is_callsign(T) && !isGridSquare(T)) {
-        reachLog(QStringLiteral("%1 is neither a callsign nor a grid "
-                                "square").arg(T));
-        return;
-    }
-    m_reach = ReachState{};
-    m_reach.forcedVia = via.toUpper().trimmed();
-    m_reach.active = true;
-    m_reach.target = T;
-    m_reach.maxMoves = qBound(1, maxMoves, 12);
-    m_reach.startMs = DriftingDateTime::currentMSecsSinceEpoch();
-    m_reach.band = m_config.bands()->find(dialFrequency());
-
-    // Speed pin (attempt.py:102-128): Normal for the whole attempt,
-    // refusal aborts, restored on every exit incl. app quit.
-    if (m_nSubMode != Varicode::JS8CallNormal) {
-        if (!canChangeSpeedNow()) {
-            reachLog(QStringLiteral("cannot pin Normal speed (tx busy)"
-                                    " -- refusing to start"));
-            m_reach = ReachState{};
-            return;
-        }
-        m_reach.savedSubmode = m_nSubMode;
-        setSubmode(Varicode::JS8CallNormal);
-        reachLog(QStringLiteral("speed pinned to Normal (app was at %1;"
-                                " restored on exit)")
-                     .arg(m_reach.savedSubmode));
-    }
-
-    // ---- build the route book (three sources, freshest wins) --------
-    qint64 const now = m_reach.startMs;
-    g_book = Book{};
+// [livebook 2026-08-27] The book is NOT a per-attempt snapshot: the
+// operator watched KI4RXJ hear NO1ZE at -12 DURING a run while the
+// model ranked it on aged edges -- the observation reached the store
+// at +2 min and the book, built at attempt start, never saw it
+// ("a backwards search would reveal that" -- it did exist; it ran on
+// stale data). Rebuilt from the store's layers before EVERY move
+// decision; the live-learned YES overlays are re-applied on top.
+void UI_Constructor::reachRefreshBook() {
+    qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
+    auto const learned = g_book.learned;
+    bool const intelWasOpen = g_book.intelOpen;
+    g_book.edges.clear();
+    g_book.stations.clear();
+    g_book.transmitters.clear();
+    g_book.intelOpen = intelWasOpen;
     for (auto const &s : m_spotMapWindow->activeStations(m_reach.band)) {
         BookStation b;
         b.grid = s.grid;
@@ -533,6 +508,58 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
                                                 : q.value(3).toInt(),
                             q.value(4).toString());
     }
+
+    for (auto const &l : learned) {
+        bookAddEdge(l.hearer, l.heard, l.whenMs, l.snr, l.source);
+        g_book.learned.append(l);
+    }
+}
+
+void UI_Constructor::reachStart(QString const &target, int maxMoves,
+                                QString const &via) {
+    if (m_reach.active) {
+        reachLog(QStringLiteral("already reaching %1 -- stop it first")
+                     .arg(m_reach.target));
+        return;
+    }
+    if (!m_reachTimer) {
+        m_reachTimer = new QTimer(this);
+        m_reachTimer->setSingleShot(true);
+        m_reachTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_reachTimer, &QTimer::timeout,
+                this, &UI_Constructor::reachTick);
+    }
+    QString T = target.toUpper().trimmed();        // LITERAL, never base
+    if (!Radio::is_callsign(T) && !isGridSquare(T)) {
+        reachLog(QStringLiteral("%1 is neither a callsign nor a grid "
+                                "square").arg(T));
+        return;
+    }
+    m_reach = ReachState{};
+    m_reach.forcedVia = via.toUpper().trimmed();
+    m_reach.active = true;
+    m_reach.target = T;
+    m_reach.maxMoves = qBound(1, maxMoves, 12);
+    m_reach.startMs = DriftingDateTime::currentMSecsSinceEpoch();
+    m_reach.band = m_config.bands()->find(dialFrequency());
+
+    // Speed pin (attempt.py:102-128): Normal for the whole attempt,
+    // refusal aborts, restored on every exit incl. app quit.
+    if (m_nSubMode != Varicode::JS8CallNormal) {
+        if (!canChangeSpeedNow()) {
+            reachLog(QStringLiteral("cannot pin Normal speed (tx busy)"
+                                    " -- refusing to start"));
+            m_reach = ReachState{};
+            return;
+        }
+        m_reach.savedSubmode = m_nSubMode;
+        setSubmode(Varicode::JS8CallNormal);
+        reachLog(QStringLiteral("speed pinned to Normal (app was at %1;"
+                                " restored on exit)")
+                     .arg(m_reach.savedSubmode));
+    }
+
+    reachRefreshBook();
 
     // [#180 gridtarget, ported verbatim from gridtarget.py] A GRID
     // is a first-class target: resolve it to the best reachable
@@ -838,6 +865,7 @@ void UI_Constructor::reachNextMove() {
                                  "later"));
         return;
     }
+    reachRefreshBook();   // [livebook] the store may know more now
     QString const me = m_config.my_callsign().trimmed().toUpper();
     QString const T = m_reach.target;
     QString const myGrid = m_config.my_grid().left(6);
@@ -1409,6 +1437,8 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
                     up.section(QLatin1Char(':'), 0, 0).trimmed();
                 bookAddEdge(who, T, now, -99,
                             QStringLiteral("yes-frame1"));
+                g_book.learned.append(
+                    {who, T, QStringLiteral("yes-frame1"), now, -99});
             }
         }
         auto &w = m_reach.watchers[k];
@@ -1600,6 +1630,8 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         }
         bookAddEdge(from, T, whenMs, snr,
                     QStringLiteral("querycall-live"));
+        g_book.learned.append(
+            {from, T, QStringLiteral("querycall-live"), whenMs, snr});
         reachLog(QStringLiteral("    learned %1: %2")
                      .arg(off, line.left(60)));
     }
