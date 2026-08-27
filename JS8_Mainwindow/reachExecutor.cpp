@@ -140,6 +140,8 @@ struct Book {
     QHash<QString, BookStation> stations;
     QSet<QString> transmitters;   // seen keying (phantom-edge filter)
     QStringList pool;             // ordered, limited
+    QStringList walk;             // pool + hears-us extras (Dijkstra)
+    QSet<QString> firstHops;      // eligible chain anchors
     QVector<LearnedEdge> learned; // live YES overlays, re-applied on
                                   // every refresh
     QString intelPath;
@@ -650,6 +652,29 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
     while (g_book.pool.size() > kPoolLimit)
         g_book.pool.removeLast();
 
+    // [firsthop 2026-08-27, operator: "it would augment other
+    // knowledge very nicely"] First-hop eligibility = HEARS US
+    // RELIABLY, regardless of where it sits. The target-centric pool
+    // stays the ranking prior, but stations with hears-us evidence
+    // (routable, transmit-alive) join the walk and may anchor chains
+    // -- the KS1DMD case: near us, hears us at -13, invisible to a
+    // target-centric pool 1500 km away.
+    g_book.walk = g_book.pool;
+    g_book.firstHops = QSet<QString>(g_book.pool.begin(),
+                                     g_book.pool.end());
+    for (auto it = g_book.stations.constBegin();
+         it != g_book.stations.constEnd(); ++it) {
+        QString const c = it.key();
+        if (g_book.firstHops.contains(c) || c == me ||
+            Radio::same_station(c, me) || c == T)
+            continue;
+        if (!it.value().hearsMe || !it.value().txAlive ||
+            !isRoutable(c))
+            continue;
+        g_book.walk.append(c);
+        g_book.firstHops.insert(c);
+    }
+
     // #173 named-target screen (attempt.py:195-210): warn, never
     // refuse -- BOTH halves this time (audit item 37).
     auto const ts = g_book.stations.value(T);
@@ -985,7 +1010,7 @@ void UI_Constructor::reachNextMove() {
             seenN.insert(node);
             if (route.value(node).size() >= maxHops)
                 continue;
-            for (QString const &cand : g_book.pool) {
+            for (QString const &cand : g_book.walk) {
                 if (seenN.contains(cand) || cand == me ||
                     Radio::same_station(cand, me))
                     continue;
@@ -1026,8 +1051,8 @@ void UI_Constructor::reachNextMove() {
             QStringList const &chain = it.value();
             if (cand == T || chain.isEmpty())
                 continue;
-            if (!g_book.pool.contains(chain.first()))
-                continue;   // first hop must be raisable-pool
+            if (!g_book.firstHops.contains(chain.first()))
+                continue;   // first hop must hear us reliably
             double p = std::exp(-dist.value(cand))
                        * pHearsUs(this, chain.first(), me, now);
             qint64 const tried = m_reach.triedAt.value(
