@@ -763,8 +763,9 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
             reachLog(QStringLiteral("WARNING: %1 has %2 unanswered "
                                     "asks on record and has not been "
                                     "heard transmitting since -- one "
-                                    "direct call only; relays stay "
-                                    "in hand until it transmits")
+                                    "direct call only; no relay "
+                                    "attempts and no QUERY CALL until "
+                                    "it is heard transmitting")
                          .arg(T).arg(deliveredSilent));
         }
     }
