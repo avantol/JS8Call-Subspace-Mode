@@ -129,6 +129,32 @@ struct Book {
 };
 Book g_book;
 
+// [gatetrust 2026-08-27] BAND FORWARDING TRUST -- Andy: "teach the
+// gate that repeated booked-relay silence devalues the book" and it
+// must NOT require a restart. This is not a cached negative about any
+// station (that invariant stands): it is a measured SESSION RATE --
+// booked-relay asks vs observed forwards on this band, each event
+// recency-weighted (half-life SESSION_S), shaped like the p_fwd habit
+// formula with the 0.43 prior counting as two asks. Every relay-silent
+// verdict drags it down, every forward restores it, time heals it.
+// Applied as a multiplier on every relay's forward factor, so ranking,
+// expected time, and the shout gate all inherit the skepticism at the
+// NEXT move -- mid-attempt, and across retries in the session.
+struct RelayOutcome { qint64 ms; bool forwarded; };
+QHash<QString, QVector<RelayOutcome>> g_relayOutcomes;  // per band
+
+double bandTrust(QString const &band, qint64 nowMs) {
+    double n = 0.0, a = 0.0;
+    for (auto const &o : g_relayOutcomes.value(band)) {
+        double const w = std::pow(
+            0.5, (nowMs - o.ms) / (SESSION_S * 1000.0));
+        n += w;
+        a += w * (o.forwarded ? 1.0 : 0.0);
+    }
+    return qMin(0.95, qMax(0.05,
+        (kFwdPrior * 2.0 + a) / (2.0 + n)));
+}
+
 void bookAddEdge(QString const &hearer, QString const &heard,
                  qint64 whenMs, int snr, QString const &source) {
     auto &e = g_book.edges[hearer][heard];
@@ -680,7 +706,9 @@ void UI_Constructor::reachNextMove() {
         // the python multiplies it (verbatim).
         double const raise_ = pHearsUs(this, cand, me, now);
         double const copy_ = pCopy(cand, now);
-        double const fwd_ = stFwd(cand);
+        double const trust = bandTrust(m_reach.band, now);
+        double const fwd_ = qMin(0.95, qMax(
+            0.02, stFwd(cand) * (trust / kFwdPrior)));
         double const deliver = deliversTo(this, cand, T);
         bool const linkSeen = bookEdge(cand, T).whenMs > 0 ||
                               bookEdge(T, cand).whenMs > 0;
@@ -744,6 +772,18 @@ void UI_Constructor::reachNextMove() {
         return total + alive * 600.0;
     };
     double const nowET = expectedTime(ranked);
+
+    {
+        double const trust = bandTrust(m_reach.band, now);
+        if (trust < kFwdPrior * 0.9) {
+            int n = g_relayOutcomes.value(m_reach.band).size();
+            reachLog(QStringLiteral("    band forwarding trust %1 "
+                                    "(%2 recent asks) -- booked "
+                                    "relays devalued")
+                         .arg(trust, 0, 'f', 2)
+                         .arg(n));
+        }
+    }
 
     // ---- step 1: the direct call, once (decide.py:859-866) --------
     if (snrTried < 0) {
@@ -979,6 +1019,7 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         m_reach.fwdStartedMs == 0 &&
         up.startsWith(m_reach.via + QLatin1String(":"))) {
         m_reach.fwdStartedMs = now;
+        g_relayOutcomes[m_reach.band].append({now, true});
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                   reachSlotEndMs(now, 5));
         reachLog(QStringLiteral("    forward STARTED +%1s -- deadline "
@@ -1242,6 +1283,10 @@ void UI_Constructor::reachTick() {
                      .arg(m_reach.watchers.size() - done));
     }
     QString state;
+    if (m_reach.kind == QLatin1String("relay") &&
+        m_reach.fwdStartedMs == 0)
+        g_relayOutcomes[m_reach.band].append(
+            {DriftingDateTime::currentMSecsSinceEpoch(), false});
     if (capped)
         state = QStringLiteral("move hard cap (330s) reached");
     else if (m_reach.kind == QLatin1String("relay") &&
