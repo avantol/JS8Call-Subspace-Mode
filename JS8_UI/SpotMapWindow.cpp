@@ -761,6 +761,8 @@ void SpotMapWindow::journalStation(QString const &band,
     // Their report of MY signal, if this station has one.
     if (auto const it = hz.constFind(c); it != hz.constEnd()) {
         r.snrToMe = it->snr;
+        r.snrToMeWhen = it->snrWhen.isValid()
+                            ? it->snrWhen.toSecsSinceEpoch() : 0;
         r.reportsMe = it->heard.contains(m_myCall.toUpper());
         if (it->source != QStringLiteral("mqtt"))
             r.radioWhen = r.anyWhen;
@@ -798,11 +800,17 @@ void SpotMapWindow::restoreStationsFromDisk() {
         // Applied ONLY to a station the mesh restore already created.
         // Creating an entry here would put a dot on the map with no
         // observation behind it -- the hollow-circle defect again.
-        if (r.snrToMe > -99) {
+        // [snrpersist] value AND its date together, or neither --
+        // an undated dB is the exact lie the display audit killed
+        // ("age unknown" on every restored report).
+        if (r.snrToMe > -99 && r.snrToMeWhen > 0) {
             auto &band = m_hearingByBand[r.band];
             auto const it = band.find(r.call.toUpper());
-            if (it != band.end() && it->snr <= -99)
+            if (it != band.end() && it->snr <= -99) {
                 it->snr = r.snrToMe;
+                it->snrWhen = QDateTime::fromSecsSinceEpoch(
+                    r.snrToMeWhen, Qt::UTC);
+            }
         }
         ++restored;
     }
@@ -3388,20 +3396,21 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         qint64 const ageSecs = effectiveWhen(best->spot).secsTo(
             DriftingDateTime::currentDateTimeUtc());
         QString tip;
+        // [heardproof, operator: on EVERY hover, before the
+        // distance] the dated transmit claim.
+        // [heardproof, operator: absence of "hears me" and "last
+        // heard" says it -- no filler text]
+        QString txPart;
+        if (best->spot.lastTxWhen.isValid()) {
+            qint64 const txAge = best->spot.lastTxWhen.secsTo(
+                DriftingDateTime::currentDateTimeUtc());
+            txPart = (txAge >= 3600
+                ? tr("last heard %1 hr ago").arg(txAge / 3600)
+                : tr("last heard %1 min ago").arg(txAge / 60))
+                + QStringLiteral(" · ");
+        }
         if (best->spot.rxOnly) {
-            // [heardproof] dated claim, never "monitor"/"never"
-            // (operator wording: "last heard N <hr/min> ago").
-            QString txPart;
-            if (best->spot.lastTxWhen.isValid()) {
-                qint64 const txAge = best->spot.lastTxWhen.secsTo(
-                    DriftingDateTime::currentDateTimeUtc());
-                txPart = txAge >= 3600
-                    ? tr("last heard %1 hr ago").arg(txAge / 3600)
-                    : tr("last heard %1 min ago").arg(txAge / 60);
-            } else {
-                txPart = tr("no transmission observed");
-            }
-            tip = tr("%1 (%2)\n%3 · %4 %5 · updated %6 min ago")
+            tip = tr("%1 (%2)\n%3%4 %5 · updated %6 min ago")
                       .arg(best->spot.receiverCall,
                            best->spot.receiverGrid, txPart)
                       .arg(qRound(dist))
@@ -3432,9 +3441,9 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 }
                 snrPart += QStringLiteral(" · ");
             }
-            tip = tr("%1 (%2)\n%3%4 %5 · updated %6 min ago")
+            tip = tr("%1 (%2)\n%3%4%5 %6 · updated %7 min ago")
                       .arg(best->spot.receiverCall,
-                           best->spot.receiverGrid, snrPart)
+                           best->spot.receiverGrid, snrPart, txPart)
                       .arg(qRound(dist))
                       .arg(miles ? tr("mi") : tr("km"))
                       .arg(ageSecs / 60);

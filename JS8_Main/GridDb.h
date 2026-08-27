@@ -110,6 +110,9 @@ class GridDb final {
         qint64 anyWhen = 0;   // freshest evidence of any source
         qint64 radioWhen = 0; // freshest RADIO evidence, 0 = none
         int snrToMe = -99;    // their report of MY signal
+        qint64 snrToMeWhen = 0; // [snrpersist] when that report was
+                                // observed -- a dB without its date
+                                // is the lie the map audit killed
         bool reportsMe = false;
         bool rxOnly = false;  // never observed transmitting
     };

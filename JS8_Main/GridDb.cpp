@@ -220,6 +220,15 @@ bool GridDb::ensureSchema() {
             << "[GRIDDB] schema FAILED:" << q.lastError().text();
         return false;
     }
+    // [snrpersist 2026-08-27] Dated report column, added in place --
+    // ALTER instead of a schema bump so the 90-day habit records and
+    // the 24h mesh survive. Fails harmlessly when it already exists.
+    {
+        QSqlQuery a{m_db};
+        a.exec(QStringLiteral(
+            "ALTER TABLE stations ADD COLUMN snr_when INTEGER"
+            " DEFAULT 0"));
+    }
     q.prepare(QStringLiteral(
         "INSERT INTO meta (k, v) VALUES ('schema_version', ?)"
         " ON CONFLICT(k) DO UPDATE SET v = excluded.v"));
@@ -499,8 +508,9 @@ void GridDb::flush() {
         QSqlQuery q{m_db};
         q.prepare(QStringLiteral(
             "INSERT INTO stations (band, call, grid, country, freq_hz,"
-            " any_when, radio_when, snr_to_me, reports_me, rx_only)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " any_when, radio_when, snr_to_me, snr_when, reports_me,"
+            " rx_only)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(band, call) DO UPDATE SET"
             // Freshest wins; a stale replay never moves a clock back.
             " any_when = MAX(any_when, excluded.any_when),"
@@ -515,6 +525,8 @@ void GridDb::flush() {
             "                THEN excluded.freq_hz ELSE freq_hz END,"
             " snr_to_me = CASE WHEN excluded.snr_to_me > -99"
             "                  THEN excluded.snr_to_me ELSE snr_to_me END,"
+            " snr_when = CASE WHEN excluded.snr_to_me > -99"
+            "                 THEN excluded.snr_when ELSE snr_when END,"
             " reports_me = MAX(reports_me, excluded.reports_me),"
             // rx_only is STICKY-FALSE: once seen transmitting, never
             // demoted back to receive-only.
@@ -528,8 +540,9 @@ void GridDb::flush() {
             q.bindValue(5, r.anyWhen);
             q.bindValue(6, r.radioWhen);
             q.bindValue(7, r.snrToMe);
-            q.bindValue(8, r.reportsMe ? 1 : 0);
-            q.bindValue(9, r.rxOnly ? 1 : 0);
+            q.bindValue(8, r.snrToMeWhen);
+            q.bindValue(9, r.reportsMe ? 1 : 0);
+            q.bindValue(10, r.rxOnly ? 1 : 0);
             if (!q.exec())
                 qCDebug(griddb_js8) << "[GRIDDB] station FAILED:"
                                     << r.call << q.lastError().text();
@@ -608,7 +621,7 @@ GridDb::loadStations(qint64 notOlderThanSecs) const {
     QSqlQuery q{m_db};
     q.prepare(QStringLiteral(
         "SELECT band, call, grid, country, freq_hz, any_when,"
-        " radio_when, snr_to_me, reports_me, rx_only"
+        " radio_when, snr_to_me, snr_when, reports_me, rx_only"
         " FROM stations WHERE any_when >= ? ORDER BY any_when"));
     q.addBindValue(nowSecs() - notOlderThanSecs);
     if (!q.exec()) {
@@ -626,8 +639,9 @@ GridDb::loadStations(qint64 notOlderThanSecs) const {
         r.anyWhen = q.value(5).toLongLong();
         r.radioWhen = q.value(6).toLongLong();
         r.snrToMe = q.value(7).toInt();
-        r.reportsMe = q.value(8).toInt() != 0;
-        r.rxOnly = q.value(9).toInt() != 0;
+        r.snrToMeWhen = q.value(8).toLongLong();
+        r.reportsMe = q.value(9).toInt() != 0;
+        r.rxOnly = q.value(10).toInt() != 0;
         out.append(r);
     }
     qCWarning(griddb_js8) << "[GRIDDB] restored" << out.size()
