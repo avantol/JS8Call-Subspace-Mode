@@ -1350,6 +1350,7 @@ class UI_Constructor : public QMainWindow {
         qint64      deadlineMs = 0;
         qint64      fwdStartedMs = 0;
         qint64      fwdDoneMs = 0;
+        qint64      retFwdMs = 0;   // return forward (answer inbound)
         qint64      ansStartedMs = 0;
         QMap<int, ReachWatcher> watchers;   // offset -> watcher
         int         savedSubmode = -1;      // speed restored on stop

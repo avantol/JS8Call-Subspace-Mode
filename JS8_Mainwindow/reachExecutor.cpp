@@ -1045,6 +1045,20 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
     QString const T = m_reach.target;
 
     if (m_reach.kind == QLatin1String("relay") &&
+        m_reach.fwdDoneMs != 0 && m_reach.retFwdMs == 0 &&
+        now - m_reach.fwdDoneMs > 5000 &&
+        up.startsWith(m_reach.via + QLatin1String(":"))) {
+        // the via keying AGAIN after its forward = the answer coming
+        // back; give its 2-3 frames + assembly three slots
+        m_reach.retFwdMs = now;
+        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
+                                  reachSlotEndMs(now, 3));
+        reachLog(QStringLiteral("    return forward STARTED +%1s -- "
+                                "deadline extended")
+                     .arg((now - m_reach.txEndMs) / 1000));
+        reachArmTimer();
+    }
+    if (m_reach.kind == QLatin1String("relay") &&
         m_reach.fwdStartedMs == 0 &&
         up.startsWith(m_reach.via + QLatin1String(":"))) {
         m_reach.fwdStartedMs = now;
@@ -1161,9 +1175,21 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
                                 "two slots for its reply").arg(from));
     }
 
-    if (Radio::same_station(from, T) &&
+    // The relay-returned answer: "VIA: WM8Q> SNR -x *DE* TARGET" --
+    // from the via (or a past via), carrying *DE* target, addressed
+    // to us. This IS the target's answer arriving; the from==target
+    // gate alone missed it (the python had the same gap -- every
+    // prior success was a directly-audible target).
+    bool const viaReturn =
+        (from == m_reach.via || m_reach.pastVias.contains(from)) &&
+        line.toUpper().contains(QStringLiteral("*DE* ") + T) &&
         Radio::same_station(d.to.trimmed().toUpper()
-                                .section(QLatin1Char('>'), 0, 0), me)) {
+                                .section(QLatin1Char('>'), 0, 0), me);
+    if (viaReturn ||
+        (Radio::same_station(from, T) &&
+         Radio::same_station(d.to.trimmed().toUpper()
+                                 .section(QLatin1Char('>'), 0, 0),
+                             me))) {
         qint64 const total = (now - m_reach.startMs) / 1000;
         reachLog(QStringLiteral("ANSWER %1: %2")
                      .arg(off, line.left(70)));
@@ -1172,7 +1198,9 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
                      .arg(T).arg(m_reach.moveNo).arg(total)
                      .arg(m_reach.sent));
         QStringList path;
-        if (m_reach.kind == QLatin1String("relay"))
+        if (viaReturn)
+            path << from;
+        else if (m_reach.kind == QLatin1String("relay"))
             path << m_reach.via;
         path << T;
         reachPlaceTemplate(path);
@@ -1183,10 +1211,20 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         from == m_reach.via &&
         line.toUpper().contains(QStringLiteral("*DE* ") + me)) {
         m_reach.fwdDoneMs = now;
+        // [relayreturn 2026-08-27] The answer comes back THROUGH the
+        // relay: 3 slots for the target to START answering the via
+        // (measured, KQ4DNM +46s) + 2 frames of answer airtime we may
+        // not hear (that is what relaying is for) + 1 slot for the
+        // via to key the return forward = SIX slots, each term
+        // measured. The old 3-slot window expired 29-60s before any
+        // relayed-back answer could assemble -- it could never admit
+        // the success it existed for (operator caught it: "I think
+        // we're not allowing enough time for K0EMP to reply to us").
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 3));
-        reachLog(QStringLiteral("    forward complete %1; target "
-                                "has three slots").arg(off));
+                                  reachSlotEndMs(now, 6));
+        reachLog(QStringLiteral("    forward complete %1; answer due "
+                                "back through %2 within six slots")
+                     .arg(off, m_reach.via));
         reachArmTimer();
         return;
     }
@@ -1321,6 +1359,9 @@ void UI_Constructor::reachTick() {
     else if (m_reach.kind == QLatin1String("relay") &&
              m_reach.fwdStartedMs == 0)
         state = QStringLiteral("relay silent -- never keyed");
+    else if (m_reach.retFwdMs != 0)
+        state = QStringLiteral("return forward started but never "
+                               "assembled -- frames lost");
     else if (m_reach.fwdDoneMs != 0)
         state = QStringLiteral("forwarded, but the target never "
                                "answered");
