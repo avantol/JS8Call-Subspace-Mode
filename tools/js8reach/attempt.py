@@ -334,7 +334,18 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                              if mv.kind != "relay" else
                              up.startswith(T + ":")):
                         ans_started = nowt
-                        deadline = max(deadline, nowt + comp + 15.0)
+                        # SLOT-ANCHORED, not wall-clock: detection is
+                        # already ~12.6s INTO the answer's frame 1, so
+                        # an f-frame answer finishes assembling f-1
+                        # slots after the slot detection sits in.
+                        # `nowt + comp + 15` double-counted frame 1
+                        # and added a flat grace: verdict 01:54:03 for
+                        # an answer done 01:53:28 -- 2.3 slots of dead
+                        # air, enough for an unrelated late-start msg
+                        # to run to completion (operator, 2026-08-27).
+                        frames = decide.REPLY_FRAMES.get(mv.kind, 2)
+                        deadline = max(deadline,
+                                       slot_end(nowt, frames - 1))
                         print(f"{now_s()}      answer STARTED "
                               f"+{nowt-tx_end:.0f}s -- deadline extended",
                               flush=True)
