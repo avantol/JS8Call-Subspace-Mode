@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"Tranya\" (v4.1.0.403 snrage) by WM8Q"}
+    return QString{"%1 \"Tranya\" (v4.1.0.404 maptruth) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

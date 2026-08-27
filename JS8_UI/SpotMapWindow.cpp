@@ -32,6 +32,8 @@
 #include <QToolButton>
 #include <QButtonGroup>
 #include <QToolTip>
+
+#include "JS8_Include/Maidenhead.h"
 #include <QTimer>
 
 #include <algorithm>
@@ -941,6 +943,12 @@ SpotMapWindow::activeStations(QString const &band) const {
     QString const me = m_myCall.toUpper();
     auto const &hb = m_hearingByBand.value(band);
     auto const &info = m_infoByBand.value(band);
+    // [heardproof] heard-in-any-edge = transmit evidence.
+    QSet<QString> heardSet;
+    for (auto h0 = hb.constBegin(); h0 != hb.constEnd(); ++h0)
+        for (auto e0 = h0.value().heard.constBegin();
+             e0 != h0.value().heard.constEnd(); ++e0)
+            heardSet.insert(e0.key());
     for (auto it = hb.constBegin(); it != hb.constEnd(); ++it) {
         StationView v;
         v.call = it.key();
@@ -949,7 +957,9 @@ SpotMapWindow::activeStations(QString const &band) const {
                            ? it.value().lastSeen.toMSecsSinceEpoch() : 0;
         v.snrToMe = it.value().snr;
         v.hearsMe = !me.isEmpty() && it.value().heard.contains(me);
-        v.txAlive = info.value(it.key()).sawAsSender;
+        v.txAlive = info.value(it.key()).sawAsSender ||
+                    heardSet.contains(it.key()) ||
+                    it.value().source == QStringLiteral("radio");
         v.source = it.value().source;
         out.append(v);
     }
@@ -1113,6 +1123,12 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
                 hh != hzD.constEnd() &&
                 hh.value().source == QStringLiteral("radio"))
                 sender = true;
+            // [heardproof] heard by anyone = it transmitted.
+            if (!sender)
+                for (auto h2 = hzD.constBegin();
+                     h2 != hzD.constEnd() && !sender; ++h2)
+                    if (h2.value().heard.contains(call))
+                        sender = true;
             sp.rxOnly = !sender;
             sp.monitorOnly = (snr <= -99);
             // [dumphonest] radioWhen and pskr are NOT set here, and a
@@ -1196,6 +1212,12 @@ void SpotMapWindow::rememberGrid(QString const &call,
     // copied gets placed the moment ANY reporter mentions it
     // (operator, 2026-08-16).
     if (call.isEmpty() || grid.size() < 4)
+        return;
+    // [gridvalid 2026-08-27] The authority admits only real locators
+    // -- AK6OI's corrupt "DM14GDDM33" sat in the authority; the
+    // renderer refused to plot it but knownGrid()/the dump/the
+    // executor all served it as a grid.
+    if (!Maidenhead::valid(grid.left(6)))
         return;
     QString const key = call.toUpper();
     QString const known = m_gridByCall.value(key);
@@ -1394,6 +1416,7 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
         // they heard US on, which is not a fact about them.
         if (!senderIsMe && spotFreqHz > 0)
             info.freqHz = spotFreqHz;
+            info.freqWhen = when;   // [maptruth #13] value + clock
         if (!senderIsMe)
             info.sawAsSender = true;   // it was the SENDER of a spot
     }
@@ -1886,6 +1909,29 @@ void SpotMapWindow::redraw() {
         auto const cutoff = now.addSecs(-m_viewWindowSecs);
         QHash<QString, Spot> reg;
         QSet<QString> sawAsSender;    // [mondots] rxOnly = never a sender
+        // [heardproof 2026-08-27, operator: "should have been this
+        // way already"] Appearing as HEARD in any edge proves the
+        // station transmitted, whatever the transport. Collect the
+        // newest such time per station in one pass.
+        QHash<QString, QDateTime> lastTx;
+        auto const &hzTx = m_hearingByBand.value(m_currentBand);
+        for (auto h0 = hzTx.constBegin(); h0 != hzTx.constEnd();
+             ++h0) {
+            if (h0.value().source == QStringLiteral("radio")) {
+                auto &t = lastTx[h0.key()];
+                if (h0.value().lastSeen > t)
+                    t = h0.value().lastSeen;
+            }
+            for (auto e0 = h0.value().heard.constBegin();
+                 e0 != h0.value().heard.constEnd(); ++e0) {
+                auto &t = lastTx[e0.key()];
+                if (e0.value().when > t)
+                    t = e0.value().when;
+            }
+        }
+        for (auto it0 = lastTx.constBegin(); it0 != lastTx.constEnd();
+             ++it0)
+            sawAsSender.insert(it0.key());
 
         // Register one observation. `pskrEv` says which clock it feeds;
         // `posAuth` forces the position (the hearing store is [posauth],
@@ -2093,6 +2139,7 @@ void SpotMapWindow::redraw() {
             // [mondots] rxOnly = never observed as a SENDER; the only
             // case hover labels "monitor".
             r.rxOnly = !sawAsSender.contains(it.key());
+            r.lastTxWhen = lastTx.value(it.key());
             // [pskrtoggle] Internet-only when no radio clock exists --
             // derived, never set by a pass.
             r.pskr = !r.radioWhen.isValid();
@@ -2387,6 +2434,10 @@ void SpotMapWindow::redraw() {
     std::sort(ordered.begin(), ordered.end(),
               [](Spot const &a, Spot const &b) { return a.when < b.when; });
 
+    static qint64 s_dotLogMs = 0;
+    if (qint64 const nowLog = QDateTime::currentMSecsSinceEpoch();
+        nowLog - s_dotLogMs > 10000) {
+        s_dotLogMs = nowLog;
     qCWarning(mqttclient_js8).nospace()
         << "[DOTLOG] stations=" << dotSeen << " ofWhichPskr=" << dotPskr
         << " | dropped: toggleHid=" << dotHidden
@@ -2396,6 +2447,7 @@ void SpotMapWindow::redraw() {
         << " | drawn=" << render.size()
         << " ofWhichPskr=" << dotDrawnPskr
         << " | window=" << m_viewWindowSecs << "s showPskr=" << m_showPskr;
+    }
 
     // [inkdensity 2026-08-21] ADAPTIVE PSKR LINE COLOUR.
     // At greyline the internet mesh is ~1400 segments and solid yellow
@@ -2505,6 +2557,10 @@ void SpotMapWindow::redraw() {
         // hid, and how many had an endpoint that was not plotted --
         // that last one being the surprise, since it makes the line
         // layer depend on the DOT layer's freshness as well as its own.
+        static qint64 s_lineLogMs = 0;
+        if (qint64 const nowLog = QDateTime::currentMSecsSinceEpoch();
+            nowLog - s_lineLogMs > 10000) {
+            s_lineLogMs = nowLog;
         qCWarning(mqttclient_js8).nospace()
             << "[LINELOG] edges pskr=" << seenPskr << " radio=" << seenRadio
             << " | dropped: old=" << oldEdge << " pskrHidden=" << hidPskr
@@ -2513,6 +2569,7 @@ void SpotMapWindow::redraw() {
             << " | window=" << m_viewWindowSecs << "s showPskr="
             << m_showPskr << " viewAll=" << m_viewAll
             << " plotted=" << posByCall.size();
+        }
         // [inkdensity 2026-08-22] METRIC: THE NUMBER OF YELLOW LINES.
         // Operator's call, after trying ink-coverage and peak-cell
         // density: "just use the number of lines".
@@ -2945,11 +3002,17 @@ void SpotMapWindow::redraw() {
             // so if it recurs, the gap must be here, and this line
             // names it: how many of the chain's points found a
             // position. Low volume: only while an attempt is alive.
-            qCWarning(mqttclient_js8).nospace()
-                << "[ATTEMPT-PAINT] path=" << a.path.join(">")
-                << " placed=" << pts.size() << "/"
-                << (a.path.size() + 1)
-                << (a.replied ? " GREEN" : " red");
+            static qint64 s_attLogMs = 0;
+            if (qint64 const nowLog =
+                    QDateTime::currentMSecsSinceEpoch();
+                nowLog - s_attLogMs > 10000) {
+                s_attLogMs = nowLog;
+                qCWarning(mqttclient_js8).nospace()
+                    << "[ATTEMPT-PAINT] path=" << a.path.join(">")
+                    << " placed=" << pts.size() << "/"
+                    << (a.path.size() + 1)
+                    << (a.replied ? " GREEN" : " red");
+            }
             // Draw AS FAR AS WE CAN. Requiring the whole chain to be
             // placeable meant one hop with no grid erased the entire
             // line, which is how a three-hop attempt drew nothing at
@@ -3326,10 +3389,21 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
             DriftingDateTime::currentDateTimeUtc());
         QString tip;
         if (best->spot.rxOnly) {
-            // [mondots] Receive-only reporter — no SNR of its own.
-            tip = tr("%1 (%2)\nmonitor · %3 %4 · %5 min ago")
+            // [heardproof] dated claim, never "monitor"/"never"
+            // (operator wording: "last heard N <hr/min> ago").
+            QString txPart;
+            if (best->spot.lastTxWhen.isValid()) {
+                qint64 const txAge = best->spot.lastTxWhen.secsTo(
+                    DriftingDateTime::currentDateTimeUtc());
+                txPart = txAge >= 3600
+                    ? tr("last heard %1 hr ago").arg(txAge / 3600)
+                    : tr("last heard %1 min ago").arg(txAge / 60);
+            } else {
+                txPart = tr("no transmission observed");
+            }
+            tip = tr("%1 (%2)\n%3 · %4 %5 · updated %6 min ago")
                       .arg(best->spot.receiverCall,
-                           best->spot.receiverGrid)
+                           best->spot.receiverGrid, txPart)
                       .arg(qRound(dist))
                       .arg(miles ? tr("mi") : tr("km"))
                       .arg(ageSecs / 60);

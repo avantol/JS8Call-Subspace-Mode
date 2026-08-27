@@ -272,6 +272,7 @@ class SpotMapWindow final : public QWidget {
         // (W3NIC, 2026-08-23: station 51 s, its report of us 1413 s).
         // One fact, one clock.
         QDateTime reportsMeWhen;
+        QDateTime lastTxWhen;   // newest heard-in-any-edge evidence
     };
 
     // [spotwin] STORAGE horizon: spots are retained in memory per
@@ -470,6 +471,7 @@ class SpotMapWindow final : public QWidget {
     struct StationInfo {
         QString country;
         qint64 freqHz = 0;
+        QDateTime freqWhen;   // when freqHz was observed
         bool sawAsSender = false;  // observed transmitting => not rxOnly
     };
     QHash<QString, QHash<QString, StationInfo>> m_infoByBand;
