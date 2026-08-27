@@ -2699,7 +2699,15 @@ void SpotMapWindow::redraw() {
         // Only when pskrCoverage > 0: with no muting there is nothing
         // to restore, and lifting lines then would be a change with no
         // cause.
-        bool const lift = pskrCoverage > 0.0 && !hoverUp.isEmpty();
+        // [tracer 2026-08-27, TODO #183 + operator revision] The
+        // tracer works at EVERY density -- on a sparse map the old
+        // gate (muting active) made hover change nothing, and even
+        // the unmuted yellow was hard to follow. Lifted lines draw
+        // in the max yellow TRENDED TO WHITE; when a lifted line
+        // ends at our own station, the callsign paints beside the
+        // center triangle in the same colour for the duration of
+        // the hover.
+        bool const lift = !hoverUp.isEmpty();
         if (!lift) {
             drawGroup(segPskr, QPen{pskrLineColor, 1}); // internet under
             m_lastSegCount = segPskr.size() + segRadio.size();
@@ -2710,9 +2718,19 @@ void SpotMapWindow::redraw() {
                 (s.hover ? lit : dim).append(s);
             drawGroup(dim, QPen{pskrLineColor, 1});
             drawGroup(segRadio, penRadio);
-            // Unmuted end of the same ramp -- the colour these lines
-            // would have had on an empty map, not a new highlight hue.
-            drawGroup(lit, QPen{QColor{225, 190, 30, 225}, 1});
+            QColor const tracerColor{255, 250, 225, 255};
+            drawGroup(lit, QPen{tracerColor, 1});
+            m_lastSegCount = segPskr.size() + segRadio.size();
+            bool tracerToMe = false;
+            for (Seg const &s : lit)
+                if (s.hearer == center || s.heard == center) {
+                    tracerToMe = true;
+                    break;
+                }
+            if (tracerToMe && !m_myCall.isEmpty()) {
+                p.setPen(tracerColor);
+                p.drawText(center + QPointF{12.0, -10.0}, m_myCall);
+            }
         }
     }
 
