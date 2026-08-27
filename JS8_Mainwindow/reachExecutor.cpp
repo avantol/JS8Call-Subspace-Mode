@@ -859,12 +859,14 @@ void UI_Constructor::reachNextMove() {
         m_reachTimer->start(m_reach.holdUntilMs - now);
         return;
     }
-    if (m_reach.moveNo >= m_reach.maxMoves) {
-        reachStop(QStringLiteral("NOT REACHED -- move budget spent; "
-                                 "busy or disabled, retry from the top "
-                                 "later"));
-        return;
-    }
+    // [budgetextend 2026-08-27, operator: "of course. 'the budget'
+    // is for when there is nothing left to do."] Budget spent does
+    // NOT stop the attempt while a route learned DURING this attempt
+    // remains untried -- the KI4RXJ case: move 6's shout learned a
+    // fresh -12 route and the strict budget threw it away. Over
+    // budget: no direct, no shout, no probes -- only fresh-evidence
+    // routes; when none remain, THEN stop.
+    bool const overBudget = m_reach.moveNo >= m_reach.maxMoves;
     reachRefreshBook();   // [livebook] the store may know more now
     QString const me = m_config.my_callsign().trimmed().toUpper();
     QString const T = m_reach.target;
@@ -1104,7 +1106,7 @@ void UI_Constructor::reachNextMove() {
     }
 
     // ---- step 1: the direct call, once (decide.py:859-866) --------
-    if (snrTried < 0) {
+    if (!overBudget && snrTried < 0) {
         auto const &m = ranked.isEmpty() || ranked[0].mv.kind
                                 != QLatin1String("snr")
             ? [&]() -> MoveCand const & {
@@ -1139,7 +1141,8 @@ void UI_Constructor::reachNextMove() {
     // so collapsed trust or floor-grade booked routes escalate to
     // asking the band NATURALLY, and a strong fresh booked route
     // keeps the 98 seconds in hand.
-    if (!m_reach.triedAt.contains(QStringLiteral("shout"))) {
+    if (!overBudget &&
+        !m_reach.triedAt.contains(QStringLiteral("shout"))) {
         double const trust = bandTrust(m_reach.band, now);
         double const qAns = 0.29;              // measured answer rate
         double const backUnknown = 0.311 * 0.7;
@@ -1217,6 +1220,21 @@ void UI_Constructor::reachNextMove() {
             QStringLiteral("relay:") + relKey, -1);
         if (tried >= 0)
             continue;   // stale-scored above; fresh candidates first
+        if (overBudget) {
+            // only a route resting on evidence learned THIS attempt
+            QString const lastHop = x.mv.chain.isEmpty()
+                                        ? x.mv.via
+                                        : x.mv.chain.last();
+            bool const fresh =
+                bookEdge(lastHop, T).whenMs >= m_reach.startMs ||
+                bookEdge(T, lastHop).whenMs >= m_reach.startMs;
+            if (!fresh)
+                continue;
+            reachLog(QStringLiteral("    budget spent, but a route "
+                                    "learned this attempt remains -- "
+                                    "extending one move via %1")
+                         .arg(x.mv.via));
+        }
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = x.mv.via;
         m_reach.chain = x.mv.chain.isEmpty()
@@ -1232,7 +1250,7 @@ void UI_Constructor::reachNextMove() {
     }
 
     // ---- step 4: probes (decide.py:762-777, :889-895) -------------
-    {
+    if (!overBudget) {
         MoveCand bestProbe;
         double bestScore = 0.0;
         // HEARING? at the least-known raisable station
@@ -1310,9 +1328,15 @@ void UI_Constructor::reachNextMove() {
     }
 
     // ---- nothing left (decide.py:896-901) -------------------------
-    reachStop(QStringLiteral("nothing left to try -- every option is "
-                             "spent; busy or disabled, retry from the "
-                             "top later"));
+    reachStop(overBudget
+                  ? QStringLiteral("NOT REACHED -- move budget spent "
+                                   "and no fresh route remains; busy "
+                                   "or disabled, retry from the top "
+                                   "later")
+                  : QStringLiteral("nothing left to try -- every "
+                                   "option is spent; busy or "
+                                   "disabled, retry from the top "
+                                   "later"));
 }
 
 // explain() (decide.py:263-291): COST line from waits_for
