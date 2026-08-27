@@ -1064,9 +1064,9 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         m_reach.fwdDoneMs != 0 && m_reach.retFwdMs == 0 &&
         now - m_reach.fwdDoneMs > 5000 &&
         up.startsWith(m_reach.via + QLatin1String(":"))) {
-        // the via keying AGAIN after its forward = the answer coming
-        // back; give it the PACKED frame count of the exact expected
-        // re-forward ("VIA: ME> SNR -NN *DE* TARGET")
+        // the via STARTING TX again after its forward = the answer
+        // coming back; give it the PACKED frame count of the exact
+        // expected re-forward ("VIA: ME> SNR -NN *DE* TARGET")
         m_reach.retFwdMs = now;
         int const retF = reachReplyFrames(
             m_reach.via,
@@ -1240,13 +1240,19 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         from == m_reach.via &&
         line.toUpper().contains(QStringLiteral("*DE* ") + me)) {
         m_reach.fwdDoneMs = now;
-        // [relayreturn+exactreply] The answer comes back THROUGH the
-        // relay: 3 slots for the target to START answering the via
-        // (KQ4DNM envelope; the tighter slot-1 checkpoint is a parked
-        // policy discussion) + the PACKED frame count of the exact
-        // expected answer ("TARGET: VIA> ME SNR -NN", checksum
-        // included, straight from the varicode packer) + 1 slot for
-        // the via to key the return forward.
+        // [returncheck 2026-08-27, operator's rule verbatim]: "if we
+        // don't hear the first ('from') frame by the end of the 3rd
+        // frame after the period boundary that immediately follows
+        // [the] replying station's end of tx, then we assume no
+        // message is coming." The target starts tx at the boundary
+        // after the forward's end of tx (deterministic, every
+        // measured reply); its answer runs the PACKED frame count
+        // ("TARGET: VIA> ME SNR -NN", from the varicode packer); the
+        // boundary after its end of tx opens a 3-frame window for
+        // the via's return to start. That one window covers BOTH a
+        // late-starting target (+1/+2 slots shifts the return within
+        // it -- KQ4DNM's +2 lands on its last frame) and via queue
+        // displacement, and it sits at the stage we can HEAR.
         QString const me_ =
             m_config.my_callsign().trimmed().toUpper();
         int const ansF = reachReplyFrames(
@@ -1254,13 +1260,13 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
             m_reach.via + QStringLiteral("> ") + me_
                 + QStringLiteral(" SNR -15"));
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 3 + ansF + 1));
-        reachLog(QStringLiteral("    forward complete %1; answer due "
-                                "back through %2 within %3 slots "
-                                "(%4-frame answer)")
-                     .arg(off, m_reach.via)
-                     .arg(3 + ansF + 1)
-                     .arg(ansF));
+                                  reachSlotEndMs(now, ansF + 3));
+        reachLog(QStringLiteral("    forward complete %1; %2-frame "
+                                "answer expected; %3's return must "
+                                "start within 3 frames after it -- "
+                                "reject at %4 slots")
+                     .arg(off, QString::number(ansF), m_reach.via)
+                     .arg(ansF + 3));
         reachArmTimer();
         return;
     }
@@ -1399,8 +1405,8 @@ void UI_Constructor::reachTick() {
         state = QStringLiteral("return forward started but never "
                                "assembled -- frames lost");
     else if (m_reach.fwdDoneMs != 0)
-        state = QStringLiteral("forwarded, but the target never "
-                               "answered");
+        state = QStringLiteral("forwarded, but no return started -- "
+                               "target silent or via holding nothing");
     else if (m_reach.ansStartedMs != 0) {
         bool allDone = !m_reach.watchers.isEmpty();
         for (auto const &w : m_reach.watchers)
