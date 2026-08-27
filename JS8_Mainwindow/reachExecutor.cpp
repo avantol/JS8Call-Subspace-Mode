@@ -1535,6 +1535,32 @@ void UI_Constructor::reachNextMove() {
 
     // ---- nothing left (decide.py:896-901) -------------------------
     if (m_reach.relaysBlocked) {
+        // [withheldviz] The board you cannot spend is still a board
+        // you can read (operator: "wasn't high enough ranking, or
+        // not considered?" -- it was ranked and withheld, invisibly).
+        double wBest = 0.0;
+        QString wCall;
+        qint64 wWhen = 0;
+        for (auto const &x : ranked) {
+            if (x.mv.kind != QLatin1String("relay") ||
+                x.score <= wBest)
+                continue;
+            QString const lastHop = x.mv.chain.isEmpty()
+                                        ? x.mv.via
+                                        : x.mv.chain.last();
+            wBest = x.score;
+            wCall = x.mv.via;
+            wWhen = qMax(bookEdge(lastHop, m_reach.target).whenMs,
+                         bookEdge(m_reach.target, lastHop).whenMs);
+        }
+        if (!wCall.isEmpty())
+            reachLog(QStringLiteral("    withheld best: %1  %2/1000s "
+                                    "(target-side evidence %3h older "
+                                    "than the silence)")
+                         .arg(wCall)
+                         .arg(wBest * 1000.0, 0, 'f', 4)
+                         .arg((m_reach.gateSilenceMs - wWhen)
+                                  / 3600000.0, 0, 'f', 1));
         reachStop(QStringLiteral("direct call unanswered; delivery to "
                                  "%1 was already proven, no station "
                                  "has heard it since, and no route "
