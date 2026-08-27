@@ -1379,6 +1379,7 @@ class UI_Constructor : public QMainWindow {
     void reachArmTimer();
     void reachLog(QString const &line);
     qint64 reachSlotEndMs(qint64 tMs, int n) const;
+    int reachReplyFrames(QString const &from, QString const &text) const;
     double reachPLink(qint64 whenMs, int snr) const;
     void reachPlaceTemplate(QStringList const &path);
 

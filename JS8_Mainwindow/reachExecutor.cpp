@@ -197,6 +197,22 @@ void UI_Constructor::reachLog(QString const &line) {
         << line;
 }
 
+// [exactreply 2026-08-27, operator directive: "be sure to use the
+// correct expected reply message when calculating the ultimate wait
+// time"] Frame counts come from the PACKER fed the composed expected
+// reply -- one owner for "how many frames does this message take",
+// per query kind, checksum and callsign packing included. SNR rides
+// as a fixed-width 3-char literal, so any value gives the same count.
+int UI_Constructor::reachReplyFrames(QString const &from,
+                                     QString const &text) const {
+    Varicode::MessageInfo info;
+    auto const frames = Varicode::buildMessageFrames(
+        from, QString{}, QString{}, text,
+        /*forceIdentify=*/false, /*forceData=*/false, m_nSubMode,
+        &info);
+    return qMax(1, int(frames.size()));
+}
+
 // attempt.py:291-294
 qint64 UI_Constructor::reachSlotEndMs(qint64 tMs, int n) const {
     qint64 const p = qMax(1u, JS8::Submode::periodMS(m_nSubMode));
@@ -1049,10 +1065,14 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         now - m_reach.fwdDoneMs > 5000 &&
         up.startsWith(m_reach.via + QLatin1String(":"))) {
         // the via keying AGAIN after its forward = the answer coming
-        // back; give its 2-3 frames + assembly three slots
+        // back; give it the PACKED frame count of the exact expected
+        // re-forward ("VIA: ME> SNR -NN *DE* TARGET")
         m_reach.retFwdMs = now;
+        int const retF = reachReplyFrames(
+            m_reach.via,
+            me + QStringLiteral("> SNR -15 *DE* ") + T);
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 3));
+                                  reachSlotEndMs(now, retF));
         reachLog(QStringLiteral("    return forward STARTED +%1s -- "
                                 "deadline extended")
                      .arg((now - m_reach.txEndMs) / 1000));
@@ -1119,13 +1139,22 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
                                       reachSlotEndMs(now, 1));
         if (m_reach.ansStartedMs == 0) {
             m_reach.ansStartedMs = now;
-            int frames = kFramesSnr;
+            int frames;
             if (m_reach.kind == QLatin1String("shout"))
-                frames = kFramesShout;
+                frames = kFramesShout;   // variable riders; measured max
             else if (m_reach.kind == QLatin1String("hearing"))
-                frames = kFramesHearing;
+                frames = kFramesHearing; // list length varies
             else if (m_reach.kind == QLatin1String("grid"))
-                frames = kFramesGrid;
+                frames = reachReplyFrames(
+                    m_reach.via,
+                    me + QStringLiteral(" GRID FN20"));
+            else if (m_reach.kind == QLatin1String("relay"))
+                frames = reachReplyFrames(
+                    T, m_reach.via + QStringLiteral("> ") + me
+                           + QStringLiteral(" SNR -15"));
+            else
+                frames = reachReplyFrames(
+                    T, me + QStringLiteral(" SNR -15"));
             m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                       reachSlotEndMs(now, frames - 1));
             reachLog(QStringLiteral("    answer STARTED +%1s -- "
@@ -1211,20 +1240,27 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         from == m_reach.via &&
         line.toUpper().contains(QStringLiteral("*DE* ") + me)) {
         m_reach.fwdDoneMs = now;
-        // [relayreturn 2026-08-27] The answer comes back THROUGH the
+        // [relayreturn+exactreply] The answer comes back THROUGH the
         // relay: 3 slots for the target to START answering the via
-        // (measured, KQ4DNM +46s) + 2 frames of answer airtime we may
-        // not hear (that is what relaying is for) + 1 slot for the
-        // via to key the return forward = SIX slots, each term
-        // measured. The old 3-slot window expired 29-60s before any
-        // relayed-back answer could assemble -- it could never admit
-        // the success it existed for (operator caught it: "I think
-        // we're not allowing enough time for K0EMP to reply to us").
+        // (KQ4DNM envelope; the tighter slot-1 checkpoint is a parked
+        // policy discussion) + the PACKED frame count of the exact
+        // expected answer ("TARGET: VIA> ME SNR -NN", checksum
+        // included, straight from the varicode packer) + 1 slot for
+        // the via to key the return forward.
+        QString const me_ =
+            m_config.my_callsign().trimmed().toUpper();
+        int const ansF = reachReplyFrames(
+            m_reach.target,
+            m_reach.via + QStringLiteral("> ") + me_
+                + QStringLiteral(" SNR -15"));
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 6));
+                                  reachSlotEndMs(now, 3 + ansF + 1));
         reachLog(QStringLiteral("    forward complete %1; answer due "
-                                "back through %2 within six slots")
-                     .arg(off, m_reach.via));
+                                "back through %2 within %3 slots "
+                                "(%4-frame answer)")
+                     .arg(off, m_reach.via)
+                     .arg(3 + ansF + 1)
+                     .arg(ansF));
         reachArmTimer();
         return;
     }
