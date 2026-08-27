@@ -365,12 +365,21 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         watchers.setdefault(
                             k, {"last": nowt, "done": False})
                         watchers[k]["last"] = nowt
+                        # a LIVE reply extends the wait one slot per
+                        # frame -- late starters (KQ4DNM, KB8JEP
+                        # 02:27Z) were cut when the ceiling stayed
+                        # anchored to the FIRST answer's detection
+                        if deadline is not None:
+                            deadline = max(deadline, slot_end(nowt, 1))
                     elif poff is not None:
                         # continuation frame on a watched offset --
                         # the reply is still airing; one more slot
                         k = wkey(int(poff))
                         if k in watchers and not watchers[k]["done"]:
                             watchers[k]["last"] = nowt
+                            if deadline is not None:
+                                deadline = max(deadline,
+                                               slot_end(nowt, 1))
                     if addressed and ans_started is None:
                         ans_started = nowt
                         # SLOT-ANCHORED ceiling: detection is ~12.6s
