@@ -139,6 +139,13 @@ class SpotMapWindow final : public QWidget {
     };
     QVector<EdgeView> allEdges(QString const &band) const;
     QVector<GridDb::EdgeRow> edges24h() const;
+    // [habitstore] executor's durable habit observations
+    void queueReachEvent(GridDb::ReachEventRow const &r) {
+        m_gridDb.queueReachEvent(r);
+    }
+    QVector<GridDb::ReachEventRow> reachEvents() const {
+        return m_gridDb.loadReachEvents();
+    }
 
     // heardWhen: optional BACKDATED sighting time for the heard
     // edges ([#161] age-bearing replies) — invalid = now; an edge's

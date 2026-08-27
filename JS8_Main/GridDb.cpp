@@ -201,6 +201,17 @@ bool GridDb::ensureSchema() {
     // One index, on the prune/age column. At a few thousand rows
     // nothing else earns its keep.
     ok &= q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS reach_events ("
+        " band TEXT NOT NULL,"
+        " station TEXT NOT NULL,"
+        " when_s INTEGER NOT NULL,"
+        " kind TEXT NOT NULL,"
+        " ok INTEGER NOT NULL,"
+        " extra TEXT)"));
+    ok &= q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS reach_when"
+        " ON reach_events(when_s)"));
+    ok &= q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS edges_when ON edges(when_s)"));
     ok &= q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS stations_when ON stations(any_when)"));
@@ -376,13 +387,51 @@ void GridDb::queueStation(StationRow const &s) {
     m_pendingStations.append(row);
 }
 
+void GridDb::queueReachEvent(ReachEventRow const &r) {
+    if (r.station.isEmpty() || r.band.isEmpty() || r.kind.isEmpty())
+        return;
+    ReachEventRow row = r;
+    row.station = row.station.toUpper();
+    if (!row.when)
+        row.when = nowSecs();
+    m_pendingReach.append(row);
+}
+
+QVector<GridDb::ReachEventRow> GridDb::loadReachEvents() const {
+    QVector<ReachEventRow> out;
+    if (!m_db.isOpen())
+        return out;
+    QSqlQuery q{m_db};
+    q.prepare(QStringLiteral(
+        "SELECT band, station, when_s, kind, ok, extra FROM"
+        " reach_events WHERE when_s > ?"));
+    q.addBindValue(nowSecs() - REACH_RETAIN_SECS);
+    if (!q.exec()) {
+        qCWarning(griddb_js8)
+            << "[GRIDDB] loadReachEvents FAILED:"
+            << q.lastError().text();
+        return out;
+    }
+    while (q.next()) {
+        ReachEventRow r;
+        r.band = q.value(0).toString();
+        r.station = q.value(1).toString();
+        r.when = q.value(2).toLongLong();
+        r.kind = q.value(3).toString();
+        r.ok = q.value(4).toBool();
+        r.extra = q.value(5).toString();
+        out.append(r);
+    }
+    return out;
+}
+
 void GridDb::flush() {
     if (!m_db.isOpen())
         return;
     qint64 const now = nowSecs();
     bool const prune = now - m_lastPrune >= kPruneEverySecs;
     if (m_pendingEdges.isEmpty() && m_pendingStations.isEmpty() &&
-        !prune)
+        m_pendingReach.isEmpty() && !prune)
         return;
 
     int const edges = m_pendingEdges.size();
@@ -395,6 +444,25 @@ void GridDb::flush() {
             << "[GRIDDB] transaction FAILED - writing unbatched:"
             << m_db.lastError().text();
 
+    if (!m_pendingReach.isEmpty()) {
+        QSqlQuery q{m_db};
+        q.prepare(QStringLiteral(
+            "INSERT INTO reach_events (band, station, when_s, kind,"
+            " ok, extra) VALUES (?, ?, ?, ?, ?, ?)"));
+        for (ReachEventRow const &r : m_pendingReach) {
+            q.bindValue(0, r.band);
+            q.bindValue(1, r.station);
+            q.bindValue(2, r.when);
+            q.bindValue(3, r.kind);
+            q.bindValue(4, r.ok ? 1 : 0);
+            q.bindValue(5, r.extra);
+            if (!q.exec())
+                qCWarning(griddb_js8)
+                    << "[GRIDDB] reach_events insert FAILED:"
+                    << q.lastError().text();
+        }
+        m_pendingReach.clear();
+    }
     if (!m_pendingEdges.isEmpty()) {
         QSqlQuery q{m_db};
         q.prepare(QStringLiteral(
@@ -470,6 +538,13 @@ void GridDb::flush() {
     }
 
     if (prune) {
+        {
+            QSqlQuery pr{m_db};
+            pr.prepare(QStringLiteral(
+                "DELETE FROM reach_events WHERE when_s < ?"));
+            pr.addBindValue(nowSecs() - REACH_RETAIN_SECS);
+            pr.exec();
+        }
         m_lastPrune = now;
         QSqlQuery q{m_db};
         qint64 const cutoff = now - RETAIN_SECS;

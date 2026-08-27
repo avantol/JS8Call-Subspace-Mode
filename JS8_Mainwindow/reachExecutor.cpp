@@ -162,6 +162,10 @@ Book g_book;
 // NEXT move -- mid-attempt, and across retries in the session.
 struct RelayOutcome { qint64 ms; bool forwarded; QString station; };
 QHash<QString, QVector<RelayOutcome>> g_relayOutcomes;  // per band
+// [habitstore] answered-when-called observations, per band
+struct AnsOutcome { qint64 ms; bool answered; QString station; };
+QHash<QString, QVector<AnsOutcome>> g_ansOutcomes;
+bool g_eventsLoaded = false;
 
 double bandTrust(QString const &band, qint64 nowMs) {
     double n = 0.0, a = 0.0;
@@ -372,8 +376,23 @@ double intelFwd(QString const &call) {
 
 double stAns(QString const &call, qint64 nowMs) {
     auto &s = g_book.stations[call];
-    if (s.ansHabit < 0)
-        s.ansHabit = intelAns(call, nowMs);
+    if (s.ansHabit < 0) {
+        double const base = intelAns(call, nowMs);
+        // live observations, same 30-day half-life as the corpus
+        double n = 0.0, a = 0.0;
+        for (auto it = g_ansOutcomes.constBegin();
+             it != g_ansOutcomes.constEnd(); ++it)
+            for (auto const &o : it.value()) {
+                if (o.station != call)
+                    continue;
+                double const w = std::pow(
+                    0.5, (nowMs - o.ms) / (30.0 * 86400.0 * 1000.0));
+                n += w;
+                a += w * (o.answered ? 1.0 : 0.0);
+            }
+        s.ansHabit = qMin(0.95, qMax(0.05,
+            (base * 3.0 + a) / (3.0 + n)));
+    }
     return s.ansHabit;
 }
 // [stationhabit 2026-08-27, operator: "when we see that NZ1ON won't
@@ -582,6 +601,26 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
         reachLog(QStringLiteral("speed pinned to Normal (app was at %1;"
                                 " restored on exit)")
                      .arg(m_reach.savedSubmode));
+    }
+
+    // [habitstore] resurrect the durable habit record once per
+    // process -- asked-vs-forwarded and called-vs-answered follow
+    // stations across restarts now ("we're throwing away good data").
+    if (!g_eventsLoaded) {
+        g_eventsLoaded = true;
+        int n = 0;
+        for (auto const &r : m_spotMapWindow->reachEvents()) {
+            if (r.kind == QLatin1String("fwd"))
+                g_relayOutcomes[r.band].append(
+                    {r.when * 1000, r.ok, r.station});
+            else if (r.kind == QLatin1String("ans"))
+                g_ansOutcomes[r.band].append(
+                    {r.when * 1000, r.ok, r.station});
+            ++n;
+        }
+        if (n)
+            reachLog(QStringLiteral("habit record loaded: %1 events "
+                                    "(90-day retention)").arg(n));
     }
 
     reachRefreshBook();
@@ -1495,6 +1534,9 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         m_reach.fwdStartedMs = now;
         g_relayOutcomes[m_reach.band].append(
             {now, true, m_reach.via});
+        m_spotMapWindow->queueReachEvent(
+            {m_reach.band, m_reach.via, QStringLiteral("fwd"),
+             QString{}, now / 1000, true});
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                   reachSlotEndMs(now, 5));
         reachLog(QStringLiteral("    forward STARTED +%1s -- deadline "
@@ -1646,6 +1688,15 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         else if (viaReturn)
             path << from;
         path << T;
+        // [habitstore + TODO #182] answered = the strongest habit
+        // fact; the route that WORKED, saved with it.
+        g_ansOutcomes[m_reach.band].append({now, true, T});
+        m_spotMapWindow->queueReachEvent(
+            {m_reach.band, T, QStringLiteral("ans"), QString{}, 0,
+             true});
+        m_spotMapWindow->queueReachEvent(
+            {m_reach.band, T, QStringLiteral("reached"),
+             path.join(QLatin1Char('>')), 0, true});
         reachPlaceTemplate(path);
         reachStop(QStringLiteral("REACHED"));
         return;
@@ -1840,6 +1891,9 @@ void UI_Constructor::reachTick() {
         g_relayOutcomes[m_reach.band].append(
             {DriftingDateTime::currentMSecsSinceEpoch(), false,
              m_reach.via});
+        m_spotMapWindow->queueReachEvent(
+            {m_reach.band, m_reach.via, QStringLiteral("fwd"),
+             QString{}, 0, false});
     if (capped)
         state = QStringLiteral("move hard cap (330s) reached");
     else if (m_reach.kind == QLatin1String("relay") &&
@@ -1872,6 +1926,23 @@ void UI_Constructor::reachTick() {
                      ? m_reach.via
                      : m_reach.target)
                 + QStringLiteral(" is busy or disabled");
+    // [habitstore] the target's answer habit, observed: a direct
+    // call that went unanswered; a relayed ask whose delivery was
+    // PROVEN (forward complete) with no answer -- the strong form.
+    if (m_reach.kind == QLatin1String("snr")) {
+        g_ansOutcomes[m_reach.band].append(
+            {now, false, m_reach.target});
+        m_spotMapWindow->queueReachEvent(
+            {m_reach.band, m_reach.target, QStringLiteral("ans"),
+             QString{}, 0, false});
+    } else if (m_reach.kind == QLatin1String("relay") &&
+               m_reach.fwdDoneMs != 0) {
+        g_ansOutcomes[m_reach.band].append(
+            {now, false, m_reach.target});
+        m_spotMapWindow->queueReachEvent(
+            {m_reach.band, m_reach.target, QStringLiteral("ans"),
+             QStringLiteral("delivered"), 0, false});
+    }
     reachLog(QStringLiteral("    VERDICT +%1s: %2 -- next move")
                  .arg(m_reach.txEndMs
                           ? (now - m_reach.txEndMs) / 1000

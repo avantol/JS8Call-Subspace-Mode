@@ -144,6 +144,24 @@ class GridDb final {
     QVector<EdgeRow> loadEdges(qint64 notOlderThanSecs) const;
     QVector<StationRow> loadStations(qint64 notOlderThanSecs) const;
 
+    // ---- reach events: months-scale habit observations ------------
+    // [habitstore 2026-08-27] The executor's per-attempt observations
+    // are habit data (asked-vs-forwarded, called-vs-answered, routes
+    // that WORKED) and were dying with the process -- "we're throwing
+    // away good data". Observations only, never decayed values; the
+    // recency math stays computed. kinds: 'fwd' (asked to forward,
+    // ok = keyed), 'ans' (called, ok = answered; extra = 'delivered'
+    // when a forward completed first), 'reached' (ok = 1, extra = the
+    // chain -- TODO #182 save successful routes). Retained 90 days.
+    struct ReachEventRow {
+        QString band, station, kind, extra;
+        qint64 when = 0;
+        bool ok = false;
+    };
+    static constexpr qint64 REACH_RETAIN_SECS = 90ll * 24 * 3600;
+    void queueReachEvent(ReachEventRow const &r);
+    QVector<ReachEventRow> loadReachEvents() const;
+
   private:
     bool ensureSchema();
     void wipe();
@@ -151,6 +169,7 @@ class GridDb final {
     QSqlDatabase m_db;
     QString m_connName;
     QVector<EdgeRow> m_pendingEdges;
+    QVector<ReachEventRow> m_pendingReach;
     QVector<StationRow> m_pendingStations;
     // call -> last activity write, for the 1/min throttle.
     QHash<QString, qint64> m_lastActivityWrite;
