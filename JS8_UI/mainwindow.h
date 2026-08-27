@@ -1326,6 +1326,12 @@ class UI_Constructor : public QMainWindow {
     struct ReachWatcher {
         qint64 lastMs = 0;   // last frame delivery on this offset
         bool   done = false; // assembled
+        // DEAD STAYS DEAD (operator, 2026-08-27): a frameless slot
+        // means a frame is MISSING and the reply can never assemble
+        // cleanly -- a later trailing frame must not resurrect the
+        // watcher and stretch the wait (MM7MMU cost +76s for a reply
+        // whose claim was already in frame 1).
+        bool   dead = false;
     };
     struct ReachState {
         bool        active = false;

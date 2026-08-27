@@ -405,6 +405,8 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         return off;
     };
     int const k = keyFor(d.offset);
+    if (m_reach.watchers.contains(k) && m_reach.watchers[k].dead)
+        return;   // dead stays dead -- no resurrection, no extension
     if (addressed) {
         if (!m_reach.watchers.contains(k))
             reachLog(QStringLiteral("    reply started at %1 Hz: %2")
@@ -500,7 +502,7 @@ void UI_Constructor::reachArmTimer() {
     qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
     qint64 next = m_reach.deadlineMs;
     for (auto const &w : m_reach.watchers) {
-        if (w.done)
+        if (w.done || w.dead)
             continue;
         qint64 const death = reachSlotEndMs(w.lastMs, 1);
         if (death > now)
@@ -519,9 +521,17 @@ void UI_Constructor::reachTick() {
         now < m_reach.deadlineMs) {
         bool allSettled = true;
         int done = 0;
-        for (auto const &w : m_reach.watchers) {
+        for (auto it = m_reach.watchers.begin();
+             it != m_reach.watchers.end(); ++it) {
+            auto &w = it.value();
             if (w.done) { ++done; continue; }
-            if (now < reachSlotEndMs(w.lastMs, 1)) {
+            if (!w.dead && now >= reachSlotEndMs(w.lastMs, 1)) {
+                w.dead = true;   // permanent from here on
+                reachLog(QStringLiteral("    reply at %1 Hz died "
+                                        "(missing frame)")
+                             .arg(it.key()));
+            }
+            if (!w.dead) {
                 allSettled = false;
                 break;
             }
