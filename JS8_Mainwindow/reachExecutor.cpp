@@ -36,6 +36,7 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <cmath>
+#include <limits>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -47,7 +48,10 @@ namespace {
 
 // decide.py:89-93 (actions.rtt at Normal)
 constexpr double T_SNR = 68.0, T_GRID = 82.0, T_SHOUT = 98.0,
-                 T_HEARING = 112.0, T_RELAY1 = 218.0;
+                 T_HEARING = 112.0;
+// actions.rtt(2,2,h): cost per chain length (decide.py:93)
+constexpr double kTRelay[5] = {97.5, 217.5, 337.5, 457.5, 577.5};
+constexpr double T_RELAY1 = 217.5;
 // decide.py:162-169
 constexpr int kFramesSnr = 1, kFramesGrid = 1, kFramesShout = 4,
               kFramesHearing = 4;
@@ -390,7 +394,8 @@ double staleWorth(double sinceS) {
 // slot-anchored) and the COST line of explain().
 struct MoveCand {
     QString kind;        // snr | shout | relay | hearing | grid
-    QString via;         // relay/hearing/grid subject
+    QString via;         // relay/hearing/grid subject (chain[0])
+    QStringList chain;   // full relay chain, excl. target
     double cost = 0.0;
     double score = 0.0;  // p/cost for attempts, net gain for probes
     double p = 0.0;      // route probability (relay) or direct p
@@ -671,6 +676,7 @@ void UI_Constructor::reachNextMove() {
         reachLog(QStringLiteral("[1] FORCED route via %1").arg(via));
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = via;
+        m_reach.chain = QStringList{via};
         m_reach.triedAt.insert(QStringLiteral("relay:") + via, now);
         reachSend(QStringLiteral("%1: %2>%3 SNR?").arg(me, via, T));
         return;
@@ -715,64 +721,151 @@ void UI_Constructor::reachNextMove() {
                           snrTried < 0 ? 10.0 : 10 * staleF, w);
         ranked.append({m.score, m});
     }
-    for (QString const &cand : g_book.pool) {
-        // p_relay for a 1-hop chain (decide.py:586-616), all terms:
-        // raise, awake, forwards, delivery, toward, answers, the way
-        // home (reciprocity-conditioned), and copy(first) again as
-        // the python multiplies it (verbatim).
-        double const raise_ = pHearsUs(this, cand, me, now);
-        double const copy_ = pCopy(cand, now);
-        double const trust = bandTrust(m_reach.band, now);
-        double const fwd_ = qMin(0.95, qMax(
-            0.02, stFwd(cand) * (trust / kFwdPrior)));
-        double const deliver = deliversTo(this, cand, T);
-        bool const linkSeen = bookEdge(cand, T).whenMs > 0 ||
-                              bookEdge(T, cand).whenMs > 0;
-        QString const cGrid = g_book.stations.value(cand).grid;
-        double const dir =
-            linkSeen ? 1.0 : toward(myGrid, cGrid, tGrid);
-        double const back = pReverse(T, cand);
-        double const ans_ = stAns(T, now);
-        double p = raise_ * copy_ * fwd_ * deliver * dir * ans_
-                   * back * copy_;
-        qint64 const tried = m_reach.triedAt.value(
-            QStringLiteral("relay:") + cand, -1);
-        if (tried >= 0)
-            p *= staleWorth((now - tried) / 1000.0);
-        if (p <= 0.0)
-            continue;
-        MoveCand m;
-        m.kind = QStringLiteral("relay");
-        m.via = cand;
-        m.cost = T_RELAY1;
-        m.p = p;
-        m.score = p / T_RELAY1;
-        int const w =
-            (cand + QStringLiteral(" forwards when asked")).size();
-        bool const dirUnknown = !linkSeen && cGrid.size() < 4;
-        m.factors
-            << factorLine(QStringLiteral("we can raise ") + cand,
-                          QString::number(raise_, 'f', 2), 10 * raise_,
-                          w)
-            << factorLine(cand + QStringLiteral(" is on the air"),
-                          QString::number(copy_, 'f', 2), 10 * copy_, w)
-            << factorLine(cand + QStringLiteral(" forwards when asked"),
-                          QString::number(fwd_, 'f', 2), 10 * fwd_, w)
-            << factorLine(QStringLiteral("target hears ") + cand,
-                          QString::number(deliver, 'f', 2),
-                          10 * deliver, w)
-            << factorLine(QStringLiteral("the reply gets back"),
-                          QString::number(back, 'f', 2), 10 * back, w)
-            << factorLine(QStringLiteral("target answers at all"),
-                          QString::number(ans_, 'f', 2), 10 * ans_, w)
-            << factorLine(QStringLiteral("toward the target"),
-                          dirUnknown ? QStringLiteral("unknown")
-                                     : QString::number(dir, 'f', 2),
-                          10 * dir, w, dirUnknown)
-            << factorLine(QStringLiteral("route length"),
-                          QStringLiteral("1 hop"), 10.0, w);
-        ranked.append({m.score, m});
+    // [dijkstra 2026-08-27] best_routes ported VERBATIM
+    // (decide.py:336-445) -- the operator's Parallel Path Tree,
+    // restored after being wrongly dropped with the multi-hop scope
+    // cut ("the backwards-graph part got dropped too?" -- yes, and
+    // here it returns). Backward walk FROM the target over the
+    // shortlist, -log(p) weights, chains to 4 hops; the first hop
+    // must be a station we can actually raise; intermediate hops are
+    // not restricted (we never talk to them directly).
+    {
+        int const maxHops = 4;
+        QHash<QString, double> dist;
+        QHash<QString, QStringList> route;
+        QSet<QString> seenN;
+        dist.insert(T, -std::log(qMax(1e-9, stAns(T, now))));
+        route.insert(T, {});
+        using QP = QPair<double, QString>;
+        QVector<QP> heap;
+        heap.append({dist.value(T), T});
+        auto heapLess = [](QP const &a, QP const &b) {
+            return a.first > b.first;   // min-heap via greater
+        };
+        std::make_heap(heap.begin(), heap.end(), heapLess);
+        while (!heap.isEmpty()) {
+            std::pop_heap(heap.begin(), heap.end(), heapLess);
+            auto const [cost, node] = heap.takeLast();
+            if (seenN.contains(node))
+                continue;
+            seenN.insert(node);
+            if (route.value(node).size() >= maxHops)
+                continue;
+            for (QString const &cand : g_book.pool) {
+                if (seenN.contains(cand) || cand == me ||
+                    Radio::same_station(cand, me))
+                    continue;
+                double const out = deliversTo(this, cand, node);
+                double const back = pReverse(node, cand);
+                bool const observed =
+                    bookEdge(cand, node).whenMs > 0 ||
+                    bookEdge(node, cand).whenMs > 0;
+                QString const cGrid = g_book.stations.value(cand).grid;
+                double const direction =
+                    observed ? 1.0 : toward(myGrid, cGrid, tGrid);
+                double const trust = bandTrust(m_reach.band, now);
+                double const fwdEff = qMin(0.95, qMax(
+                    0.02, stFwd(cand) * (trust / kFwdPrior)));
+                double const live =
+                    pCopy(cand, now) * fwdEff * direction;
+                double const step = out * back * live;
+                if (step <= 1e-9)
+                    continue;
+                double const nd = cost - std::log(step);
+                if (nd < dist.value(cand,
+                                    std::numeric_limits<double>::max())) {
+                    dist.insert(cand, nd);
+                    QStringList r;
+                    r << cand;
+                    r += route.value(node);
+                    route.insert(cand, r);
+                    heap.append({nd, cand});
+                    std::push_heap(heap.begin(), heap.end(), heapLess);
+                }
+            }
+            if (seenN.size() > 960)
+                break;
+        }
+        for (auto it = route.constBegin(); it != route.constEnd();
+             ++it) {
+            QString const &cand = it.key();
+            QStringList const &chain = it.value();
+            if (cand == T || chain.isEmpty())
+                continue;
+            if (!g_book.pool.contains(chain.first()))
+                continue;   // first hop must be raisable-pool
+            double p = std::exp(-dist.value(cand))
+                       * pHearsUs(this, chain.first(), me, now);
+            qint64 const tried = m_reach.triedAt.value(
+                QStringLiteral("relay:") + cand, -1);
+            if (tried >= 0)
+                p *= staleWorth((now - tried) / 1000.0);
+            if (p <= 0.0)
+                continue;
+            int const hops = chain.size();
+            double const cost = kTRelay[qMin(4, hops)];
+            QString const first = chain.first();
+            QString const lastHop = chain.last();
+            double const raise_ = pHearsUs(this, first, me, now);
+            double const copy_ = pCopy(first, now);
+            double const trust = bandTrust(m_reach.band, now);
+            double const fwd_ = qMin(0.95, qMax(
+                0.02, stFwd(first) * (trust / kFwdPrior)));
+            double const deliver = deliversTo(this, lastHop, T);
+            double back = 1.0;
+            QString prev = T;
+            for (int i = chain.size() - 1; i >= 0; --i) {
+                back *= pReverse(prev, chain[i]);
+                prev = chain[i];
+            }
+            QString const cGrid = g_book.stations.value(first).grid;
+            bool const linkSeen =
+                bookEdge(first, T).whenMs > 0 ||
+                bookEdge(T, first).whenMs > 0;
+            double const dir =
+                linkSeen ? 1.0 : toward(myGrid, cGrid, tGrid);
+            double const ans_ = stAns(T, now);
+            MoveCand m;
+            m.kind = QStringLiteral("relay");
+            m.via = first;
+            m.chain = chain;
+            m.cost = cost;
+            m.p = p;
+            m.score = p / cost;
+            int const w =
+                (first + QStringLiteral(" forwards when asked")).size();
+            bool const dirUnknown = !linkSeen && cGrid.size() < 4;
+            m.factors
+                << factorLine(QStringLiteral("we can raise ") + first,
+                              QString::number(raise_, 'f', 2),
+                              10 * raise_, w)
+                << factorLine(first + QStringLiteral(" is on the air"),
+                              QString::number(copy_, 'f', 2),
+                              10 * copy_, w)
+                << factorLine(first
+                                  + QStringLiteral(" forwards when asked"),
+                              QString::number(fwd_, 'f', 2), 10 * fwd_,
+                              w)
+                << factorLine(QStringLiteral("target hears ") + lastHop,
+                              QString::number(deliver, 'f', 2),
+                              10 * deliver, w)
+                << factorLine(QStringLiteral("the reply gets back"),
+                              QString::number(back, 'f', 2), 10 * back,
+                              w)
+                << factorLine(QStringLiteral("target answers at all"),
+                              QString::number(ans_, 'f', 2), 10 * ans_,
+                              w)
+                << factorLine(QStringLiteral("toward the target"),
+                              dirUnknown ? QStringLiteral("unknown")
+                                         : QString::number(dir, 'f', 2),
+                              10 * dir, w, dirUnknown)
+                << factorLine(QStringLiteral("route length"),
+                              QStringLiteral("%1 hop").arg(hops),
+                              10.0 / hops, w);
+            ranked.append({m.score, m});
+        }
     }
+
     std::sort(ranked.begin(), ranked.end(),
               [](auto const &a, auto const &b) {
                   return a.score > b.score;
@@ -909,18 +1002,23 @@ void UI_Constructor::reachNextMove() {
     for (auto const &x : ranked) {
         if (x.mv.kind != QLatin1String("relay"))
             continue;
+        QString const relKey = x.mv.chain.isEmpty()
+                                   ? x.mv.via : x.mv.chain.last();
         qint64 const tried = m_reach.triedAt.value(
-            QStringLiteral("relay:") + x.mv.via, -1);
+            QStringLiteral("relay:") + relKey, -1);
         if (tried >= 0)
             continue;   // stale-scored above; fresh candidates first
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = x.mv.via;
+        m_reach.chain = x.mv.chain.isEmpty()
+                            ? QStringList{x.mv.via} : x.mv.chain;
         m_reach.triedAt.insert(QStringLiteral("relay:") + x.mv.via,
                                now);
         m_reach.pastVias.append(x.mv.via);
         reachExplain(&x.mv);
         reachSend(QStringLiteral("%1: %2>%3 SNR?")
-                      .arg(me, x.mv.via, T));
+                      .arg(me, m_reach.chain.join(QLatin1Char('>')),
+                           T));
         return;
     }
 
@@ -1227,10 +1325,10 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
                      .arg(T).arg(m_reach.moveNo).arg(total)
                      .arg(m_reach.sent));
         QStringList path;
-        if (viaReturn)
+        if (m_reach.kind == QLatin1String("relay"))
+            path = m_reach.chain;
+        else if (viaReturn)
             path << from;
-        else if (m_reach.kind == QLatin1String("relay"))
-            path << m_reach.via;
         path << T;
         reachPlaceTemplate(path);
         reachStop(QStringLiteral("REACHED"));
@@ -1255,18 +1353,45 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         // displacement, and it sits at the stage we can HEAR.
         QString const me_ =
             m_config.my_callsign().trimmed().toUpper();
+        // Chain-aware ([dijkstra]): after chain[0]'s forward, each
+        // middle hop re-forwards (packed frames each, starting at the
+        // next boundary), the target answers the LAST hop, and the
+        // answer retraces the middle hops before chain[0]'s return --
+        // whose start gets the operator's 3-frame window. Every count
+        // from the packer on the composed message for that leg.
+        int middle = 0;
+        for (int i = 1; i < m_reach.chain.size(); ++i) {
+            QStringList tail = m_reach.chain.mid(i + 1);
+            tail << m_reach.target;
+            middle += reachReplyFrames(
+                m_reach.chain[i],
+                tail.join(QLatin1Char('>'))
+                    + QStringLiteral(" SNR? *DE* ") + me_);
+        }
+        QString const lastHop = m_reach.chain.isEmpty()
+                                    ? m_reach.via
+                                    : m_reach.chain.last();
         int const ansF = reachReplyFrames(
             m_reach.target,
-            m_reach.via + QStringLiteral("> ") + me_
+            lastHop + QStringLiteral("> ") + me_
                 + QStringLiteral(" SNR -15"));
+        int innerRet = 0;
+        for (int i = m_reach.chain.size() - 1; i >= 1; --i)
+            innerRet += reachReplyFrames(
+                m_reach.chain[i],
+                me_ + QStringLiteral("> SNR -15 *DE* ")
+                    + m_reach.target);
+        int const window = middle + ansF + innerRet + 3;
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, ansF + 3));
+                                  reachSlotEndMs(now, window));
         reachLog(QStringLiteral("    forward complete %1; %2-frame "
-                                "answer expected; %3's return must "
-                                "start within 3 frames after it -- "
-                                "reject at %4 slots")
-                     .arg(off, QString::number(ansF), m_reach.via)
-                     .arg(ansF + 3));
+                                "answer via %3 hop(s); %4's return "
+                                "must start within 3 frames after -- "
+                                "reject at %5 slots")
+                     .arg(off, QString::number(ansF))
+                     .arg(m_reach.chain.size())
+                     .arg(m_reach.via)
+                     .arg(window));
         reachArmTimer();
         return;
     }

@@ -1341,7 +1341,8 @@ class UI_Constructor : public QMainWindow {
         int         sent = 0;
         int         maxMoves = 6;
         QString     kind;           // "snr" | "shout" | "relay"
-        QString     via;            // relay move only
+        QString     via;            // relay move only: chain[0]
+        QStringList chain;          // full relay chain (excl. target)
         QStringList triedRelays;
         bool        triedDirect = false;
         bool        triedShout = false;
