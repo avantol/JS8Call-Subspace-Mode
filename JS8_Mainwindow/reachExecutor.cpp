@@ -803,49 +803,75 @@ void UI_Constructor::reachNextMove() {
         return;
     }
 
-    // ---- step 2: the shout, once, VOI-gated (decide.py:736-759,
-    // :868-881): q * gain * headroom - T_SHOUT must be POSITIVE.
+    // ---- step 2: the shout, priced as a COMPOSITE ATTEMPT --------
+    // [gateswap 2026-08-27, operator-approved replacement of the
+    // python's VOI gate] The ported expected-time-difference formula
+    // could never fire at real probability scales (measured: gate
+    // score -79 at prior trust, -92 devalued -- the devalue moved it
+    // the WRONG way). The shout is an attempt-enabler, so price it in
+    // the SAME p/t currency as every attempt: shout (98s) + follow-up
+    // ask via whoever answers (218s), with the measured 29% answer
+    // rate, the answerer's PROVEN aliveness (it just keyed) and
+    // hears-us (it decoded our shout: fresh-report 0.92), delivery
+    // pinned at FRESH_LINK, the way home at the comparable-degree
+    // reciprocity bucket x unknown-quality (0.311 x 0.7 -- both
+    // measured constants from the corpus), and the answerer's forward
+    // habit at the BAND TRUST (unknown station, current band). Fires
+    // when this composite out-scores the best untried booked relay --
+    // so collapsed trust or floor-grade booked routes escalate to
+    // asking the band NATURALLY, and a strong fresh booked route
+    // keeps the 98 seconds in hand.
     if (!m_reach.triedAt.contains(QStringLiteral("shout"))) {
-        double const q = 0.29;
-        // _after_shout (decide.py:782-796): the best 1-hop delivery
-        // leg stops being a guess.
-        QVector<Ranked> boosted = ranked;
-        for (auto &x : boosted)
-            if (x.mv.kind == QLatin1String("relay")) {
-                double const had =
-                    qMax(1e-6, pLinkEdge(this, x.mv.via, T));
-                x.score = qMin(0.95, x.mv.p * (FRESH_LINK / had))
-                          / x.mv.cost;
+        double const trust = bandTrust(m_reach.band, now);
+        double const qAns = 0.29;              // measured answer rate
+        double const backUnknown = 0.311 * 0.7;
+        double const pRoute = 0.92 * 0.95 * trust * FRESH_LINK
+                              * backUnknown * stAns(T, now);
+        double const shoutScore =
+            qAns * pRoute / (T_SHOUT + T_RELAY1);
+        double bestBooked = 0.0;
+        QString bestCall;
+        for (auto const &x : ranked) {
+            if (x.mv.kind != QLatin1String("relay"))
+                continue;
+            if (m_reach.triedAt.contains(
+                    QStringLiteral("relay:") + x.mv.via))
+                continue;
+            if (x.score > bestBooked) {
+                bestBooked = x.score;
+                bestCall = x.mv.via;
             }
-        std::sort(boosted.begin(), boosted.end(),
-                  [](auto const &a, auto const &b) {
-                      return a.score > b.score;
-                  });
-        double const gain = nowET - expectedTime(boosted);
-        double best = 0.0;
-        for (auto const &x : ranked)
-            if (x.mv.kind == QLatin1String("relay"))
-                best = qMax(best, x.score * T_RELAY1);
-        double const headroom =
-            qMax(0.0, 1.0 - qMin(1.0, best / 0.20));
-        double const score = q * gain * headroom - T_SHOUT;
-        if (score > 0) {
+        }
+        if (shoutScore > bestBooked) {
             MoveCand m;
             m.kind = QStringLiteral("shout");
             m.cost = T_SHOUT;
             int const w = QStringLiteral(
-                "how much better it could make things").size();
+                "route via an answerer, per 1000s").size();
             m.factors
                 << factorLine(QStringLiteral("someone answers this"),
-                              QString::number(q, 'f', 2), 10 * q, w)
+                              QString::number(qAns, 'f', 2),
+                              10 * qAns, w)
                 << factorLine(
-                       QStringLiteral(
-                           "how much better it could make things"),
-                       QStringLiteral("best route now %1")
-                           .arg(best, 0, 'f', 3),
-                       10 * headroom, w)
-                << factorLine(QStringLiteral("we know a route already"),
-                              QStringLiteral("no"), 10.0, w);
+                       QStringLiteral("route via an answerer, "
+                                      "per 1000s"),
+                       QString::number(shoutScore * 1000.0, 'f', 4),
+                       10 * qMin(1.0, shoutScore / qMax(1e-9,
+                                                        bestBooked)),
+                       w)
+                << factorLine(
+                       QStringLiteral("best booked relay, per 1000s"),
+                       bestCall.isEmpty()
+                           ? QStringLiteral("none untried")
+                           : QStringLiteral("%1 %2")
+                                 .arg(bestCall)
+                                 .arg(bestBooked * 1000.0, 0, 'f', 4),
+                       10 * qMin(1.0, bestBooked / qMax(1e-9,
+                                                        shoutScore)),
+                       w)
+                << factorLine(QStringLiteral("band forwarding trust"),
+                              QString::number(trust, 'f', 2),
+                              10 * trust / 0.95, w);
             m_reach.kind = QStringLiteral("shout");
             m_reach.triedAt.insert(QStringLiteral("shout"), now);
             reachExplain(&m);
@@ -853,11 +879,14 @@ void UI_Constructor::reachNextMove() {
                           .arg(me, T));
             return;
         }
-        reachLog(QStringLiteral("    shout not worth it: gain %1s x "
-                                "0.29 x headroom %2 < %3s cost")
-                     .arg(gain, 0, 'f', 0)
-                     .arg(headroom, 0, 'f', 2)
-                     .arg(T_SHOUT, 0, 'f', 0));
+        reachLog(QStringLiteral("    shout waits: composite %1/1000s "
+                                "vs booked %2/1000s (%3, trust %4)")
+                     .arg(shoutScore * 1000.0, 0, 'f', 4)
+                     .arg(bestBooked * 1000.0, 0, 'f', 4)
+                     .arg(bestCall.isEmpty()
+                              ? QStringLiteral("none")
+                              : bestCall)
+                     .arg(trust, 0, 'f', 2));
     }
 
     // ---- step 3: routes, best first (decide.py:884-887) -----------
