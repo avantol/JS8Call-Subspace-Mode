@@ -2510,6 +2510,7 @@ void SpotMapWindow::redraw() {
         // decision to USE it is made at draw time, because it depends
         // on the density, which is not computed until the loop ends.
         QString const hoverUp = m_hoverCall.toUpper();
+        m_tracerHitsMe = false;
         for (auto h = hearers.constBegin(); h != hearers.constEnd(); ++h) {
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
@@ -2713,24 +2714,29 @@ void SpotMapWindow::redraw() {
             m_lastSegCount = segPskr.size() + segRadio.size();
         drawGroup(segRadio, penRadio); // on-air over ([hearlines])
         } else {
-            QVector<Seg> dim, lit;
+            // BOTH colours lift -- the operator traces a station's
+            // connections, radio and internet alike (KD6FLM's radio
+            // line to us drew unlifted and the label never fired).
+            QVector<Seg> dim, lit, dimR, litR;
             for (Seg const &s : segPskr)
                 (s.hover ? lit : dim).append(s);
+            for (Seg const &s : segRadio)
+                (s.hover ? litR : dimR).append(s);
             drawGroup(dim, QPen{pskrLineColor, 1});
-            drawGroup(segRadio, penRadio);
+            drawGroup(dimR, penRadio);
             QColor const tracerColor{255, 250, 225, 255};
             drawGroup(lit, QPen{tracerColor, 1});
+            drawGroup(litR, QPen{tracerColor, 1});
             m_lastSegCount = segPskr.size() + segRadio.size();
-            bool tracerToMe = false;
+            auto const nearCenter = [&](QPointF const &pt) {
+                return (pt - center).manhattanLength() < 1.0;
+            };
             for (Seg const &s : lit)
-                if (s.hearer == center || s.heard == center) {
-                    tracerToMe = true;
-                    break;
-                }
-            if (tracerToMe && !m_myCall.isEmpty()) {
-                p.setPen(tracerColor);
-                p.drawText(center + QPointF{12.0, -10.0}, m_myCall);
-            }
+                if (nearCenter(s.hearer) || nearCenter(s.heard))
+                    m_tracerHitsMe = true;
+            for (Seg const &s : litR)
+                if (nearCenter(s.hearer) || nearCenter(s.heard))
+                    m_tracerHitsMe = true;
         }
     }
 
@@ -3115,6 +3121,12 @@ void SpotMapWindow::redraw() {
         tri << center + QPointF{0.0, -4.5} << center + QPointF{3.8, 3.0}
             << center + QPointF{-3.8, 3.0};
         p.drawPolygon(tri);
+        // [#183] a traced line ends here: our callsign in the tracer
+        // colour, painted last like the triangle so nothing buries it.
+        if (m_tracerHitsMe && !m_myCall.isEmpty()) {
+            p.setPen(QColor{255, 250, 225, 255});
+            p.drawText(center + QPointF{8.0, -8.0}, m_myCall);
+        }
     }
 
     {
@@ -3428,12 +3440,11 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 + QStringLiteral(" · ");
         }
         if (best->spot.rxOnly) {
-            tip = tr("%1 (%2)\n%3%4 %5 · updated %6 min ago")
+            tip = tr("%1 (%2)\n%3%4 %5")
                       .arg(best->spot.receiverCall,
                            best->spot.receiverGrid, txPart)
                       .arg(qRound(dist))
-                      .arg(miles ? tr("mi") : tr("km"))
-                      .arg(ageSecs / 60);
+                      .arg(miles ? tr("mi") : tr("km"));
         } else {
             // [snrwho] A dB value is shown ONLY when it is a report
             // of MY signal; -99 is the no-report sentinel, a real
@@ -3459,12 +3470,11 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 }
                 snrPart += QStringLiteral(" · ");
             }
-            tip = tr("%1 (%2)\n%3%4%5 %6 · updated %7 min ago")
+            tip = tr("%1 (%2)\n%3%4%5 %6")
                       .arg(best->spot.receiverCall,
                            best->spot.receiverGrid, snrPart, txPart)
                       .arg(qRound(dist))
-                      .arg(miles ? tr("mi") : tr("km"))
-                      .arg(ageSecs / 60);
+                      .arg(miles ? tr("mi") : tr("km"));
         }
         // [BUILD 340] Audio offset they heard us at (spot RF − dial),
         // when both are known and the result is sane.

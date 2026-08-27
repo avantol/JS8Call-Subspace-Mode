@@ -520,6 +520,7 @@ class SpotMapWindow final : public QWidget {
     };
     QVector<Attempt> m_attempts;
     class QTimer *m_attemptTimer = nullptr;
+    bool m_tracerHitsMe = false;  // [#183] a lifted line ends at us
     void tickAttempts();
 
 public:
