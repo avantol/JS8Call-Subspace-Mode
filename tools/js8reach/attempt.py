@@ -164,7 +164,8 @@ class Radio:
                 m = json.loads(line.decode())
             except ValueError:
                 continue
-            yield m.get("type", ""), str(m.get("value", ""))
+            yield (m.get("type", ""), str(m.get("value", "")),
+                   m.get("params") or {})
 
 
 def run(target: str, band: str, force_via: str, max_moves: int) -> int:
@@ -253,7 +254,7 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                 break
         while time.time() < hold_until:
             time.sleep(0.5)
-            for typ, val in radio.events():
+            for typ, val, _prm in radio.events():
                 if typ == "RX.DIRECTED" and \
                         re.match(rf"{re.escape(T)}\s*:", val.strip(),
                                  re.I):
@@ -300,10 +301,35 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
         rx_ans = re.compile(rf"^{re.escape(T)}\s*:", re.I)
         rx_yes = re.compile(rf":\s*{model.mycall}\s+YES\b", re.I)
         comp = decide.completion_secs(mv.kind, T)
+        # WATCHERS (operator design, 2026-08-27): one per started
+        # reply TO US, keyed by audio offset. The addressed first
+        # frame ("CALLER: WM8Q ...") is the admission ticket;
+        # continuation frames are attributed by offset the same way
+        # the app's assembler attributes them. Three rules, no pads:
+        #   ceiling  = the REPLY_FRAMES budget (unchanged, below);
+        #   death    = a watcher whose next slot passes frameless is
+        #              dead ("frames lost") and stops holding the wait;
+        #   shortcut = all started replies assembled-or-dead -> verdict
+        #              NOW, not at the ceiling.
+        watchers: dict = {}           # offset -> {"last": t, "done": b}
+        def wkey(off):
+            for k in watchers:
+                if abs(k - off) <= 5:
+                    return k
+            return off
         hard_cap = time.time() + 90 + 16 * 15
         while time.time() < hard_cap:
-            wake = (deadline - time.time()) if deadline else 0.5
-            for typ, val in radio.events(wake):
+            wake = 0.5
+            if deadline:
+                nxt = deadline
+                tnow = time.time()
+                for wt in watchers.values():
+                    if not wt["done"]:
+                        de = slot_end(wt["last"], 1)
+                        if de > tnow:       # dead ones don't set wake
+                            nxt = min(nxt, de)
+                wake = nxt - tnow
+            for typ, val, prm in radio.events(wake):
                 v = val.strip()
                 nowt = time.time()
                 if typ == "TX.COMPLETE" and tx_end is None:
@@ -317,6 +343,7 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                           flush=True)
                 elif typ == "RX.ACTIVITY" and tx_end:
                     up = v.upper()
+                    poff = prm.get("OFFSET")
                     if mv.kind == "relay" and mv.via \
                             and fwd_started is None \
                             and up.startswith(mv.via.upper() + ":"):
@@ -327,22 +354,29 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         print(f"{now_s()}      forward STARTED "
                               f"+{nowt-tx_end:.0f}s -- deadline extended",
                               flush=True)
-                    elif ans_started is None and \
-                            (re.match(rf"[A-Z0-9/]+:\s*{model.mycall}\b",
-                                      up) if group else
-                             up.startswith(responder + ":")
-                             if mv.kind != "relay" else
-                             up.startswith(T + ":")):
+                    addressed = (re.match(
+                        rf"[A-Z0-9/]+:\s*{model.mycall}\b", up)
+                        if group else
+                        up.startswith(responder + ":")
+                        if mv.kind != "relay" else
+                        up.startswith(T + ":"))
+                    if addressed and poff is not None:
+                        k = wkey(int(poff))
+                        watchers.setdefault(
+                            k, {"last": nowt, "done": False})
+                        watchers[k]["last"] = nowt
+                    elif poff is not None:
+                        # continuation frame on a watched offset --
+                        # the reply is still airing; one more slot
+                        k = wkey(int(poff))
+                        if k in watchers and not watchers[k]["done"]:
+                            watchers[k]["last"] = nowt
+                    if addressed and ans_started is None:
                         ans_started = nowt
-                        # SLOT-ANCHORED, not wall-clock: detection is
-                        # already ~12.6s INTO the answer's frame 1, so
-                        # an f-frame answer finishes assembling f-1
-                        # slots after the slot detection sits in.
-                        # `nowt + comp + 15` double-counted frame 1
-                        # and added a flat grace: verdict 01:54:03 for
-                        # an answer done 01:53:28 -- 2.3 slots of dead
-                        # air, enough for an unrelated late-start msg
-                        # to run to completion (operator, 2026-08-27).
+                        # SLOT-ANCHORED ceiling: detection is ~12.6s
+                        # into the answer's frame 1, so an f-frame
+                        # answer finishes f-1 slots after detection's
+                        # slot. Watchers usually close the wait first.
                         frames = decide.REPLY_FRAMES.get(mv.kind, 2)
                         deadline = max(deadline,
                                        slot_end(nowt, frames - 1))
@@ -386,6 +420,25 @@ def run(target: str, band: str, force_via: str, max_moves: int) -> int:
                         w.learned[who] = 0.9
                         print(f"{now_s()}      learned {off}: {v[:60]}",
                               flush=True)
+                    doff = prm.get("OFFSET")
+                    if doff is not None:
+                        k = wkey(int(doff))
+                        if k in watchers:
+                            watchers[k]["done"] = True
+            if tx_end is not None and deadline is not None \
+                    and ans_started is not None and watchers:
+                nowc = time.time()
+                if nowc < deadline and all(
+                        wt["done"] or nowc >= slot_end(wt["last"], 1)
+                        for wt in watchers.values()):
+                    ndone = sum(1 for wt in watchers.values()
+                                if wt["done"])
+                    print(f"{now_s()}      all {len(watchers)} started "
+                          f"replies finished ({ndone} assembled, "
+                          f"{len(watchers)-ndone} died) -- "
+                          f"shortcutting {deadline-nowc:.0f}s",
+                          flush=True)
+                    deadline = nowc
             if tx_end is None or time.time() < deadline:
                 continue
             state = ("relay silent -- never keyed"
