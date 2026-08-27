@@ -92,6 +92,9 @@ class SpotMapWindow final : public QWidget {
     // is pretty much *the point*"). Debug/test surface — structure
     // may change; it is not a compatibility promise.
     QVariantMap dumpState(QString const &band = QString{}) const;
+    // [maptruth] a report of my signal, WITH its observation time --
+    // the pair travels together everywhere or not at all.
+    struct ReportOfMe { int snr = -99; QDateTime when; };
 
     // [#164] Authority lookup for outside consumers (hearGridFor's
     // fallback chain) — includes everything the persistent store
@@ -225,14 +228,10 @@ class SpotMapWindow final : public QWidget {
         QString country;        // spotter's country (empty if ours/unknown)
         // [viewall] Non-empty only for All-view spots: the reporting
         // station that heard the plotted sender (hover detail).
-        QString heardBy;
         // [connlines] Reporting station's bearing/distance from my
         // grid (All-view spots only; dist < 0 = unknown) so the
         // Connections overlay can draw sender-to-spotter lines
         // without per-paint geodesic work.
-        float heardByAz = 0.0f;
-        float heardByDist = -1.0f;
-        QString heardByGrid; // reporter's grid (All-view spots)
         // [mondots] monitorOnly = hollow rendering (no valid SNR for
         // this view). rxOnly = genuinely receive-only station (MQTT
         // reporter never heard transmitting) — the ONLY case hover
@@ -249,7 +248,6 @@ class SpotMapWindow final : public QWidget {
         // comes from the internet feed -- but a station can be VISIBLE
         // for radio reasons while still carrying a PSKR-sourced
         // heardBy, and the line must not draw then.
-        bool heardByPskr = false;
         // [radioage] Last RADIO evidence for this station; `when`
         // may be refreshed by internet reports, so PSKR-off aging
         // must use this clock (dot-without-line gap, 2026-08-15).
@@ -445,6 +443,12 @@ class SpotMapWindow final : public QWidget {
         // what the backfill walk existed to do.
         QString grid;
         int snr = -99;        // SNR this station REPORTED TO US only
+        // [maptruth 2026-08-27] THE ROOT of the recurring stale-report
+        // family: this value had NO timestamp, so every display
+        // borrowed a clock from somewhere else (W3NIC 08-23, KA9GAP
+        // 08-27, then the audit found 106 live cases). Value and
+        // clock are ONE record now; every consumer reads the pair.
+        QDateTime snrWhen;    // when that report was OBSERVED
         // [tribblenet audit 2026-08-21] PRESENCE provenance, same
         // vocabulary as HeardEdge::source. Needed because the PSKR
         // feed now populates this store: without it the anchor pass
@@ -556,7 +560,7 @@ private:
     // [radioage] THE presence/age clock; [snrwho] THE reported-to-me
     // SNR rule — single definitions, every consumer reads these.
     QDateTime effectiveWhen(Spot const &s) const;
-    int reportedToMeSnr(Spot const &s) const;
+    ReportOfMe reportedToMe(Spot const &s) const;
 
     // Drag-to-pan (persists, [persistui]; the Auto button zeroes it).
     // m_panPx = chart-center offset from the geometric center, in

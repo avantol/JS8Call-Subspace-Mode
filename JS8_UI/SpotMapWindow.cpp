@@ -561,10 +561,10 @@ void SpotMapWindow::addOnAirSpotOfMe(QString const &band,
         m_myGrid.size() < 4 || m_myCall.isEmpty())
         return;
     m_infoByBand[band][call.toUpper()].sawAsSender = true;
-    journalStation(band, call);
     addHearingReport(band, call, grid, {m_myCall.toUpper()}, {m_myGrid},
                      /*reportedToMeSnr=*/snr, QDateTime{},
                      /*heardSnr=*/snr, QStringLiteral("radio"));
+    journalStation(band, call);   // [maptruth #11] AFTER the update
 }
 
 // [hearlines] See header. Latest position per station; edges keyed
@@ -603,7 +603,14 @@ void SpotMapWindow::addHearingReport(QString const &band,
     QString const hearerGridT =
         refinedGrid(hearer, hearerGrid.trimmed());
     HearingEntry &e = m_hearingByBand[band][hearer.toUpper()];
-    e.lastSeen = now;
+    // [maptruth #4] The presence clock takes the OBSERVATION time,
+    // not the arrival time -- a 38-minute-old PSKReporter report was
+    // stamping LAST_SEEN as now. Forward-only.
+    {
+        QDateTime const obs = heardWhen.isValid() ? heardWhen : now;
+        if (!e.lastSeen.isValid() || obs > e.lastSeen)
+            e.lastSeen = obs;
+    }
     // [placelog] Attribute every FIRST placement of an on-air station
     // (field 2026-08-15: W0MQD appeared at a grid no logged message
     // supplied — source unproven; this line convicts the next one).
@@ -618,8 +625,14 @@ void SpotMapWindow::addHearingReport(QString const &band,
     // same-square precision can only improve here, never thrash.
     if (!hearerGridT.isEmpty())
         e.grid = hearerGridT;   // [#170(f)] grid only; position derived
-    if (reportedToMeSnr > -99)
-        e.snr = reportedToMeSnr;
+    if (reportedToMeSnr > -99) {
+        // [maptruth ROOT FIX] value and clock are ONE record.
+        QDateTime const obs = heardWhen.isValid() ? heardWhen : now;
+        if (!e.snrWhen.isValid() || obs >= e.snrWhen) {
+            e.snr = reportedToMeSnr;
+            e.snrWhen = obs;
+        }
+    }
     // [audit 2026-08-21] PRESENCE provenance. RF evidence is STICKY:
     // once a station has been heard on the air, later internet
     // reports must not demote it to "internet-only" and make it
@@ -1019,6 +1032,9 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
             putTime(m, QStringLiteral("WHEN"), QStringLiteral("AGE_S"),
                     sp.when, now);
             m["SNR"] = sp.snr;
+            // [maptruth #5] the report's OWN age rides beside it.
+            putTime(m, QStringLiteral("SNR_WHEN"),
+                    QStringLiteral("SNR_AGE_S"), sp.reportsMeWhen, now);
             // No HEARD_BY here. A spot names ONE station; who heard it
             // is a relationship, and HEARING above carries all of them
             // rather than one. Since the map became observation-based
@@ -1075,15 +1091,29 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
         QString const myUpD = m_myCall.toUpper();
         auto const &hzD = m_hearingByBand.value(b);
         // [#170(f)] Position from the ONE authority, like the renderer.
+        auto const &infoD = m_infoByBand.value(b);
         auto const mk = [&](QString const &call, QString const &grid,
-                            int snr, QDateTime const &wh,
-                            bool reportsMe) {
+                            int snr, QDateTime const &snrWh,
+                            QDateTime const &wh, bool reportsMe) {
             Spot sp;
             sp.receiverCall = call;
-            sp.receiverGrid = grid;
+            // [maptruth #12] grid from the ONE authority, exactly as
+            // the renderer plots it; the edge copy could disagree.
+            QString const auth = m_gridByCall.value(call);
+            sp.receiverGrid = auth.isEmpty() ? grid : auth;
             sp.snr = snr;
+            sp.reportsMeWhen = snrWh;   // the report's OWN clock
             sp.when = wh;
             sp.reportsMe = reportsMe;
+            // [maptruth #6] RX_ONLY computed like the renderer, not
+            // shipped as the struct default (the RADIO_WHEN lesson,
+            // same class): a sender by info OR by radio presence.
+            bool sender = infoD.value(call).sawAsSender;
+            if (auto const hh = hzD.constFind(call);
+                hh != hzD.constEnd() &&
+                hh.value().source == QStringLiteral("radio"))
+                sender = true;
+            sp.rxOnly = !sender;
             sp.monitorOnly = (snr <= -99);
             // [dumphonest] radioWhen and pskr are NOT set here, and a
             // reader cannot tell that from the output: every entry came
@@ -1096,23 +1126,30 @@ QVariantMap SpotMapWindow::dumpState(QString const &band) const {
             // fields are omitted from the dump entirely.
             return sp;
         };
+        // [maptruth #7] DETERMINISTIC: all hearers first (they carry
+        // the richer facts), heard-only endpoints after -- QHash
+        // iteration order can no longer decide which version of a
+        // station the dump ships.
         for (auto h = hzD.constBegin(); h != hzD.constEnd(); ++h) {
             bool const hearsMe = h.value().heard.contains(myUpD);
             Spot const sp = mk(h.key(), h.value().grid, h.value().snr,
-                               h.value().lastSeen, hearsMe);
+                               h.value().snrWhen, h.value().lastSeen,
+                               hearsMe);
             if (hearsMe)
                 mine.append(sp);
             if (!seenAll.contains(h.key())) {
                 seenAll.insert(h.key());
                 all.append(sp);
             }
+        }
+        for (auto h = hzD.constBegin(); h != hzD.constEnd(); ++h) {
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
                 if (seenAll.contains(ed.key()) || ed.key() == myUpD)
                     continue;
                 seenAll.insert(ed.key());
                 all.append(mk(ed.key(), ed.value().grid, -99,
-                              ed.value().when, false));
+                              QDateTime{}, ed.value().when, false));
             }
         }
         out["SPOTS_MINE"] = packSpots(mine);
@@ -1303,7 +1340,6 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
     // every report it files (field 2026-08-15: KJ7VWV DN52 vs
     // DN52QT, my-view spot re-clobbered per report).
     QString plottedGrid = refinedGrid(plottedCall, receiverGrid);
-    QString heardBy;
     if (!senderIsMe) {
         QString const senderGrid = o.value(QStringLiteral("sl")).toString();
         if (senderGrid.size() < 4) {
@@ -1312,25 +1348,16 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
         }
         plottedCall = sender.toUpper();
         plottedGrid = refinedGrid(plottedCall, senderGrid); // [gridfine]
-        heardBy = receiverCall.toUpper();
         // Country of the plotted (sender) station for hover.
         country = m_countryLookup ? m_countryLookup(plottedCall)
                                   : QString();
     }
-    // [connlines] Reporting station's projection for the Connections
-    // overlay (All-view spots; my-view lines just radiate from the
-    // chart center, no extra data needed).
-    float heardByAz = 0.0f;
-    float heardByDist = -1.0f;
-    QString const reporterGrid =
-        refinedGrid(receiverCall.toUpper(), receiverGrid); // [gridfine]
-    if (!heardBy.isEmpty() && reporterGrid.size() >= 4) {
-        if (auto const rvec = Geodesic::vector(m_myGrid, reporterGrid);
-            rvec.azimuth().isValid() && rvec.distance().isValid()) {
-            heardByAz = rvec.azimuth();
-            heardByDist = rvec.distance();
-        }
-    }
+    // [maptruth #9, operator: "drop from hover if even implemented,
+    // but don't lose the underlying data"] The heardBy hover line and
+    // its per-message Geodesic projections died in the oneobs
+    // refactor and could never render; deleted. The underlying fact
+    // (reporter heard sender) IS the hearing-store edge recorded
+    // below -- nothing lost.
 
     auto const vec = Geodesic::vector(m_myGrid, plottedGrid);
     if (!vec.azimuth().isValid() || !vec.distance().isValid()) {
@@ -1370,7 +1397,11 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
         if (!senderIsMe)
             info.sawAsSender = true;   // it was the SENDER of a spot
     }
-    journalStation(band, plottedCall);
+    // [maptruth #11] journal AFTER the store update -- journalling
+    // first persisted the PREVIOUS report's SNR with the current
+    // clock, and restores grafted that one-behind value onto fresh
+    // edges after every restart.
+    // (moved below; see the addHearingReport calls)
 
     // [tribblenet 2026-08-21] FEED THE MESH, not just the dot.
     // Operator: "KB2UUL keeps changing who hears it every few seconds
@@ -1437,6 +1468,7 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
                                  /*heardSnr=*/snr, evid);
         }
     }
+    journalStation(band, plottedCall);   // [maptruth #11] AFTER
     pruneBand(band);
 
     // Repaint when the on-screen view is affected: reports of me
@@ -1454,14 +1486,30 @@ void SpotMapWindow::onMqttMessage(QString const &topic,
 // position-only spots). All view: the hearing store is the
 // authority; reporter-of-me spots qualify directly (their snr is my
 // signal at their QTH). Everything else: no report.
-int SpotMapWindow::reportedToMeSnr(Spot const &s) const {
-    if (!m_viewAll)
-        return s.snr;
+SpotMapWindow::ReportOfMe
+SpotMapWindow::reportedToMe(Spot const &s) const {
+    // [maptruth] value + observation time from the SAME record; a
+    // dated pair or nothing. My view: the spot carries the report
+    // (snr + reportsMeWhen). All view: the hearing store's dated
+    // pair (snr + snrWhen).
+    ReportOfMe r;
+    if (!m_viewAll) {
+        r.snr = s.snr;
+        r.when = s.reportsMeWhen;
+        return r;
+    }
     auto const &ca = m_hearingByBand.value(m_currentBand);
     if (auto const it = ca.constFind(s.receiverCall);
-        it != ca.constEnd() && it->snr > -99)
-        return it->snr;
-    return s.reportsMe ? s.snr : -99;
+        it != ca.constEnd() && it->snr > -99) {
+        r.snr = it->snr;
+        r.when = it->snrWhen;
+        return r;
+    }
+    if (s.reportsMe) {
+        r.snr = s.snr;
+        r.when = s.reportsMeWhen;
+    }
+    return r;
 }
 
 // [radioage] THE presence/age clock (audit items 3+7 — one
@@ -1843,8 +1891,9 @@ void SpotMapWindow::redraw() {
         // `posAuth` forces the position (the hearing store is [posauth],
         // the ONE position source when it has placed a station).
         auto const note = [&](QString const &callRaw, bool pskrEv,
-                              QDateTime const &when,
-                              int snrToMe) -> Spot * {
+                              QDateTime const &when, int snrToMe,
+                              QDateTime const &snrWhen =
+                                  QDateTime{}) -> Spot * {
             // [paintperf 2026-08-23] NO toUpper() HERE. Both callers
             // pass keys straight out of m_hearingByBand, which are
             // canonical uppercase already ([#164] "UPPERCASE at the
@@ -1908,10 +1957,17 @@ void SpotMapWindow::redraw() {
             // signal, and it is only as fresh as the edge it rode in
             // on -- so the two travel together.
             if (snrToMe > -99) {
-                r.snr = snrToMe;
-                if (when.isValid() &&
-                    (!r.reportsMeWhen.isValid() || when > r.reportsMeWhen))
-                    r.reportsMeWhen = when;
+                // [maptruth] the report and ITS OWN observation time,
+                // one record (snrWhen from the store); reportsMe was
+                // a dead binding (#8) -- it lives now.
+                QDateTime const rw = snrWhen.isValid() ? snrWhen : when;
+                if (rw.isValid() &&
+                    (!r.reportsMeWhen.isValid() ||
+                     rw >= r.reportsMeWhen)) {
+                    r.snr = snrToMe;
+                    r.reportsMeWhen = rw;
+                    r.reportsMe = true;
+                }
             }
             return &r;
         };
@@ -1938,16 +1994,10 @@ void SpotMapWindow::redraw() {
             // cannot conjure one on its own.
             QDateTime hearerAny, hearerRadio;
             int hearerSnr = -99;
-            // [snrage 2026-08-27] The report-of-me's OWN clock. The
-            // paintperf batching regressed the W3NIC rule (operator
-            // caught it again on KA9GAP: "hears me at -3 dB (2 min
-            // ago)" for a 41-minute-old report): hearerSnr was
-            // flushed with the freshest evidence time of ANY edge,
-            // so reportsMeWhen took the presence clock instead of
-            // the report's. The dB value travels ONLY with the
-            // X->ME edge's timestamp.
-            QDateTime meEdgeWhen;
-            bool meEdgePskr = false;
+            // [maptruth] the store's dated report pair (snr +
+            // snrWhen, one record) supersedes the 403 me-edge
+            // workaround entirely.
+            QDateTime hearerSnrWhen = h.value().snrWhen;
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
                 bool const edgePskr =
@@ -1999,11 +2049,8 @@ void SpotMapWindow::redraw() {
                 if (!edgePskr &&
                     (!hearerRadio.isValid() || ed.value().when > hearerRadio))
                     hearerRadio = ed.value().when;
-                if (ed.key() == myUp) {
+                if (ed.key() == myUp)
                     hearerSnr = h.value().snr;
-                    meEdgeWhen = ed.value().when;
-                    meEdgePskr = edgePskr;
-                }
                 if (m_viewAll) // heard-endpoints: All view only
                     note(ed.key(), edgePskr, ed.value().when, -99);
             }
@@ -2015,8 +2062,16 @@ void SpotMapWindow::redraw() {
                 note(h.key(), /*pskrEv=*/false, hearerRadio, -99);
             if (hearerAny.isValid() && hearerAny != hearerRadio)
                 note(h.key(), /*pskrEv=*/true, hearerAny, -99);
-            if (meEdgeWhen.isValid() && hearerSnr > -99)
-                note(h.key(), meEdgePskr, meEdgeWhen, hearerSnr);
+            if (hearerSnrWhen.isValid() && hearerSnr > -99)
+                note(h.key(),
+                     h.value().source == QStringLiteral("mqtt"),
+                     hearerSnrWhen, hearerSnr, hearerSnrWhen);
+            // [maptruth #10] a station whose PRESENCE is radio was
+            // decoded transmitting -- it is a sender, monitor label
+            // and dB suppression must not apply (offline, this is
+            // every station on the map).
+            if (h.value().source == QStringLiteral("radio"))
+                sawAsSender.insert(h.key());
         }
 
         m_lastBuildMs = buildTimer.elapsed();
@@ -2623,7 +2678,16 @@ void SpotMapWindow::redraw() {
         // their own to heat-color.
         // [allhollow][snrwho] ONE rule for both views: solid heat
         // only from a report of MY signal (audit item 8).
-        int const paintSnr = reportedToMeSnr(s);
+        // [maptruth #3] colour from the DATED report; one older than
+        // the store's own retention paints as no-report, so the
+        // colour, the hollow rule and the hover can no longer
+        // contradict each other.
+        auto const rep = reportedToMe(s);
+        int const paintSnr =
+            (rep.when.isValid() &&
+             rep.when.secsTo(DriftingDateTime::currentDateTimeUtc())
+                 <= WINDOW_SECS)
+                ? rep.snr : -99;
         bool const hollow = s.monitorOnly || paintSnr <= -99;
         if (hollow) {
             p.setPen(QPen{QColor(170, 170, 185,
@@ -3277,33 +3341,29 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
             // hearing store's reported-to-me value qualifies. My
             // view: the spot's snr IS their copy of me (sentinel
             // possible on position-only on-air spots).
-            int const reportedToMe = reportedToMeSnr(best->spot);
-            // No-report spots carry no SNR line at all — the
-            // hollow circle already tells the story (operator
-            // 2026-08-15).
-            // The report carries its OWN age. Showing the station's
-            // last-seen next to it presented a stale report as current.
+            auto const rep = reportedToMe(best->spot);
+            // [maptruth, operator wording 2026-08-27]: the report
+            // shows ITS OWN age in parentheses; the trailing clause
+            // is the station's newest evidence of any kind, labelled
+            // "updated" so the two cannot be read as one claim.
             QString snrPart;
-            if (reportedToMe > -99) {
-                snrPart = tr("hears me at %1 dB").arg(reportedToMe);
-                if (best->spot.reportsMeWhen.isValid()) {
-                    qint64 const rAge =
-                        best->spot.reportsMeWhen.secsTo(
-                            DriftingDateTime::currentDateTimeUtc());
+            if (rep.snr > -99) {
+                snrPart = tr("hears me at %1 dB").arg(rep.snr);
+                if (rep.when.isValid()) {
+                    qint64 const rAge = rep.when.secsTo(
+                        DriftingDateTime::currentDateTimeUtc());
                     snrPart += tr(" (%1 min ago)").arg(rAge / 60);
+                } else {
+                    snrPart += tr(" (age unknown)");
                 }
                 snrPart += QStringLiteral(" · ");
             }
-            tip = tr("%1 (%2)\n%3%4 %5 · %6 min ago")
+            tip = tr("%1 (%2)\n%3%4 %5 · updated %6 min ago")
                       .arg(best->spot.receiverCall,
                            best->spot.receiverGrid, snrPart)
                       .arg(qRound(dist))
                       .arg(miles ? tr("mi") : tr("km"))
                       .arg(ageSecs / 60);
-        }
-        // [viewall] All-view spots: who reported hearing this station.
-        if (!best->spot.heardBy.isEmpty()) {
-            tip += tr("\nheard by %1").arg(best->spot.heardBy);
         }
         // [BUILD 340] Audio offset they heard us at (spot RF − dial),
         // when both are known and the result is sane.
