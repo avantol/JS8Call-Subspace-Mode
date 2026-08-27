@@ -150,7 +150,16 @@ T_RELAY = [A.rtt(2, 2, h) for h in range(5)]   # index by hops
 #   carried the same +15 bias).
 PERIOD_NORMAL = 15.0
 
-REPLY_FRAMES = {"snr": 1, "grid": 1, "ask_call": 2, "shout": 2,
+# shout/ask_call = 4, not 2: a QUERY CALL answer is "YES +NN (AGE)" and
+# the long form runs FOUR Normal frames -- measured 2026-08-27 01:39Z,
+# KD9RJT shout: frames 1-3 of "YES -03 (16H)" arrived, frame 4 was cut
+# by OUR next move keying at 01:39:15 because the 2-frame budget had
+# already expired the deadline. Short answers (WE3D's "YES +06 (1D)" =
+# 2 frames) end early anyway -- the EOT shortcut fires -- so the only
+# cost of budgeting the max is holding TX one extra slot when answers
+# are actually still airing (operator: undercount, not any-assembly
+# hold, was the defect).
+REPLY_FRAMES = {"snr": 1, "grid": 1, "ask_call": 4, "shout": 4,
                 "hearing": 4, "relay": 1,
                 # heartbeat acks key on OUR TX-end boundary, single
                 # frame, all together: the verdict exists one period
