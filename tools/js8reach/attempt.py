@@ -106,7 +106,15 @@ class Radio:
         speed and no relay keyed. Returns the original speed so the
         caller can restore it, or None if already Normal."""
         cur = self.request("MODE.GET_SPEED", "MODE.SPEED").get("SPEED")
-        if cur in (None, self.NORMAL):
+        if cur is None:
+            # NO REPLY IS NOT "ALREADY NORMAL". Transmitting at an
+            # unverified speed is the N9EAT bug again with extra
+            # steps -- refuse to run blind.
+            print(f"{now_s()}  WARNING: MODE.GET_SPEED got no reply -- "
+                  f"cannot verify speed; refusing to transmit",
+                  flush=True)
+            raise SystemExit(3)
+        if cur == self.NORMAL:
             return None
         r = self.request("MODE.SET_SPEED", "MODE.SET_SPEED",
                          {"SPEED": self.NORMAL})

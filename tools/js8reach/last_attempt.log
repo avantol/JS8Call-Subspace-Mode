@@ -1,79 +1,80 @@
-23:23:49.597  target N9EAT on 20m; 40 candidates
-23:23:49.598  [1] SEND WM8Q: N9EAT SNR?
-  SEND   WM8Q: N9EAT SNR?
+01:02:06.827  WARNING: KK4LGZ has never been heard transmitting -- receive-only monitor; expect no reply
+01:02:06.896  target KK4LGZ on 20m; 40 candidates
+01:02:06.897  [1] SEND WM8Q: KK4LGZ SNR?
+  SEND   WM8Q: KK4LGZ SNR?
   COST   68 s   check +18.0s / escalate +21.0s / abandon +240.0s
 
-  they are on the air       9.5  **********   0.95
-  they can hear us          1.2  *            0.12
-  they answer when called   2.4  **           0.24
+  they are on the air       8.5  ********     0.85
+  they can hear us          1.1  *            0.11
+  they answer when called   4.5  ****         0.45
   worth calling again yet  10.0  **********+  first call
-23:23:55.407      TX-END; deadline 23:24:14
-23:24:14.300      VERDICT +19s: N9EAT is busy or disabled -- retry from the top later
-23:24:14.301  [2] SEND WM8Q: K4GMX>N9EAT SNR?
-  SEND   WM8Q: K4GMX>N9EAT SNR?
+01:02:28.208      TX-END; deadline 01:02:44
+01:02:44.300      VERDICT +16s: KK4LGZ is busy or disabled -- retry from the top later
+01:02:44.301  [2] SEND WM8Q: @ALLCALL QUERY CALL KK4LGZ?
+  SEND   WM8Q: @ALLCALL QUERY CALL KK4LGZ?
+  COST   98 s   check +18.0s / escalate +21.0s / abandon +300.0s
+
+  someone answers this                   2.9  ***          0.29
+  how much better it could make things   9.6  **********   best route now 0.009
+  we know a route already               10.0  **********+  no
+01:03:28.208      TX-END; deadline 01:03:44
+01:03:44.300      VERDICT +16s: the whole group is busy or disabled -- retry from the top later
+01:03:44.301  [3] SEND WM8Q: K4GMX>KK4LGZ SNR?
+  SEND   WM8Q: K4GMX>KK4LGZ SNR?
   COST   218 s   check +18.0s / escalate +21.0s / abandon +240.0s   (the +58s forward is the checkpoint)
 
   we can raise K4GMX          9.2  *********    0.92
   K4GMX is on the air         9.5  **********   0.95
   K4GMX forwards when asked   6.4  ******       0.64
   target hears K4GMX          1.2  *            0.12
-  the reply gets back         2.5  ***          0.25
-  target answers at all       2.4  **           0.24
-  toward the target           9.8  **********   0.98
+  the reply gets back         3.0  ***          0.30
+  target answers at all       4.5  ****         0.45
+  toward the target           9.9  **********   0.99
   route length               10.0  **********+  1 hop
-23:24:21.603      TX-END; deadline 23:24:44
-23:24:44.300      VERDICT +23s: relay silent -- never keyed -- retry from the top later
-23:24:44.301  [3] SEND WM8Q: AD8IM>N9EAT SNR?
-  SEND   WM8Q: AD8IM>N9EAT SNR?
-  COST   218 s   check +18.0s / escalate +21.0s / abandon +240.0s   (the +58s forward is the checkpoint)
-
-  we can raise AD8IM          9.2  *********    0.92
-  AD8IM is on the air         9.5  **********   0.95
-  AD8IM forwards when asked   4.3  ****         0.43
-  target hears AD8IM          1.2  *            0.12
-  the reply gets back         2.5  ***          0.25
-  target answers at all       2.4  **           0.24
-  toward the target          10.0  **********+  1.00
-  route length               10.0  **********+  1 hop
-23:24:49.252      TX-END; deadline 23:25:14
-23:25:14.300      VERDICT +25s: relay silent -- never keyed -- retry from the top later
-23:25:14.301  [4] SEND WM8Q: NB3A>N9EAT SNR?
-  SEND   WM8Q: NB3A>N9EAT SNR?
+01:04:28.209      TX-END; deadline 01:04:44
+01:04:42.005      forward STARTED +14s -- deadline extended
+01:05:12.008      forward complete +44s; target has three slots
+01:05:59.300      VERDICT +91s: forwarded, but the target never answered -- retry from the top later
+01:05:59.301  [4] SEND WM8Q: NB3A>KK4LGZ SNR?
+  SEND   WM8Q: NB3A>KK4LGZ SNR?
   COST   218 s   check +18.0s / escalate +21.0s / abandon +240.0s   (the +58s forward is the checkpoint)
 
   we can raise NB3A          9.2  *********    0.92
   NB3A is on the air         9.5  **********   0.95
   NB3A forwards when asked   4.3  ****         0.43
   target hears NB3A          1.2  *            0.12
-  the reply gets back        2.5  ***          0.25
-  target answers at all      2.4  **           0.24
+  the reply gets back        3.0  ***          0.30
+  target answers at all      4.5  ****         0.45
   toward the target         10.0  **********+  1.00
   route length              10.0  **********+  1 hop
-23:25:18.686      TX-END; deadline 23:25:44
-23:25:44.300      VERDICT +26s: relay silent -- never keyed -- retry from the top later
-23:25:44.301  [5] SEND WM8Q: K9IMM>N9EAT SNR?
-  SEND   WM8Q: K9IMM>N9EAT SNR?
+01:06:43.203      TX-END; deadline 01:06:59
+01:06:59.301      VERDICT +16s: relay silent -- never keyed -- retry from the top later
+01:06:59.302  [5] SEND WM8Q: N3MK>KK4LGZ SNR?
+  SEND   WM8Q: N3MK>KK4LGZ SNR?
   COST   218 s   check +18.0s / escalate +21.0s / abandon +240.0s   (the +58s forward is the checkpoint)
 
-  we can raise K9IMM          9.2  *********    0.92
-  K9IMM is on the air         9.5  **********   0.95
-  K9IMM forwards when asked   4.3  ****         0.43
-  target hears K9IMM          1.2  *            0.12
-  the reply gets back         2.5  ***          0.25
-  target answers at all       2.4  **           0.24
+  we can raise N3MK          9.2  *********    0.92
+  N3MK is on the air         9.5  **********   0.95
+  N3MK forwards when asked   4.3  ****         0.43
+  target hears N3MK          1.2  *            0.12
+  the reply gets back        3.0  ***          0.30
+  target answers at all      4.5  ****         0.45
+  toward the target         10.0  **********+  1.00
+  route length              10.0  **********+  1 hop
+01:07:43.209      TX-END; deadline 01:07:59
+01:07:59.300      VERDICT +16s: relay silent -- never keyed -- retry from the top later
+01:07:59.301  [6] SEND WM8Q: K3GMQ>KK4LGZ SNR?
+  SEND   WM8Q: K3GMQ>KK4LGZ SNR?
+  COST   218 s   check +18.0s / escalate +21.0s / abandon +240.0s   (the +58s forward is the checkpoint)
+
+  we can raise K3GMQ          9.2  *********    0.92
+  K3GMQ is on the air         9.5  **********   0.95
+  K3GMQ forwards when asked   4.3  ****         0.43
+  target hears K3GMQ          1.2  *            0.12
+  the reply gets back         3.0  ***          0.30
+  target answers at all       4.5  ****         0.45
   toward the target          10.0  **********+  1.00
   route length               10.0  **********+  1 hop
-23:25:49.426      TX-END; deadline 23:26:14
-23:26:14.300      VERDICT +25s: relay silent -- never keyed -- retry from the top later
-23:26:14.301  [6] SEND WM8Q: KC2DAC>N9EAT SNR?
-  SEND   WM8Q: KC2DAC>N9EAT SNR?
-  COST   218 s   check +18.0s / escalate +21.0s / abandon +240.0s   (the +58s forward is the checkpoint)
-
-  we can raise KC2DAC          9.2  *********    0.92
-  KC2DAC is on the air         9.5  **********   0.95
-  KC2DAC forwards when asked   4.3  ****         0.43
-  target hears KC2DAC          1.2  *            0.12
-  the reply gets back          2.5  ***          0.25
-  target answers at all        2.4  **           0.24
-  toward the target           10.0  **********+  1.00
-  route length                10.0  **********+  1 hop
+01:08:43.210      TX-END; deadline 01:08:59
+01:08:59.300      VERDICT +16s: relay silent -- never keyed -- retry from the top later
+01:08:59.300  NOT REACHED after 6 transmissions (412s total) -- verdict: busy or disabled; retry from the top later (rerun this command)
