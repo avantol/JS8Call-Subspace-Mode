@@ -1289,6 +1289,21 @@ void UI_Constructor::processCommandActivity() {
 
                 // otherwise, as long as we're not an ACK...alert the user and
                 // either send an ACK or Message
+                //
+                // [TODO #177, operator: "nobody cares"] ...unless this
+                // exact relayed reply just closed a reaching attempt
+                // as REACHED (marked by reachOnDirected earlier in
+                // this same pass). The reply's arrival already proves
+                // the whole path; an ACK back through the relay is a
+                // 218 s-class transmission carrying no information.
+            } else if (!m_reachAnsweredText.isEmpty() &&
+                       d.from == m_reachAnsweredFrom &&
+                       d.text == m_reachAnsweredText) {
+                m_reachAnsweredFrom.clear();
+                m_reachAnsweredText.clear();
+                qCWarning(mainwindow_js8)
+                    << "[REACH] relay ACK suppressed (TODO #177):"
+                    << d.text.left(40);
             } else if (!d.text.startsWith("ACK")) {
 
                 // parse out the callsign path

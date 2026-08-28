@@ -1365,6 +1365,8 @@ class UI_Constructor : public QMainWindow {
         qint64      deadlineMs = 0;
         qint64      fwdStartedMs = 0;  // via keyed in the first slot
         qint64      fwdDoneMs = 0;     // forward assembled (checksum)
+        qint64      retStartedMs = 0;  // via keyed again: return leg
+        int         retOffset = 0;     // return rides this offset
         qint64      ansStartedMs = 0;
         QMap<int, ReachWatcher> watchers;   // offset -> watcher
         int         savedSubmode = -1;      // speed restored on stop
@@ -1380,6 +1382,11 @@ class UI_Constructor : public QMainWindow {
         qint64      gateSilenceMs = 0;       // latest delivered-silent
     };
     ReachState m_reach;
+    // [TODO #177] The exact relayed reply that closed an attempt as
+    // REACHED; the relay-ACK composer skips this one message and
+    // clears the pair. Empty otherwise.
+    QString m_reachAnsweredFrom;
+    QString m_reachAnsweredText;
     QTimer *m_reachTimer = nullptr;
     void reachStart(QString const &target, int maxMoves = 6,
                     QString const &via = QString{});

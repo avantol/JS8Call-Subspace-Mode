@@ -1036,7 +1036,9 @@ void UI_Constructor::reachNextMove() {
     // included -- a field missed here leaks one move's observation
     // into the next move's verdict (happened 2026-08-27, AB9MK
     // attempt, with the since-deleted return-start timestamp).
-    m_reach.fwdStartedMs = m_reach.fwdDoneMs = m_reach.ansStartedMs = 0;
+    m_reach.fwdStartedMs = m_reach.fwdDoneMs = m_reach.ansStartedMs =
+        m_reach.retStartedMs = 0;
+    m_reach.retOffset = 0;
     m_reach.chain.clear();
     m_reach.watchers.clear();
 
@@ -1676,35 +1678,64 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
     QString const me = m_config.my_callsign().trimmed().toUpper();
     QString const T = m_reach.target;
 
-    // [operator's compromise, 2026-08-27 AB9MK attempt] ONE checkpoint
-    // for a relay move: if the via keys AT ALL -- any addressee --
-    // starting in the first expected slot, go straight to the move's
-    // max wait (the 16-period abandon time). The staged windows that
-    // lived here (addressee matching, forward-complete arithmetic, a
-    // return-start detector) saved 1-2 slots of wait at best and
-    // misread WO7I's heartbeat ACK to a third station as "the answer
-    // coming back". A false fire now costs only the wait to the cap;
-    // it can no longer produce a wrong verdict or a wrong habit entry
-    // (both habit writes key on the checksum-proven forward assembly).
-    // The via is identified by its callsign in frame 1, NOT by offset:
-    // measured 2026-08-28 00:48, WO7I forwarded at 1104 Hz after being
-    // heard only at 754/803 Hz (heartbeat sub-band) -- relays answer
-    // on their own chosen offset. "<....>" is the packed placeholder a
-    // slash callsign leaves in frame 1. No slot arithmetic is needed:
-    // this handler only runs while the move is alive, and the initial
-    // one-slot deadline expires before any slot-2 frame can decode.
+    // [operator's rule, restated & confirmed 2026-08-28] A relay move
+    // has exactly two cheap checkpoints, both "did the via key" --
+    // callsign or "<....>" slash-callsign placeholder in frame 1, any
+    // addressee. No addressee matching, no packed-count arithmetic
+    // (the 2026-08-27 detectors misread WO7I's heartbeat ACK to a
+    // third station as the answer coming back). Identified by
+    // CALLSIGN, not offset: WO7I forwarded at 1104 Hz after being
+    // heard only at 754/803 Hz (HB sub-band) -- relays answer on
+    // their own chosen offset.
+    //
+    //   1. keying in the first slot (this block): wait for the
+    //      forward to finish (5 slots, the measured forward span);
+    //      never keys -> the one-slot deadline ends the move. This
+    //      handler only runs while the move is alive, so no explicit
+    //      slot test is needed.
+    //   2. the return, when expected (armed at forward-complete):
+    //      must START within 6 slots of the forward's end; a started
+    //      return slides one slot per arriving frame on its offset.
+    //   Everything bounded by the move cap. A false keying fire costs
+    //   wait only -- both habit writes key on the checksum-proven
+    //   assembly.
+    bool const viaKeyed =
+        up.startsWith(m_reach.via + QLatin1String(":")) ||
+        up.startsWith(QStringLiteral("<....>:"));
     if (m_reach.kind == QLatin1String("relay") &&
-        m_reach.fwdStartedMs == 0 &&
-        (up.startsWith(m_reach.via + QLatin1String(":")) ||
-         up.startsWith(QStringLiteral("<....>:")))) {
+        m_reach.fwdStartedMs == 0 && viaKeyed) {
         m_reach.fwdStartedMs = now;
-        qint64 const maxWait =
-            m_reach.txEndMs + 16 * JS8::Submode::periodMS(m_nSubMode);
-        m_reach.deadlineMs = qMax(m_reach.deadlineMs, maxWait);
+        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
+                                  reachSlotEndMs(now, 5));
         reachLog(QStringLiteral("    %1 keyed in the first slot +%2s "
-                                "-- waiting to the move cap")
+                                "-- waiting for the forward to finish")
                      .arg(m_reach.via)
                      .arg((now - m_reach.txEndMs) / 1000));
+        reachArmTimer();
+    }
+    // Checkpoint 2 fires here: the via keying again after its proven
+    // forward = the return starting. LEDGER NAMES THE CASE (operator,
+    // 2026-08-28): started-and-slid or the verdict says no-return /
+    // never-assembled explicitly.
+    if (m_reach.kind == QLatin1String("relay") &&
+        m_reach.fwdDoneMs != 0 && m_reach.retStartedMs == 0 &&
+        viaKeyed) {
+        m_reach.retStartedMs = now;
+        m_reach.retOffset = d.offset;
+        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
+                                  reachSlotEndMs(now, 1));
+        reachLog(QStringLiteral("    return started +%1s at %2 Hz -- "
+                                "waiting for end of message")
+                     .arg((now - m_reach.txEndMs) / 1000)
+                     .arg(d.offset));
+        reachArmTimer();
+    } else if (m_reach.kind == QLatin1String("relay") &&
+               m_reach.retStartedMs != 0 &&
+               qAbs(d.offset - m_reach.retOffset) <= 5) {
+        // continuation frames of the return carry no callsign prefix;
+        // ride the offset, one slot per frame, cap-bounded.
+        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
+                                  reachSlotEndMs(now, 1));
         reachArmTimer();
     }
 
@@ -1860,6 +1891,12 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         m_spotMapWindow->queueReachEvent(
             {m_reach.band, T, QStringLiteral("reached"),
              path.join(QLatin1Char('>')), 0, true});
+        // [TODO #177, operator 2026-08-24 "nobody cares"] The reply
+        // arriving IS the acknowledgement; mark this exact message so
+        // the relay-ACK composer later in processCommandActivity
+        // skips it. One-shot, exact from+text identity -- no timers.
+        m_reachAnsweredFrom = d.from;
+        m_reachAnsweredText = d.text;
         reachPlaceTemplate(path);
         reachStop(QStringLiteral("REACHED"));
         return;
@@ -1870,20 +1907,24 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         m_reach.fwdDoneMs = now;
         // Checksum-proven forward: THE fact both habit writes key on
         // (the delivered-silent negative at verdict time uses this
-        // same timestamp). The staged return-leg windows that were
-        // computed here (the 2026-08-27 verbatim 3-frame rule, chain
-        // legs from packed counts) were replaced by the operator's
-        // one-checkpoint compromise -- the deadline already sits at
-        // the move cap since the via keyed. The DURABLE forwarded-ok
-        // journal is NOT written here: the *DE* observation in
-        // processCommandActivity journals every forward of our
-        // traffic, executor or manual -- one authority, no duplicate
-        // rows (the pre-413 keying-time journal doubled it).
+        // same timestamp). The DURABLE forwarded-ok journal is NOT
+        // written here: the *DE* observation in processCommandActivity
+        // journals every forward of our traffic, executor or manual --
+        // one authority, no duplicate rows.
         g_relayOutcomes[m_reach.band].append({now, true, m_reach.via});
-        reachLog(QStringLiteral("    forward complete %1 (+%2s, "
-                                "checksum-proven)")
-                     .arg(off)
-                     .arg((now - m_reach.txEndMs) / 1000));
+        // [operator's return rule, restated & confirmed 2026-08-28]
+        // The return must START within 6 slots of the forward's end:
+        // 3 frames of the target's SNR answer to the via, plus the
+        // 3-frame start window. Constants, not packed counts -- the
+        // SNR ask's reply shape is fixed. Nothing by then = abandon
+        // there (~+136 s), not at the 240 s cap; the cap is only the
+        // outer bound.
+        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
+                                  reachSlotEndMs(now, 6));
+        reachLog(QStringLiteral("    forward complete %1 "
+                                "(checksum-proven); return must start "
+                                "within 6 slots")
+                     .arg(off));
         reachArmTimer();
         return;
     }
@@ -2029,10 +2070,12 @@ void UI_Constructor::reachTick() {
     else if (m_reach.kind == QLatin1String("relay") &&
              m_reach.fwdStartedMs == 0)
         state = QStringLiteral("relay silent -- never keyed");
+    else if (m_reach.fwdDoneMs != 0 && m_reach.retStartedMs != 0)
+        state = QStringLiteral("return started but never assembled "
+                               "-- frames lost");
     else if (m_reach.fwdDoneMs != 0)
-        state = QStringLiteral("forward delivered; nothing assembled "
-                               "back -- target silent, or the answer "
-                               "was lost");
+        state = QStringLiteral("forward delivered; no return started "
+                               "within 6 slots -- target silent");
     else if (m_reach.ansStartedMs != 0) {
         bool allDone = !m_reach.watchers.isEmpty();
         for (auto const &w : m_reach.watchers)
