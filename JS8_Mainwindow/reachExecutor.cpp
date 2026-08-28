@@ -1322,8 +1322,13 @@ void UI_Constructor::reachNextMove() {
                 continue;   // first hop must hear us reliably
             double p = std::exp(-dist.value(cand))
                        * pHearsUs(this, chain.first(), me, now);
+            // [chainid, operator-approved 2026-08-28] A route's
+            // tried-identity is the FULL chain: KC6UCN>N6CYB is not
+            // a retry of N6CYB (the last-hop key made an untried
+            // multi-hop look spent -- the KE8SNO miss).
             qint64 const tried = m_reach.triedAt.value(
-                QStringLiteral("relay:") + cand, -1);
+                QStringLiteral("relay:") + chain.join(QLatin1Char('>')),
+                -1);
             if (tried >= 0)
                 p *= staleWorth((now - tried) / 1000.0);
             if (p <= 0.0)
@@ -1583,6 +1588,27 @@ void UI_Constructor::reachNextMove() {
     }
 
     // ---- step 3: routes, best first (decide.py:884-887) -----------
+    // [chainid/(b)] Does any UNTRIED route resting on evidence
+    // learned this attempt remain? While one does, budget extensions
+    // hold to the fresh-first rule; when none does, any untried
+    // route qualifies.
+    bool freshUntriedRemains = false;
+    for (auto const &x : ranked) {
+        if (x.mv.kind != QLatin1String("relay"))
+            continue;
+        QString const rk = x.mv.chain.isEmpty()
+                               ? x.mv.via
+                               : x.mv.chain.join(QLatin1Char('>'));
+        if (m_reach.triedAt.contains(QStringLiteral("relay:") + rk))
+            continue;
+        QString const lh = x.mv.chain.isEmpty() ? x.mv.via
+                                                : x.mv.chain.last();
+        if (bookEdge(lh, T).whenMs >= m_reach.startMs ||
+            bookEdge(T, lh).whenMs >= m_reach.startMs) {
+            freshUntriedRemains = true;
+            break;
+        }
+    }
     for (auto const &x : ranked) {
         if (x.mv.kind != QLatin1String("relay"))
             continue;
@@ -1604,32 +1630,45 @@ void UI_Constructor::reachNextMove() {
                                     "silence -- spendable")
                          .arg(x.mv.via));
         }
+        // [chainid] Full-chain identity, matching the pricing key.
         QString const relKey = x.mv.chain.isEmpty()
-                                   ? x.mv.via : x.mv.chain.last();
+                                   ? x.mv.via
+                                   : x.mv.chain.join(QLatin1Char('>'));
         qint64 const tried = m_reach.triedAt.value(
             QStringLiteral("relay:") + relKey, -1);
         if (tried >= 0)
             continue;   // stale-scored above; fresh candidates first
         if (overBudget) {
-            // only a route resting on evidence learned THIS attempt
+            // [operator-approved 2026-08-28] Fresh-learned routes
+            // first; when none remain, ANY untried route qualifies
+            // -- "the budget is for when there is nothing left to
+            // do", and an untried route with real evidence is
+            // something left to do (the KE8SNO attempt failed with
+            // KC6UCN>N6CYB unspent).
             QString const lastHop = x.mv.chain.isEmpty()
                                         ? x.mv.via
                                         : x.mv.chain.last();
             bool const fresh =
                 bookEdge(lastHop, T).whenMs >= m_reach.startMs ||
                 bookEdge(T, lastHop).whenMs >= m_reach.startMs;
-            if (!fresh)
-                continue;
-            reachLog(QStringLiteral("    budget spent, but a route "
-                                    "learned this attempt remains -- "
-                                    "extending one move via %1")
-                         .arg(x.mv.via));
+            if (!fresh && freshUntriedRemains)
+                continue; // a fresher option is still on the table
+            reachLog(fresh
+                         ? QStringLiteral(
+                               "    budget spent, but a route "
+                               "learned this attempt remains -- "
+                               "extending one move via %1")
+                               .arg(x.mv.via)
+                         : QStringLiteral(
+                               "    budget spent; nothing fresh, but "
+                               "%1 is untried -- extending one move")
+                               .arg(relKey));
         }
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = x.mv.via;
         m_reach.chain = x.mv.chain.isEmpty()
                             ? QStringList{x.mv.via} : x.mv.chain;
-        m_reach.triedAt.insert(QStringLiteral("relay:") + x.mv.via,
+        m_reach.triedAt.insert(QStringLiteral("relay:") + relKey,
                                now);
         m_reach.pastVias.append(x.mv.via);
         reachExplain(&x.mv);
