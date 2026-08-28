@@ -3453,6 +3453,8 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         // distance] the dated transmit claim.
         // [heardproof, operator: absence of "hears me" and "last
         // heard" says it -- no filler text]
+        // [operator 2026-08-27: own line, not spliced before the
+        // distance -- so every fact below the callsign gets a line]
         QString txPart;
         if (best->spot.lastTxWhen.isValid()) {
             qint64 const txAge = best->spot.lastTxWhen.secsTo(
@@ -3460,7 +3462,7 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
             txPart = (txAge >= 3600
                 ? tr("last heard %1 hr ago").arg(txAge / 3600)
                 : tr("last heard %1 min ago").arg(txAge / 60))
-                + QStringLiteral(" · ");
+                + QStringLiteral("\n");
         }
         if (best->spot.rxOnly) {
             tip = tr("%1 (%2)\n%3%4 %5")
@@ -3491,7 +3493,7 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 } else {
                     snrPart += tr(" (age unknown)");
                 }
-                snrPart += QStringLiteral(" · ");
+                snrPart += QStringLiteral("\n");
             }
             tip = tr("%1 (%2)\n%3%4%5 %6")
                       .arg(best->spot.receiverCall,
@@ -3499,17 +3501,8 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                       .arg(qRound(dist))
                       .arg(miles ? tr("mi") : tr("km"));
         }
-        // [BUILD 340] Audio offset they heard us at (spot RF − dial),
-        // when both are known and the result is sane.
-        if (best->spot.freqHz > 0 && m_dialHz > 0) {
-            qint64 const audio = best->spot.freqHz - m_dialHz;
-            if (audio > 0 && audio < 6000) {
-                // [audit] Say WHOSE offset it is -- see the QSY note.
-                tip += best->spot.reportsMe
-                           ? tr("\nheard me at %1 Hz").arg(audio)
-                           : tr("\n%1 Hz").arg(audio);
-            }
-        }
+        // [BUILD 340] audio-offset line removed 2026-08-27 (operator:
+        // not important). freqHz itself stays stored and dumped.
         // [BUILD 340] Country, when not our own (topic DXCC compare).
         if (!best->spot.country.isEmpty()) {
             tip += QStringLiteral("\n") + best->spot.country;
