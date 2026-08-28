@@ -415,6 +415,15 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     // its button would.
     m_autoRouteBtn = makeZoomButton(tr("Auto-route"));
     m_autoRouteBtn->setCheckable(true);
+    // Start/Cancel for the target prompt: SAME type and style as the
+    // map buttons (operator, 2026-08-28). Created here because the
+    // style lambda is constructor-local; the prompt panel adopts
+    // them into its layout on first show.
+    m_autoRouteStartBtn = makeZoomButton(tr("Start"));
+    m_autoRouteStartBtn->setEnabled(false);
+    m_autoRouteStartBtn->hide();
+    m_autoRouteCancelBtn = makeZoomButton(tr("Cancel"));
+    m_autoRouteCancelBtn->hide();
     m_autoRouteBtn->setToolTip(
         tr("Automatically find a relay route to a station or grid"));
     connect(m_autoRouteBtn, &QToolButton::toggled, this, [this](bool on) {
@@ -3280,6 +3289,7 @@ void SpotMapWindow::positionWindowButtons() {
             wConn = std::max(wConn, m_relaySelBtn->sizeHint().width());
         if (m_autoRouteBtn)
             wConn = std::max(wConn, m_autoRouteBtn->sizeHint().width());
+        m_btnColW = wConn; // [autoroute] panel centering reference
         int const yConn = height() - LEGEND_STRIP_PX - 24 - 20;
         m_connBtn->setFixedSize(wConn, 20);
         m_connBtn->move(width() - wConn - 6, yConn);
@@ -3667,9 +3677,12 @@ void SpotMapWindow::setStickyToast(QString const &text) {
     }
     m_statusLine->setText(text);
     m_statusLine->adjustSize();
+    // Same row as "Add PSKReporter spots" / "Show connections"
+    // (both sit at height - LEGEND_STRIP_PX - 44; operator,
+    // 2026-08-28), centered between the two button stacks.
     m_statusLine->move((width() - m_statusLine->width()) / 2,
-                       height() - LEGEND_STRIP_PX
-                           - m_statusLine->height() - 4);
+                       height() - LEGEND_STRIP_PX - 44
+                           + (20 - m_statusLine->height()) / 2);
     m_statusLine->show();
     m_statusLine->raise();
 }
@@ -3687,21 +3700,23 @@ void SpotMapWindow::autoRouteShowPanel() {
         auto *lay = new QVBoxLayout(m_autoRoutePanel);
         lay->setContentsMargins(14, 10, 14, 10);
         auto *lbl = new QLabel(
-            tr("Enter station or grid to automatically find a route "
-               "to, or click on a station on the map"),
+            tr("Enter station or grid to automatically find a route, "
+               "or click on a station on the map"),
             m_autoRoutePanel);
         lbl->setWordWrap(true);
         lay->addWidget(lbl);
         m_autoRouteEdit = new QLineEdit(m_autoRoutePanel);
         lay->addWidget(m_autoRouteEdit);
+        // Adopt the constructor-made map-style buttons (addWidget
+        // reparents); give the text room beyond the 36 px default.
         auto *btnRow = new QHBoxLayout;
-        m_autoRouteStartBtn =
-            new QPushButton(tr("Start"), m_autoRoutePanel);
-        m_autoRouteStartBtn->setEnabled(false);
-        auto *cancelBtn =
-            new QPushButton(tr("Cancel"), m_autoRoutePanel);
-        btnRow->addWidget(m_autoRouteStartBtn);
-        btnRow->addWidget(cancelBtn);
+        for (QToolButton *b : {m_autoRouteStartBtn,
+                               m_autoRouteCancelBtn}) {
+            b->setFixedSize(
+                std::max(56, b->sizeHint().width() + 10), 20);
+            b->show();
+            btnRow->addWidget(b);
+        }
         lay->addLayout(btnRow);
         // Valid = a real amateur callsign (no SWL/freebander fakes,
         // no hyphen nodes) or a grid; Start enables only then, and
@@ -3715,7 +3730,7 @@ void SpotMapWindow::autoRouteShowPanel() {
                     m_autoRouteStartBtn->setEnabled(
                         isValidTarget(s.trimmed().toUpper()));
                 });
-        connect(m_autoRouteStartBtn, &QPushButton::clicked, this,
+        connect(m_autoRouteStartBtn, &QToolButton::clicked, this,
                 [this]() {
                     autoRouteChooseTarget(
                         m_autoRouteEdit->text().trimmed().toUpper());
@@ -3725,10 +3740,11 @@ void SpotMapWindow::autoRouteShowPanel() {
                     if (m_autoRouteStartBtn->isEnabled())
                         m_autoRouteStartBtn->click();
                 });
-        connect(cancelBtn, &QPushButton::clicked, this, [this]() {
-            // Same teardown as unchecking the button while armed.
-            m_autoRouteBtn->setChecked(false);
-        });
+        connect(m_autoRouteCancelBtn, &QToolButton::clicked, this,
+                [this]() {
+                    // Same teardown as unchecking while armed.
+                    m_autoRouteBtn->setChecked(false);
+                });
     }
     m_autoRouteEdit->clear();
     positionAutoRoutePanel();
@@ -3741,10 +3757,14 @@ void SpotMapWindow::positionAutoRoutePanel() {
     if (!m_autoRoutePanel)
         return;
     m_autoRoutePanel->adjustSize();
+    // Centered in the space LEFT of the right-hand button column --
+    // equal air on both sides relative to the map buttons (operator,
+    // 2026-08-28).
+    int const avail = width() - m_btnColW - 12;
     int const w = qMin(m_autoRoutePanel->sizeHint().width() + 20,
-                       width() - 40);
+                       avail - 12);
     m_autoRoutePanel->resize(w, m_autoRoutePanel->sizeHint().height());
-    m_autoRoutePanel->move((width() - m_autoRoutePanel->width()) / 2,
+    m_autoRoutePanel->move(qMax(6, (avail - w) / 2),
                            height() - m_autoRoutePanel->height() - 70);
 }
 

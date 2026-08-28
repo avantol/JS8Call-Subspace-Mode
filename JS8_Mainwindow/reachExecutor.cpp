@@ -987,6 +987,10 @@ void UI_Constructor::autoRouteBegin(QString const &target) {
         m_lastTxLabelCacheValid = true;
     }
     last_tx_label.setText(QStringLiteral("Auto-route"));
+    // A leftover draft would block the executor's queue (the TX
+    // queue only drains into an EMPTY box) and the banner belongs
+    // there anyway (operator, 2026-08-28: clear at start).
+    ui->extFreeTextMsgEdit->clear();
     refreshOutgoingPlaceholder();
     reachStart(target);
     if (!m_reach.active) {
@@ -1000,6 +1004,10 @@ void UI_Constructor::autoRouteBegin(QString const &target) {
 void UI_Constructor::autoRouteCancel() {
     if (!m_autoRouteActive)
         return;
+    // Kill any in-flight transmission exactly as the main Halt does
+    // (operator, 2026-08-28: the map's Halt left the TX running).
+    // Idempotent when the main-Halt path already called it.
+    stopTxMechanical();
     m_autoRouteCancel = true;
     if (m_reach.active)
         reachStop(QStringLiteral("stopped by operator"));

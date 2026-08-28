@@ -418,7 +418,9 @@ class SpotMapWindow final : public QWidget {
     QString m_autoRouteTarget;
     class QFrame *m_autoRoutePanel = nullptr;   // the target prompt
     class QLineEdit *m_autoRouteEdit = nullptr;
-    class QPushButton *m_autoRouteStartBtn = nullptr;
+    class QToolButton *m_autoRouteStartBtn = nullptr;
+    class QToolButton *m_autoRouteCancelBtn = nullptr;
+    int m_btnColW = 0;   // right-hand button column width (layout)
     // The mode's status line: its own label just above the distance
     // scale legend (operator, 2026-08-28) -- transient toasts keep
     // their own position and timing, untouched.
