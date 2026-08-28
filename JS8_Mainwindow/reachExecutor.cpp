@@ -1274,6 +1274,44 @@ void UI_Constructor::reachNextMove() {
             if (seenN.size() > 960)
                 break;
         }
+        // [walkviz, operator 2026-08-28: "show 3-hop evaluations"]
+        // Everything the backward walk produced beyond one relay --
+        // including chains later dropped because their first hop
+        // does not hear us -- plus the raw material it had to work
+        // with. When no chains appear here, the reason is visible:
+        // chains can only follow station-to-station hearing evidence
+        // (an edge or its reciprocity), never guesses.
+        {
+            int interEdges = 0;
+            for (auto e = g_book.edges.constBegin();
+                 e != g_book.edges.constEnd(); ++e)
+                if (!Radio::same_station(e.key(), me))
+                    interEdges += e.value().size();
+            int chains = 0;
+            for (auto it = route.constBegin();
+                 it != route.constEnd(); ++it) {
+                if (it.key() == T || it.value().size() < 2)
+                    continue;
+                ++chains;
+                reachLog(QStringLiteral(
+                             "      walk chain: %1>%2  -log(p)=%3%4")
+                             .arg(it.value().join(QLatin1Char('>')),
+                                  T)
+                             .arg(dist.value(it.key()), 0, 'f', 2)
+                             .arg(g_book.firstHops.contains(
+                                      it.value().first())
+                                      ? QString{}
+                                      : QStringLiteral(
+                                            "  DROPPED: first hop "
+                                            "does not hear us")));
+            }
+            reachLog(QStringLiteral("    walk: %1 stations, %2 "
+                                    "station-to-station edges, %3 "
+                                    "multi-relay chains formed")
+                         .arg(g_book.walk.size())
+                         .arg(interEdges)
+                         .arg(chains));
+        }
         for (auto it = route.constBegin(); it != route.constEnd();
              ++it) {
             QString const &cand = it.key();
@@ -1392,6 +1430,10 @@ void UI_Constructor::reachNextMove() {
                      .arg(x.score * 1000.0, 0, 'f', 4)
                      .arg(x.mv.p, 0, 'f', 3)
                      .arg(x.mv.cost, 0, 'f', 0));
+        // Full factor table for the top 8 (operator, 2026-08-28).
+        if (i < 8)
+            for (QString const &f : x.mv.factors)
+                reachLog(QStringLiteral("      ") + f);
     }
 
     // expected_time (decide.py:705-712)
