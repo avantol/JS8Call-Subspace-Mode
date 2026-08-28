@@ -2714,27 +2714,37 @@ void SpotMapWindow::redraw() {
             m_lastSegCount = segPskr.size() + segRadio.size();
         drawGroup(segRadio, penRadio); // on-air over ([hearlines])
         } else {
-            // BOTH colours lift -- the operator traces a station's
-            // connections, radio and internet alike (KD6FLM's radio
-            // line to us drew unlifted and the label never fired).
-            QVector<Seg> dim, lit, dimR, litR;
+            // Internet lines ONLY lift (operator: "that's the
+            // design, keep it that way"); lifted lines draw LAST, on
+            // top of the blue. [tracer3] The lift is PROPORTIONAL:
+            // "noticeably (and proportionally) brighter -- for gray,
+            // that's toward yellow. when yellow, that's toward
+            // white." The base runs sparse-yellow -> gray with
+            // muting (pskrCoverage); the lift advances the SAME ramp
+            // one stage: fully muted gray lifts to the sparse
+            // yellow, unmuted yellow lifts toward white, mid-mute
+            // lands in between.
+            QVector<Seg> dim, lit;
             for (Seg const &s : segPskr)
                 (s.hover ? lit : dim).append(s);
-            for (Seg const &s : segRadio)
-                (s.hover ? litR : dimR).append(s);
             drawGroup(dim, QPen{pskrLineColor, 1});
-            drawGroup(dimR, penRadio);
-            QColor const tracerColor{255, 250, 225, 255};
+            drawGroup(segRadio, penRadio);
+            QColor const yellow{225, 190, 30, 255};
+            QColor const white{255, 250, 225, 255};
+            double const t = 1.0 - pskrCoverage;  // 1 = unmuted base
+            auto const mix = [&](int a, int b) {
+                return int(a + (b - a) * t);
+            };
+            QColor const tracerColor{mix(yellow.red(), white.red()),
+                                     mix(yellow.green(), white.green()),
+                                     mix(yellow.blue(), white.blue()),
+                                     255};
             drawGroup(lit, QPen{tracerColor, 1});
-            drawGroup(litR, QPen{tracerColor, 1});
             m_lastSegCount = segPskr.size() + segRadio.size();
             auto const nearCenter = [&](QPointF const &pt) {
                 return (pt - center).manhattanLength() < 1.0;
             };
             for (Seg const &s : lit)
-                if (nearCenter(s.hearer) || nearCenter(s.heard))
-                    m_tracerHitsMe = true;
-            for (Seg const &s : litR)
                 if (nearCenter(s.hearer) || nearCenter(s.heard))
                     m_tracerHitsMe = true;
         }
@@ -3122,10 +3132,14 @@ void SpotMapWindow::redraw() {
             << center + QPointF{-3.8, 3.0};
         p.drawPolygon(tri);
         // [#183] a traced line ends here: our callsign in the tracer
-        // colour, painted last like the triangle so nothing buries it.
+        // colour, placed EXACTLY like every other callsign label --
+        // strictly to the right, vertically centered (operator: it
+        // had drawn north of a station north of me).
         if (m_tracerHitsMe && !m_myCall.isEmpty()) {
             p.setPen(QColor{255, 250, 225, 255});
-            p.drawText(center + QPointF{8.0, -8.0}, m_myCall);
+            p.drawText(QRectF{center.x() + DOT_RADIUS_PX + 5.0,
+                              center.y() - 9.0, 140.0, 18.0},
+                       Qt::AlignLeft | Qt::AlignVCenter, m_myCall);
         }
     }
 
