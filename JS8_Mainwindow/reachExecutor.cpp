@@ -1913,18 +1913,23 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         // one authority, no duplicate rows.
         g_relayOutcomes[m_reach.band].append({now, true, m_reach.via});
         // [operator's return rule, restated & confirmed 2026-08-28]
-        // The return must START within 6 slots of the forward's end:
-        // 3 frames of the target's SNR answer to the via, plus the
-        // 3-frame start window. Constants, not packed counts -- the
-        // SNR ask's reply shape is fixed. Nothing by then = abandon
-        // there (~+136 s), not at the 240 s cap; the cap is only the
-        // outer bound.
+        // The return must START within 6 slots PER RELAY in the
+        // chain: for the nearest relay that is 3 frames of answer
+        // plus the 3-frame start window; every relay beyond it adds
+        // one 3-frame forward and one 3-frame return, all beyond our
+        // hearing (only hop 1's transmissions are guaranteed
+        // audible). Constants, not packed counts -- the SNR ask's
+        // reply shape is fixed. Nothing by then = abandon there, not
+        // at the cap; the cap is only the outer bound.
+        int const retWindow =
+            6 * qMax(1, static_cast<int>(m_reach.chain.size()));
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 6));
+                                  reachSlotEndMs(now, retWindow));
         reachLog(QStringLiteral("    forward complete %1 "
                                 "(checksum-proven); return must start "
-                                "within 6 slots")
-                     .arg(off));
+                                "within %2 slots")
+                     .arg(off)
+                     .arg(retWindow));
         reachArmTimer();
         return;
     }
@@ -2075,7 +2080,10 @@ void UI_Constructor::reachTick() {
                                "-- frames lost");
     else if (m_reach.fwdDoneMs != 0)
         state = QStringLiteral("forward delivered; no return started "
-                               "within 6 slots -- target silent");
+                               "within the %1-slot window -- target "
+                               "silent")
+                    .arg(6 * qMax(1, static_cast<int>(
+                                         m_reach.chain.size())));
     else if (m_reach.ansStartedMs != 0) {
         bool allDone = !m_reach.watchers.isEmpty();
         for (auto const &w : m_reach.watchers)
