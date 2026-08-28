@@ -3862,7 +3862,8 @@ void UI_Constructor::guiUpdate() {
         // way every other consumer does.
         bool const arqBusy =
             (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
-            arqRxBusy;
+            arqRxBusy ||
+            m_autoRouteActive; // [autoroute] locks as ARQ mode does
         // Two-tier gate (2026-06-08, follow-up):
         //   canChangeSpeed — speed mode buttons (S/N/F/T/⚡). Re-
         //     enabled BETWEEN chunks during an ARQ session so the
@@ -3927,7 +3928,8 @@ void UI_Constructor::guiUpdate() {
         // [2026-07-23 negophase] Second hand-copy deleted — same
         // reason as the one in guiUpdate's arqBusy.
         bool const arqBoxBusy =
-            m_chunkedArq && m_chunkedArq->hasActiveTxSession();
+            (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
+            m_autoRouteActive; // [autoroute] box locked, banner shows
         if (ui->extFreeTextMsgEdit) {
             if (arqBoxBusy && !ui->extFreeTextMsgEdit->isReadOnly()) {
                 ui->extFreeTextMsgEdit->setReadOnly(true);
@@ -8811,6 +8813,11 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx — OPERATOR halt
     // flag ritual had four callers that forgot it — deleted).
     stopTxMechanical();
 
+    // [autoroute] The banner says "Halt to cancel." -- so Halt
+    // cancels the whole mode, not just the in-flight transmission.
+    if (m_autoRouteActive)
+        autoRouteCancel();
+
     // Operator-initiated halt aborts any in-flight chunked-ARQ
     // session and clears all per-peer state (incl. MSG-cmd flags).
     // Done after resetMessage (in stopTxMechanical) so the TX queue
@@ -9397,7 +9404,16 @@ void UI_Constructor::updateButtonDisplay() {
     bool isTransmitting = isMessageQueuedForTransmit() ||
                           (m_chunkedArq &&
                            (m_chunkedArq->hasActiveTxSession() ||
-                            m_chunkedArq->hasActiveRxWindow()));
+                            m_chunkedArq->hasActiveRxWindow())) ||
+                          m_autoRouteActive; // [autoroute] ARQ-style lock
+    // [autoroute] Push ARQ-session state to the map so its
+    // Auto-route button greys during ARQ mode (and only then --
+    // m_autoRouteActive itself must not disable the button, it IS
+    // the Halt control).
+    if (m_spotMapWindow)
+        m_spotMapWindow->setArqSessionActive(
+            m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+                             m_chunkedArq->hasActiveRxWindow()));
 
     auto selectedCallsign = callsignSelected(true);
     bool emptyCallsign = selectedCallsign.isEmpty();
@@ -9698,8 +9714,9 @@ void UI_Constructor::updateTextDisplay() {
         // transfer while sending OR receiving one (the RX side is
         // busy keying ACKs; stop-and-wait is one session per peer).
         bool const arqSessionBusy =
-            m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
-                             m_chunkedArq->hasActiveRxWindow());
+            (m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+                              m_chunkedArq->hasActiveRxWindow())) ||
+            m_autoRouteActive; // [autoroute]
         m_sendFileAction->setEnabled(canTransmit && !isTransmitting &&
                                      !arqSessionBusy);
         syncIcs213ArqGate(); // [ICS213]
@@ -9877,8 +9894,12 @@ void UI_Constructor::updateTxButtonDisplay() {
     // monitor-TX gate the protocol's OWN ACK path relies on (ACKs
     // bypass this button via onChunkedWantToTransmit). Compose box
     // stays editable (arqBoxBusy, TX-only).
+    // [autoroute] folded in: the operator's Send side locks during
+    // auto-route (the executor's own TX rides the queue, not the
+    // button); Halt stays live -- it is the cancel control.
     bool const arqRxBusy =
-        m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+        (m_chunkedArq && m_chunkedArq->hasActiveRxWindow()) ||
+        m_autoRouteActive;
 
     // if we're tuning or have a message queued
     if (m_tune || isMessageQueuedForTransmit()) {
@@ -10082,7 +10103,12 @@ void UI_Constructor::refreshOutgoingPlaceholder() {
     // onRxSessionChanged only sets m_rxBannerText and calls here, so
     // selection/negotiation/lock refreshes can no longer clobber the
     // banner mid-receive.
-    if (!m_rxBannerText.isEmpty()) {
+    if (m_autoRouteActive) {
+        // [autoroute] Exactly this, nothing else (operator spec).
+        // The main Halt button cancels the mode.
+        text = QStringLiteral("Auto-route in progress...\n"
+                              "Halt to cancel.");
+    } else if (!m_rxBannerText.isEmpty()) {
         text = m_rxBannerText;
     } else if (m_chunkedArq && m_chunkedArq->isNegotiating()) {
         // [2026-07-23 negophase] The negotiation phase locks the same

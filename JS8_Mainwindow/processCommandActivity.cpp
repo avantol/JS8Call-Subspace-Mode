@@ -2120,6 +2120,19 @@ void UI_Constructor::processCommandActivity() {
                        << "reply=" << reply.left(40);
             continue;
         }
+        // [autoroute, operator spec 2026-08-28] "ignore all msgs from
+        // stations other than the one we're listening for": during
+        // auto-route NO auto-reply goes out at all -- the executor is
+        // the mode's only speaker, relay obligations included (the
+        // relayed answer that closes the mode is handled upstream by
+        // reachOnDirected, and its ACK is already suppressed). RX
+        // processing itself is untouched; only replies are dropped.
+        if (m_autoRouteActive) {
+            qWarning() << "[REPLY-GATE] suppressed: auto-route active"
+                       << "from=" << d.from << "cmd=" << d.cmd
+                       << "reply=" << reply.left(40);
+            continue;
+        }
         if (isRelayForward) {
             qWarning() << "[REPLY-GATE] relay: enqueuing forward"
                        << "reply=" << reply

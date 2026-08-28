@@ -97,6 +97,26 @@ bool is_callsign(QString const &callsign) {
     return callsign.contains(valid_callsign_regexp);
 }
 
+// callsign.py:88 -- full-match amateur shape on the base call, plus
+// at least one letter before the final character.
+bool is_amateur_callsign(QString const &call) {
+    QString const b = base_callsign(call).toUpper();
+    static QRegularExpression const re(
+        QStringLiteral("^[A-Z0-9]{1,3}[0-9][A-Z]{1,4}$"));
+    if (b.isEmpty() || !re.match(b).hasMatch())
+        return false;
+    for (int i = 0; i < b.size() - 1; ++i)
+        if (b.at(i).isLetter())
+            return true;
+    return false;
+}
+
+// callsign.py:116 -- amateur shape and not a hyphenated
+// receive-only node.
+bool is_routable_callsign(QString const &call) {
+    return is_amateur_callsign(call) && !call.contains(QLatin1Char('-'));
+}
+
 bool is_compound_callsign(QString const &callsign) {
     return callsign.contains('/');
 }

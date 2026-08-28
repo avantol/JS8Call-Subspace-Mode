@@ -185,6 +185,11 @@ class SpotMapWindow final : public QWidget {
     // Plain directed text — ARQ is NOT used for any hop (operator
     // directive 2026-08-14).
     void relayTemplateReady(QString const &templateText);
+    // [autoroute] A validated target was chosen; the mainwindow
+    // starts the executor and locks the main screen.
+    void autoRouteStart(QString const &target);
+    // [autoroute] Operator clicked "Halt auto-route" on the map.
+    void autoRouteHalt();
 
   protected:
     void paintEvent(QPaintEvent *) override;
@@ -401,6 +406,28 @@ class SpotMapWindow final : public QWidget {
     // showEvent and must not reset anything (operator, 2026-08-15,
     // twice).
     bool m_resetOnNextShow = true;
+    // [autoroute 2026-08-28] Auto-route mode: the operator names a
+    // target (typed or clicked) and the reaching executor runs it
+    // unattended. Map-side state only -- the mainwindow owns the
+    // executor and the main-screen lock.
+    //   armed  = button checked, waiting for a target
+    //   active = target chosen, executor running
+    class QToolButton *m_autoRouteBtn = nullptr;
+    bool m_autoRouteArmed = false;
+    bool m_autoRouteActive = false;
+    QString m_autoRouteTarget;
+    class QFrame *m_autoRoutePanel = nullptr;   // the target prompt
+    class QLineEdit *m_autoRouteEdit = nullptr;
+    bool m_arqBusy = false;   // pushed by the mainwindow; gates the button
+    // Sticky toast text: while non-empty, the toast label reverts to
+    // this after any transient toast expires instead of hiding --
+    // the "in progress..." status line rides the SAME control as the
+    // toast (operator spec).
+    QString m_stickyToast;
+    void autoRouteChooseTarget(QString const &target);
+    void autoRouteShowPanel();
+    void positionAutoRoutePanel();
+    void setStickyToast(QString const &text);
 
     // [hearlines] On-air heard-mesh storage: band → hearer →
     // (position + per-heard-call edges with their own timestamps).
@@ -535,6 +562,13 @@ public:
     // attempt is over and they can move on (operator, 2026-08-22).
     // Only un-replied attempts go: a green result is a result.
     void clearAttempts();
+    // [autoroute] Mainwindow pushes ARQ-session state (gates the
+    // Auto-route button) and reports mode end. canceled=true shows
+    // the "canceled" toast; success/failure dialogs are the
+    // mainwindow's.
+    void setArqSessionActive(bool active);
+    void autoRouteEnded(bool canceled);
+    bool autoRouteMode() const { return m_autoRouteActive; }
 
 private:
     bool m_showPskr = true;

@@ -51,6 +51,13 @@ QString pretty_frequency_MHz_string(FrequencyDelta,
 // Callsigns
 //
 bool is_callsign(QString const &);
+// Strong screen (ported from js8reach callsign.py): a real amateur
+// callsign shape -- rejects SWL/freebander fakes that pass the weak
+// is_callsign contains-test. ONE authority; reachExecutor and the
+// Spots Map both use these.
+bool is_amateur_callsign(QString const &);
+// Hyphen suffix marks a receive-only (SWL) node.
+bool is_routable_callsign(QString const &);
 bool is_compound_callsign(QString const &);
 QString base_callsign(QString);
 QString effective_prefix(QString);

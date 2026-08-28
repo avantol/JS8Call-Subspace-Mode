@@ -30,6 +30,9 @@
 #include <QSettings>
 #include <QLabel>
 #include <QToolButton>
+#include <QFrame>
+#include <QLineEdit>
+#include <QVBoxLayout>
 #include <QButtonGroup>
 #include <QToolTip>
 
@@ -400,6 +403,40 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
         m_relaySelBtn->setChecked(false); // clears path via toggled()
     });
     updateRelayButtons();
+
+    // [autoroute 2026-08-28] One button, three states:
+    //   "Auto-route" unchecked  -> click arms the mode (prompt shows)
+    //   checked, no target yet  -> waiting for typed/clicked target
+    //   "Halt auto-route"       -> executor running; click cancels
+    // Disabled while an ARQ session is active (pushed by the
+    // mainwindow); arming cancels relay-select the same way clicking
+    // its button would.
+    m_autoRouteBtn = makeZoomButton(tr("Auto-route"));
+    m_autoRouteBtn->setCheckable(true);
+    m_autoRouteBtn->setToolTip(
+        tr("Automatically find a relay route to a station or grid"));
+    connect(m_autoRouteBtn, &QToolButton::toggled, this, [this](bool on) {
+        if (on) {
+            if (m_relaySelBtn->isChecked())
+                m_relaySelBtn->setChecked(false);
+            m_relaySelBtn->setEnabled(false);
+            m_autoRouteArmed = true;
+            autoRouteShowPanel();
+            return;
+        }
+        // Unchecked. Programmatic teardown (autoRouteEnded) clears
+        // the flags first, so reaching here with a flag still set
+        // means the OPERATOR clicked to cancel.
+        if (m_autoRouteActive) {
+            Q_EMIT autoRouteHalt(); // mainwindow stops the executor,
+                                    // then calls autoRouteEnded(true)
+        } else if (m_autoRouteArmed) {
+            m_autoRouteArmed = false;
+            if (m_autoRoutePanel)
+                m_autoRoutePanel->hide();
+            m_relaySelBtn->setEnabled(true);
+        }
+    });
 
     positionWindowButtons();
     // [autochk 2026-08-16] Auto shows as SELECTED while auto zoom is
@@ -3239,6 +3276,8 @@ void SpotMapWindow::positionWindowButtons() {
             wConn = std::max(wConn, m_callsBtn->sizeHint().width());
         if (m_relaySelBtn)
             wConn = std::max(wConn, m_relaySelBtn->sizeHint().width());
+        if (m_autoRouteBtn)
+            wConn = std::max(wConn, m_autoRouteBtn->sizeHint().width());
         int const yConn = height() - LEGEND_STRIP_PX - 24 - 20;
         m_connBtn->setFixedSize(wConn, 20);
         m_connBtn->move(width() - wConn - 6, yConn);
@@ -3259,6 +3298,14 @@ void SpotMapWindow::positionWindowButtons() {
             m_relayUndoBtn->move(width() - wConn - 6 + half + 4, yRow2);
             m_relaySelBtn->setFixedSize(wConn, 20);
             m_relaySelBtn->move(width() - wConn - 6, yRow2 - 22);
+            // [autoroute] One button height of AIR above the Select
+            // button (rows are 22 apart; skip one row), per the
+            // operator's layout spec.
+            if (m_autoRouteBtn) {
+                m_autoRouteBtn->setFixedSize(wConn, 20);
+                m_autoRouteBtn->move(width() - wConn - 6, yRow2 - 66);
+            }
+            positionAutoRoutePanel();
         }
     }
 }
@@ -3294,6 +3341,10 @@ SpotMapWindow::hitTest(QPointF const &pos) const {
 // [attemptviz] An outgoing directed call or relay. `path` is the chain
 // WITHOUT us: {target} for a direct call, {relay..., target} otherwise.
 void SpotMapWindow::noteAttempt(QStringList const &path, int waitSecs) {
+    // [autoroute, operator spec 2026-08-28] The dashed-red / solid-
+    // green layer draws ONLY in auto-route mode.
+    if (!m_autoRouteActive)
+        return;
     if (path.isEmpty())
         return;
     Attempt a;
@@ -3320,6 +3371,10 @@ void SpotMapWindow::noteAttempt(QStringList const &path, int waitSecs) {
 // anywhere in its chain goes green -- a relay answering on the target's
 // behalf is still our path working.
 void SpotMapWindow::noteReply(QString const &from) {
+    // [autoroute] Same gate as noteAttempt: this layer exists only
+    // in auto-route mode.
+    if (!m_autoRouteActive)
+        return;
     QString const f = from.trimmed().toUpper();
     if (f.isEmpty())
         return;
@@ -3531,6 +3586,11 @@ void SpotMapWindow::mouseDoubleClickEvent(QMouseEvent *event) {
     // Suppressed ONLY while relay-select is active (clicks there are
     // hop selection; operator clarification 2026-08-14 — the earlier
     // global disable was over-applied).
+    // [autoroute] Double-clicks are disabled for the whole mode --
+    // armed (a double-click is two picks) and active (map input is
+    // dead until exit).
+    if (m_autoRouteArmed || m_autoRouteActive)
+        return;
     if (event->button() == Qt::LeftButton && !m_relaySelect) {
         if (ScreenSpot const *best = hitTest(event->position())) {
             // [audit 2026-08-21] WHOSE FREQUENCY? The payload `f` is
@@ -3570,7 +3630,19 @@ void SpotMapWindow::showToast(QString const &text) {
         m_toast->setAlignment(Qt::AlignCenter);
         m_toast->hide();
         m_toastTimer.setSingleShot(true);
-        connect(&m_toastTimer, &QTimer::timeout, m_toast, &QLabel::hide);
+        // [autoroute] A transient toast expiring reverts to the
+        // sticky status text when one is set (the "in progress..."
+        // line rides this same control) instead of hiding.
+        connect(&m_toastTimer, &QTimer::timeout, this, [this]() {
+            if (m_stickyToast.isEmpty()) {
+                m_toast->hide();
+                return;
+            }
+            m_toast->setText(m_stickyToast);
+            m_toast->adjustSize();
+            m_toast->move((width() - m_toast->width()) / 2,
+                          height() - m_toast->height() - 24);
+        });
     }
     m_toast->setText(text);
     m_toast->adjustSize();
@@ -3579,6 +3651,121 @@ void SpotMapWindow::showToast(QString const &text) {
     m_toast->show();
     m_toast->raise();
     m_toastTimer.start(2500);
+}
+
+// [autoroute] Sticky status text on the toast control: shown
+// immediately and re-shown whenever a transient toast expires, until
+// cleared with an empty string.
+void SpotMapWindow::setStickyToast(QString const &text) {
+    m_stickyToast = text;
+    if (text.isEmpty()) {
+        if (m_toast && !m_toastTimer.isActive())
+            m_toast->hide();
+        return;
+    }
+    showToast(text);
+    m_toastTimer.stop(); // no expiry: sticky until cleared
+}
+
+// [autoroute] The target prompt: a small panel low on the map with a
+// line edit; Enter validates, or the operator clicks a station.
+void SpotMapWindow::autoRouteShowPanel() {
+    if (!m_autoRoutePanel) {
+        m_autoRoutePanel = new QFrame(this);
+        m_autoRoutePanel->setStyleSheet(QStringLiteral(
+            "QFrame { background-color: rgba(30,30,30,235);"
+            " border-radius: 6px; }"
+            "QLabel { color: white; font-weight: bold;"
+            " background: transparent; }"));
+        auto *lay = new QVBoxLayout(m_autoRoutePanel);
+        lay->setContentsMargins(14, 10, 14, 10);
+        auto *lbl = new QLabel(
+            tr("Enter station or grid to automatically find a route "
+               "to, or click on a station on the map"),
+            m_autoRoutePanel);
+        lbl->setWordWrap(true);
+        lay->addWidget(lbl);
+        m_autoRouteEdit = new QLineEdit(m_autoRoutePanel);
+        lay->addWidget(m_autoRouteEdit);
+        connect(m_autoRouteEdit, &QLineEdit::returnPressed, this,
+                [this]() {
+                    QString const t =
+                        m_autoRouteEdit->text().trimmed().toUpper();
+                    if (t.isEmpty())
+                        return;
+                    // Valid = a real amateur callsign (no SWL/
+                    // freebander fakes, no hyphen nodes) or a grid.
+                    if (Radio::is_routable_callsign(t) ||
+                        Maidenhead::valid(t))
+                        autoRouteChooseTarget(t);
+                    else
+                        showToast(tr("%1 is not a valid call sign "
+                                     "or grid").arg(t));
+                });
+    }
+    m_autoRouteEdit->clear();
+    positionAutoRoutePanel();
+    m_autoRoutePanel->show();
+    m_autoRoutePanel->raise();
+    m_autoRouteEdit->setFocus();
+}
+
+void SpotMapWindow::positionAutoRoutePanel() {
+    if (!m_autoRoutePanel)
+        return;
+    m_autoRoutePanel->adjustSize();
+    int const w = qMin(m_autoRoutePanel->sizeHint().width() + 20,
+                       width() - 40);
+    m_autoRoutePanel->resize(w, m_autoRoutePanel->sizeHint().height());
+    m_autoRoutePanel->move((width() - m_autoRoutePanel->width()) / 2,
+                           height() - m_autoRoutePanel->height() - 70);
+}
+
+// [autoroute] A validated target: mode goes active, the prompt
+// closes, map clicks are dead until exit, and the mainwindow takes
+// over (executor start + main-screen lock).
+void SpotMapWindow::autoRouteChooseTarget(QString const &target) {
+    m_autoRouteArmed = false;
+    m_autoRouteActive = true;
+    m_autoRouteTarget = target;
+    if (m_autoRoutePanel)
+        m_autoRoutePanel->hide();
+    m_autoRouteBtn->setText(tr("Halt auto-route"));
+    setStickyToast(tr("Auto-route to %1 in progress...").arg(target));
+    Q_EMIT autoRouteStart(target);
+}
+
+// [autoroute] Mode over (success, failure, or cancel) -- the
+// mainwindow already showed any success/failure dialog; a cancel
+// gets its toast here. Idempotent: the button's toggled(false)
+// fires after the flags are cleared and does nothing.
+void SpotMapWindow::autoRouteEnded(bool canceled) {
+    QString const t = m_autoRouteTarget;
+    m_autoRouteActive = false;
+    m_autoRouteArmed = false;
+    m_autoRouteTarget.clear();
+    if (m_autoRoutePanel)
+        m_autoRoutePanel->hide();
+    setStickyToast(QString{});
+    {
+        QSignalBlocker const b(m_autoRouteBtn);
+        m_autoRouteBtn->setChecked(false);
+    }
+    m_autoRouteBtn->setText(tr("Auto-route"));
+    m_relaySelBtn->setEnabled(true);
+    if (canceled && !t.isEmpty())
+        showToast(tr("Auto-route to %1 canceled").arg(t));
+    requestReplot();
+}
+
+// [autoroute] ARQ session state, pushed from the mainwindow's
+// button-refresh pass: the Auto-route button is disabled during ARQ
+// mode (and ARQ mode cannot start while auto-route holds the main
+// screen locked, so the two never overlap).
+void SpotMapWindow::setArqSessionActive(bool active) {
+    m_arqBusy = active;
+    if (m_autoRouteBtn)
+        m_autoRouteBtn->setEnabled(!active);
 }
 
 void SpotMapWindow::showRelayPathToast() {
@@ -3640,6 +3827,23 @@ void SpotMapWindow::mouseReleaseEvent(QMouseEvent *event) {
             // → emit its callsign. Same nearest-within-radius
             // hit-test as hover. (Release-time since mapzoom drag.)
             if (ScreenSpot const *best = hitTest(event->position())) {
+                // [autoroute] Active mode: map clicks are disabled
+                // until exit. Armed mode: this click IS the target
+                // pick, same validity screen as the typed entry.
+                if (m_autoRouteActive) {
+                    m_maybeDrag = false;
+                    return;
+                }
+                if (m_autoRouteArmed) {
+                    QString const call = best->spot.receiverCall;
+                    if (Radio::is_routable_callsign(call))
+                        autoRouteChooseTarget(call.trimmed().toUpper());
+                    else
+                        showToast(tr("%1 is not a valid call sign")
+                                      .arg(call));
+                    m_maybeDrag = false;
+                    return;
+                }
                 // [relaysel] Selecting: clicks append hops instead of
                 // seeding the outgoing box.
                 if (m_relaySelect) {

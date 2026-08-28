@@ -35,6 +35,7 @@
 #include <QFile>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QMessageBox>
 #include <cmath>
 #include <limits>
 
@@ -82,16 +83,11 @@ QString fmtClock(qint64 ms) {
 }
 
 // callsign.py:88 — amateur-call shape, at least one letter in prefix
+// Promoted to Radio:: (one authority; the Spots Map needs the same
+// screen for auto-route target entry). These wrappers keep the
+// python-port names local call sites use.
 bool isAmateurCall(QString const &call) {
-    QString const b = Radio::base_callsign(call).toUpper();
-    static QRegularExpression const re(
-        QStringLiteral("^[A-Z0-9]{1,3}[0-9][A-Z]{1,4}$"));
-    if (b.isEmpty() || !re.match(b).hasMatch())
-        return false;
-    for (int i = 0; i < b.size() - 1; ++i)
-        if (b.at(i).isLetter())
-            return true;
-    return false;
+    return Radio::is_amateur_callsign(call);
 }
 // callsign.py:105 — hyphen suffix marks a receive-only node
 bool isReceiveOnly(QString const &call) {
@@ -99,7 +95,7 @@ bool isReceiveOnly(QString const &call) {
 }
 // callsign.py:116 is_routable
 bool isRoutable(QString const &call) {
-    return isAmateurCall(call) && !isReceiveOnly(call);
+    return Radio::is_routable_callsign(call);
 }
 // gridtarget.py:44 GRID_RE
 bool isGridSquare(QString const &s) {
@@ -962,6 +958,78 @@ void UI_Constructor::reachStop(QString const &reason) {
         m_spotMapWindow->clearAttempts();
     m_reach.active = false;
     reachRestoreSpeed();
+    // [autoroute] The mode ends with the attempt, whatever ended it.
+    if (m_autoRouteActive)
+        autoRouteReachStopped(reason);
+}
+
+// [autoroute 2026-08-28] Mode entry: lock the main screen (the flag
+// is folded into the ARQ gate predicates, polled by guiUpdate), then
+// run the executor. reachStart can REFUSE (already active is handled
+// here; TX-busy speed pin) -- a refusal ends the mode immediately as
+// a failure, never a silent hang.
+void UI_Constructor::autoRouteBegin(QString const &target) {
+    if (m_reach.active) {
+        // An API-driven attempt is already running; the operator's
+        // auto-route takes over.
+        reachStop(QStringLiteral("superseded by auto-route"));
+    }
+    m_autoRouteActive = true;
+    m_autoRouteCancel = false;
+    m_autoRouteTarget = target;
+    refreshOutgoingPlaceholder();
+    reachStart(target);
+    if (!m_reach.active) {
+        // Refused (speed pin while transmitting, bad grid resolve
+        // path, etc.) -- reachStop never fired, so close out here.
+        autoRouteReachStopped(QStringLiteral("refused"));
+    }
+}
+
+// [autoroute] Operator cancel -- the map button or the main Halt.
+void UI_Constructor::autoRouteCancel() {
+    if (!m_autoRouteActive)
+        return;
+    m_autoRouteCancel = true;
+    if (m_reach.active)
+        reachStop(QStringLiteral("stopped by operator"));
+    else
+        autoRouteReachStopped(QStringLiteral("stopped by operator"));
+}
+
+// [autoroute] Single exit point: success dialog on REACHED, failure
+// dialog otherwise, cancel toast when the operator halted. The map
+// tears down its button/status; the main-screen locks release on the
+// next gate poll once the flag is false.
+void UI_Constructor::autoRouteReachStopped(QString const &reason) {
+    bool const canceled = m_autoRouteCancel;
+    bool const success = (reason == QLatin1String("REACHED"));
+    QString const target = m_autoRouteTarget;
+    m_autoRouteActive = false;
+    m_autoRouteCancel = false;
+    m_autoRouteTarget.clear();
+    if (m_spotMapWindow)
+        m_spotMapWindow->autoRouteEnded(canceled);
+    refreshOutgoingPlaceholder();
+    if (canceled)
+        return; // the map showed the "canceled" toast
+    auto *box = new QMessageBox(this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setWindowModality(Qt::NonModal);
+    box->setStandardButtons(QMessageBox::Ok);
+    if (success) {
+        box->setIcon(QMessageBox::Information);
+        box->setWindowTitle(tr("Auto-route"));
+        box->setText(tr("Auto-route to %1 successful, enter your "
+                        "message to that station in the outgoing "
+                        "text box.").arg(target));
+    } else {
+        box->setIcon(QMessageBox::Warning);
+        box->setWindowTitle(tr("Auto-route"));
+        box->setText(tr("Auto-route failed to find a path to %1")
+                         .arg(target));
+    }
+    box->show();
 }
 
 // Speed restore with retry (audit item 14: the python's atexit fired

@@ -577,6 +577,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // TX-queue guard).
     connect(m_spotMapWindow.data(), &SpotMapWindow::qsyToOffset,
             this, &UI_Constructor::changeFreq);
+    // [autoroute 2026-08-28] The map picked a validated target; run
+    // the reaching executor with the main screen locked. The map's
+    // "Halt auto-route" click cancels the mode. NOTE: connected ONCE,
+    // here -- unlike the block below, which is duplicated wholesale
+    // further down (TODO #176's double-connect).
+    connect(m_spotMapWindow.data(), &SpotMapWindow::autoRouteStart,
+            this, &UI_Constructor::autoRouteBegin);
+    connect(m_spotMapWindow.data(), &SpotMapWindow::autoRouteHalt,
+            this, &UI_Constructor::autoRouteCancel);
     connect(m_spotMapWindow.data(), &SpotMapWindow::spotClicked, this,
             [this](QString const &call) {
                 switch (trySeedOutgoingGreeting(call)) {

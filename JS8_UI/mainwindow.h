@@ -1382,6 +1382,18 @@ class UI_Constructor : public QMainWindow {
         qint64      gateSilenceMs = 0;       // latest delivered-silent
     };
     ReachState m_reach;
+    // [autoroute 2026-08-28] Auto-route mode: the map picked a
+    // target and the reaching executor runs it with the main screen
+    // locked exactly as for ARQ mode (the flag is folded into the
+    // same gate predicates). m_autoRouteCancel marks an operator
+    // cancel so reachStop routes to the "canceled" toast instead of
+    // the failure dialog.
+    bool m_autoRouteActive = false;
+    bool m_autoRouteCancel = false;
+    QString m_autoRouteTarget;
+    void autoRouteBegin(QString const &target);
+    void autoRouteCancel();
+    void autoRouteReachStopped(QString const &reason);
     // [TODO #177] The exact relayed reply that closed an attempt as
     // REACHED; the relay-ACK composer skips this one message and
     // clears the pair. Empty otherwise.
