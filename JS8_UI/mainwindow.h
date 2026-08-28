@@ -300,8 +300,16 @@ class UI_Constructor : public QMainWindow {
     void addMessageText(QString text, bool clear = false,
                         bool selectFirstPlaceholder = false);
     void confirmThenEnqueueMessage(int timeout, int priority, QString message,
-                                   int offset, Callback c);
-    void enqueueMessage(int priority, QString message, int offset, Callback c);
+                                   int offset, Callback c,
+                                   bool autoReply = false);
+    // autoReply: the app composed this message on another station's
+    // behalf (autoreply dispatch, relay forward, ARQ protocol reply,
+    // APRS relay). Such traffic never registers as a reaching attempt
+    // on the map -- attempts are only what WE initiate (operator, red-
+    // line bug 2026-08-27: our relayed-back HEARING answer "K8IMT>
+    // WD4KAV ..." drew as our attempt).
+    void enqueueMessage(int priority, QString message, int offset, Callback c,
+                        bool autoReply = false);
     // [attemptviz] ONE parser for "is this outgoing text a call we are
     // waiting on an answer to, and along what chain". Called twice on
     // purpose: at ENQUEUE so the path appears the moment the call is
@@ -1209,6 +1217,12 @@ class UI_Constructor : public QMainWindow {
     // shape. Cleared at TX completion or once the operator edits the
     // text away from the snapshot.
     QString m_lastQueueInjectedText;
+    // True when the queue-injected text above was an auto-reply (see
+    // enqueueMessage). Lives and dies with the injection cycle: set at
+    // injection, cleared in resetMessageUI. createMessageTransmitQueue
+    // consults it so the frame-time attempt refresh stays silent for
+    // auto-replies, matching the enqueue-time skip.
+    bool m_lastQueueInjectedAutoReply = false;
     // [STATUS-BAR ARQ PROGRESS 2026-06-11 build 252]
     // Cache of the real "Last Tx: <message>" text in the leftmost
     // status-bar widget (last_tx_label), captured on the FIRST
@@ -1427,6 +1441,7 @@ class UI_Constructor : public QMainWindow {
         QString message;
         int offset;
         Callback callback;
+        bool autoReply = false; // see enqueueMessage
 
         friend bool operator<(PrioritizedMessage const &a,
                               PrioritizedMessage const &b) {

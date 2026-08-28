@@ -3134,12 +3134,21 @@ void SpotMapWindow::redraw() {
         // [#183] a traced line ends here: our callsign in the tracer
         // colour, placed EXACTLY like every other callsign label --
         // strictly to the right, vertically centered (operator: it
-        // had drawn north of a station north of me).
+        // had drawn north of a station north of me), on the same dark
+        // pill as the relay-in-progress hop labels (operator,
+        // 2026-08-27) so it stays legible over the dense centre.
         if (m_tracerHitsMe && !m_myCall.isEmpty()) {
+            QFontMetricsF const fm{p.font()};
+            qreal const tw = fm.horizontalAdvance(m_myCall);
+            QRectF const pill{center.x() + DOT_RADIUS_PX + 5.0,
+                              center.y() - 9.0, tw + 8.0, 18.0};
+            p.setBrush(QColor(16, 16, 24, 205));
+            p.drawRoundedRect(pill, 3.0, 3.0);
+            p.setBrush(Qt::NoBrush);
             p.setPen(QColor{255, 250, 225, 255});
-            p.drawText(QRectF{center.x() + DOT_RADIUS_PX + 5.0,
-                              center.y() - 9.0, 140.0, 18.0},
-                       Qt::AlignLeft | Qt::AlignVCenter, m_myCall);
+            p.drawText(pill, Qt::AlignCenter, m_myCall);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(230, 230, 240));
         }
     }
 

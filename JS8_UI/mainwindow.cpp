@@ -5067,7 +5067,7 @@ void UI_Constructor::addMessageText(QString text, bool clear,
 
 void UI_Constructor::confirmThenEnqueueMessage(int timeout, int priority,
                                                QString message, int offset,
-                                               Callback c) {
+                                               Callback c, bool autoReply) {
     SelfDestructMessageBox *m = new SelfDestructMessageBox(
         timeout, "Autoreply Confirmation Required",
         QString("A transmission is queued for autoreply:\n\n%1\n\nWould you "
@@ -5077,12 +5077,12 @@ void UI_Constructor::confirmThenEnqueueMessage(int timeout, int priority,
         QMessageBox::No, false, this);
 
     connect(m, &SelfDestructMessageBox::finished, this,
-            [this, m, priority, message, offset, c](int) {
+            [this, m, priority, message, offset, c, autoReply](int) {
                 // make sure we delete the message box later...
                 m->deleteLater();
 
                 if (m->result() == QMessageBox::Yes) {
-                    enqueueMessage(priority, message, offset, c);
+                    enqueueMessage(priority, message, offset, c, autoReply);
                 }
             });
 
@@ -5091,14 +5091,24 @@ void UI_Constructor::confirmThenEnqueueMessage(int timeout, int priority,
 }
 
 void UI_Constructor::enqueueMessage(int priority, QString message, int offset,
-                                    Callback c) {
-    m_txMessageQueue.enqueue(PrioritizedMessage{
-        DriftingDateTime::currentDateTimeUtc(), priority, message, offset, c});
+                                    Callback c, bool autoReply) {
+    m_txMessageQueue.enqueue(
+        PrioritizedMessage{DriftingDateTime::currentDateTimeUtc(), priority,
+                           message, offset, c, autoReply});
     // Show the path NOW. Waiting for frames to be built meant nothing
     // appeared until the next transmit cycle -- the operator issued a
     // call and the map stayed blank (2026-08-22: "no red line ...
     // originally zero at cmd generation time").
-    noteAttemptFromText(message, 0);
+    // Auto-replies are excluded by PROVENANCE, not text shape: our own
+    // answer relayed back along someone's path ("K8IMT>WD4KAV HEARING
+    // ...") is indistinguishable by text from an attempt we initiated
+    // (operator, 2026-08-27: "a better test, like the sender is us").
+    if (autoReply) {
+        qCWarning(mainwindow_js8) << "[ATTEMPT] auto-reply, no line:"
+                                  << message.left(40);
+    } else {
+        noteAttemptFromText(message, 0);
+    }
 }
 
 // [attemptviz] See the header. Parses an outgoing message into a relay
@@ -5222,6 +5232,7 @@ void UI_Constructor::resetMessageUI() {
     // cleared canonically; drop the stale snapshot so it can't ghost-
     // match if the operator types the same text by coincidence later.
     m_lastQueueInjectedText.clear();
+    m_lastQueueInjectedAutoReply = false;
 
     update_dynamic_property(ui->extFreeTextMsgEdit, "transmitting", false);
 
@@ -5530,8 +5541,12 @@ QString UI_Constructor::createMessageTransmitQueue(QString const &text,
 
     // [attemptviz] Frames are known now, so refresh the attempt
     // with the real transmit time -- same parser as the enqueue
-    // call, one authority for both.
-    noteAttemptFromText(text, frames.length());
+    // call, one authority for both. Auto-replies stay silent here
+    // for the same reason they do at enqueue (see enqueueMessage);
+    // the flag rides the queue-injection snapshot because only the
+    // text survives to this point.
+    if (!m_lastQueueInjectedAutoReply)
+        noteAttemptFromText(text, frames.length());
     // [#178] Keep the composed text for the query capture at TX end.
     m_lastComposedMessage = text;
 
@@ -6775,10 +6790,12 @@ void UI_Constructor::sendHeartbeatAck(QString to, int snr, QString extra) {
         m_config.heartbeat_anywhere() ? -1 : findFreeFreqOffset(500, 1000, 50);
 
     if (m_config.autoreply_confirmation()) {
-        confirmThenEnqueueMessage(90, PriorityLow + 1, message, f,
-                                  [this]() { processTxQueue(); });
+        confirmThenEnqueueMessage(
+            90, PriorityLow + 1, message, f, [this]() { processTxQueue(); },
+            /*autoReply=*/true);
     } else {
-        enqueueMessage(PriorityLow + 1, message, f, nullptr);
+        enqueueMessage(PriorityLow + 1, message, f, nullptr,
+                       /*autoReply=*/true);
         processTxQueue();
     }
 }
@@ -10904,6 +10921,7 @@ void UI_Constructor::processTxQueue() {
     // message.message) because addMessageText may have prefixed a
     // space or otherwise normalized the text.
     m_lastQueueInjectedText = ui->extFreeTextMsgEdit->toPlainText();
+    m_lastQueueInjectedAutoReply = message.autoReply;
 
     // check to see if this is a high priority message, or if we have
     // autoreply enabled, or if this is a ping and the ping button is

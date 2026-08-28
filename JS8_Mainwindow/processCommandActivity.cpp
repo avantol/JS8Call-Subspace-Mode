@@ -2175,9 +2175,11 @@ void UI_Constructor::processCommandActivity() {
         }
 
         if (m_config.autoreply_confirmation()) {
-            confirmThenEnqueueMessage(90, priority, reply, freq, callback);
+            confirmThenEnqueueMessage(90, priority, reply, freq, callback,
+                                      /*autoReply=*/true);
         } else {
-            enqueueMessage(priority, reply, freq, callback);
+            enqueueMessage(priority, reply, freq, callback,
+                           /*autoReply=*/true);
         }
     }
 }

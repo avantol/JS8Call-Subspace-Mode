@@ -356,7 +356,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             writeNoticeTextToUI(utc, text);
         },
         [this](QString const &relayMsg) {
-            enqueueMessage(PriorityHigh, relayMsg, -1, nullptr);
+            enqueueMessage(PriorityHigh, relayMsg, -1, nullptr,
+                           /*autoReply=*/true);
         },
         [this](QString const &fromCall, QString const &toCall,
                QString const &messageId) {
