@@ -1542,29 +1542,26 @@ void UI_Constructor::reachNextMove() {
         }
         // [shoutfirst, operator-approved 2026-08-28] After a silent
         // direct ask, ask the band BEFORE spending any relay --
-        // UNLESS someone has been heard ON RADIO hearing the target
-        // this session (the RAM hearing store; mqtt rows excluded).
+        // UNLESS someone in the LIVE hearing store was recently
+        // heard hearing the target, ANY source: fresh mqtt evidence
+        // is real evidence and skipping the shout then saves the 97 s
+        // and the @ALLCALL cooldown. Under JS8_NO_MQTT no mqtt edges
+        // exist at all, so the no-internet test gets the radio-only
+        // behavior with no source test needed (operator, 2026-08-28).
         // Measured basis: the internet-fed K1BRG run burned 6 relay
-        // moves (~1000 s) on stale book evidence; the radio-only run
+        // moves (~1000 s) on STALE book evidence -- its live store
+        // held no fresh hearer of the target from any source, so this
+        // rule would have shouted there too; the radio-only run
         // shouted on move 2 and nine stations answered in one cycle.
-        // The 15-minute @ALLCALL responder cooldown is priced in and
-        // accepted (operator); this session-freshness exemption is
-        // also what keeps back-to-back attempts from re-shouting.
         bool shoutFirst = false;
         if (m_reach.triedAt.contains(QStringLiteral("snr:") + T)) {
-            shoutFirst = true;
-            if (m_spotMapWindow)
-                for (auto const &h :
-                     m_spotMapWindow->hearersOf(m_reach.band, T))
-                    if (h.source != QStringLiteral("mqtt")) {
-                        shoutFirst = false; // fresh radio evidence
-                        break;
-                    }
+            shoutFirst =
+                !m_spotMapWindow ||
+                m_spotMapWindow->hearersOf(m_reach.band, T).isEmpty();
             if (shoutFirst)
                 reachLog(QStringLiteral(
-                    "    no one heard hearing %1 on radio this "
-                    "session -- asking the band before spending "
-                    "relays").arg(T));
+                    "    no recent report of anyone hearing %1 -- "
+                    "asking the band before spending relays").arg(T));
         }
         if (shoutFirst || shoutScore > bestBooked) {
             MoveCand m;
