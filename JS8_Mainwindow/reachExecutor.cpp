@@ -977,6 +977,16 @@ void UI_Constructor::autoRouteBegin(QString const &target) {
     m_autoRouteActive = true;
     m_autoRouteCancel = false;
     m_autoRouteTarget = target;
+    // [autoroute] Take the Last Tx status label over for the mode --
+    // SAME cache/valid mechanism as the ARQ progress override (build
+    // 252): the valid flag silences the per-frame writer, and ARQ
+    // and auto-route can never run concurrently. "Auto-route" until
+    // the first path goes out; reachSend then numbers each path.
+    if (!m_lastTxLabelCacheValid) {
+        m_lastTxLabelCache = last_tx_label.text();
+        m_lastTxLabelCacheValid = true;
+    }
+    last_tx_label.setText(QStringLiteral("Auto-route"));
     refreshOutgoingPlaceholder();
     reachStart(target);
     if (!m_reach.active) {
@@ -1008,6 +1018,13 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
     m_autoRouteActive = false;
     m_autoRouteCancel = false;
     m_autoRouteTarget.clear();
+    // Give the Last Tx label back (mirrors the ARQ progressEnd
+    // restore).
+    if (m_lastTxLabelCacheValid) {
+        last_tx_label.setText(m_lastTxLabelCache);
+        m_lastTxLabelCache.clear();
+        m_lastTxLabelCacheValid = false;
+    }
     if (m_spotMapWindow)
         m_spotMapWindow->autoRouteEnded(canceled);
     refreshOutgoingPlaceholder();
@@ -1719,6 +1736,10 @@ void UI_Constructor::reachExplain(void const *cand) {
 void UI_Constructor::reachSend(QString const &wire) {
     m_reach.moveNo += 1;
     m_reach.lastWire = wire;
+    // [autoroute] Path counter on the owned Last Tx label.
+    if (m_autoRouteActive)
+        last_tx_label.setText(
+            QStringLiteral("Auto-route: Path #%1").arg(m_reach.moveNo));
     m_reach.moveCapMs = DriftingDateTime::currentMSecsSinceEpoch()
                         + kMoveCapMs;   // attempt.py:320-321
     reachLog(QStringLiteral("[%1] SEND %2")

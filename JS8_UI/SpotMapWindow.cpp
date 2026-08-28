@@ -32,7 +32,9 @@
 #include <QToolButton>
 #include <QFrame>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QButtonGroup>
 #include <QToolTip>
 
@@ -3306,6 +3308,9 @@ void SpotMapWindow::positionWindowButtons() {
                 m_autoRouteBtn->move(width() - wConn - 6, yRow2 - 66);
             }
             positionAutoRoutePanel();
+            // Status line follows the legend on resize.
+            if (m_statusLine && m_statusLine->isVisible())
+                setStickyToast(m_stickyToast);
         }
     }
 }
@@ -3630,19 +3635,7 @@ void SpotMapWindow::showToast(QString const &text) {
         m_toast->setAlignment(Qt::AlignCenter);
         m_toast->hide();
         m_toastTimer.setSingleShot(true);
-        // [autoroute] A transient toast expiring reverts to the
-        // sticky status text when one is set (the "in progress..."
-        // line rides this same control) instead of hiding.
-        connect(&m_toastTimer, &QTimer::timeout, this, [this]() {
-            if (m_stickyToast.isEmpty()) {
-                m_toast->hide();
-                return;
-            }
-            m_toast->setText(m_stickyToast);
-            m_toast->adjustSize();
-            m_toast->move((width() - m_toast->width()) / 2,
-                          height() - m_toast->height() - 24);
-        });
+        connect(&m_toastTimer, &QTimer::timeout, m_toast, &QLabel::hide);
     }
     m_toast->setText(text);
     m_toast->adjustSize();
@@ -3653,18 +3646,32 @@ void SpotMapWindow::showToast(QString const &text) {
     m_toastTimer.start(2500);
 }
 
-// [autoroute] Sticky status text on the toast control: shown
-// immediately and re-shown whenever a transient toast expires, until
-// cleared with an empty string.
+// [autoroute] The mode's status line: its own label just above the
+// distance scale legend, shown until cleared with an empty string.
+// Transient toasts are a separate control and keep their position
+// and 2.5 s timing (operator, 2026-08-28).
 void SpotMapWindow::setStickyToast(QString const &text) {
     m_stickyToast = text;
     if (text.isEmpty()) {
-        if (m_toast && !m_toastTimer.isActive())
-            m_toast->hide();
+        if (m_statusLine)
+            m_statusLine->hide();
         return;
     }
-    showToast(text);
-    m_toastTimer.stop(); // no expiry: sticky until cleared
+    if (!m_statusLine) {
+        m_statusLine = new QLabel(this);
+        m_statusLine->setStyleSheet(
+            QStringLiteral("QLabel { background-color: rgba(30,30,30,220);"
+                           " color: white; border-radius: 6px;"
+                           " padding: 4px 12px; font-weight: bold; }"));
+        m_statusLine->setAlignment(Qt::AlignCenter);
+    }
+    m_statusLine->setText(text);
+    m_statusLine->adjustSize();
+    m_statusLine->move((width() - m_statusLine->width()) / 2,
+                       height() - LEGEND_STRIP_PX
+                           - m_statusLine->height() - 4);
+    m_statusLine->show();
+    m_statusLine->raise();
 }
 
 // [autoroute] The target prompt: a small panel low on the map with a
@@ -3687,21 +3694,41 @@ void SpotMapWindow::autoRouteShowPanel() {
         lay->addWidget(lbl);
         m_autoRouteEdit = new QLineEdit(m_autoRoutePanel);
         lay->addWidget(m_autoRouteEdit);
+        auto *btnRow = new QHBoxLayout;
+        m_autoRouteStartBtn =
+            new QPushButton(tr("Start"), m_autoRoutePanel);
+        m_autoRouteStartBtn->setEnabled(false);
+        auto *cancelBtn =
+            new QPushButton(tr("Cancel"), m_autoRoutePanel);
+        btnRow->addWidget(m_autoRouteStartBtn);
+        btnRow->addWidget(cancelBtn);
+        lay->addLayout(btnRow);
+        // Valid = a real amateur callsign (no SWL/freebander fakes,
+        // no hyphen nodes) or a grid; Start enables only then, and
+        // Enter is a synonym for Start.
+        auto const isValidTarget = [](QString const &t) {
+            return Radio::is_routable_callsign(t) ||
+                   Maidenhead::valid(t);
+        };
+        connect(m_autoRouteEdit, &QLineEdit::textChanged, this,
+                [this, isValidTarget](QString const &s) {
+                    m_autoRouteStartBtn->setEnabled(
+                        isValidTarget(s.trimmed().toUpper()));
+                });
+        connect(m_autoRouteStartBtn, &QPushButton::clicked, this,
+                [this]() {
+                    autoRouteChooseTarget(
+                        m_autoRouteEdit->text().trimmed().toUpper());
+                });
         connect(m_autoRouteEdit, &QLineEdit::returnPressed, this,
                 [this]() {
-                    QString const t =
-                        m_autoRouteEdit->text().trimmed().toUpper();
-                    if (t.isEmpty())
-                        return;
-                    // Valid = a real amateur callsign (no SWL/
-                    // freebander fakes, no hyphen nodes) or a grid.
-                    if (Radio::is_routable_callsign(t) ||
-                        Maidenhead::valid(t))
-                        autoRouteChooseTarget(t);
-                    else
-                        showToast(tr("%1 is not a valid call sign "
-                                     "or grid").arg(t));
+                    if (m_autoRouteStartBtn->isEnabled())
+                        m_autoRouteStartBtn->click();
                 });
+        connect(cancelBtn, &QPushButton::clicked, this, [this]() {
+            // Same teardown as unchecking the button while armed.
+            m_autoRouteBtn->setChecked(false);
+        });
     }
     m_autoRouteEdit->clear();
     positionAutoRoutePanel();
@@ -3892,7 +3919,11 @@ void SpotMapWindow::changeEvent(QEvent *event) {
         positionWindowButtons();
     // Hint toast whenever the map window gains focus (Andy
     // 2026-07-16) — teaches the click-to-copy affordance in place.
-    if (event->type() == QEvent::ActivationChange && isActiveWindow()) {
+    if (event->type() == QEvent::ActivationChange && isActiveWindow() &&
+        // [autoroute] No hint toast during the mode -- the status
+        // line and prompt already say what matters (operator,
+        // 2026-08-28).
+        !m_autoRouteActive && !m_autoRouteArmed) {
         // [relaysel] While selecting relays, the activation hint
         // teaches THAT gesture, not click-to-compose (operator,
         // 2026-08-14).

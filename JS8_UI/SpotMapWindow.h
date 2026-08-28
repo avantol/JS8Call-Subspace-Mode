@@ -418,6 +418,11 @@ class SpotMapWindow final : public QWidget {
     QString m_autoRouteTarget;
     class QFrame *m_autoRoutePanel = nullptr;   // the target prompt
     class QLineEdit *m_autoRouteEdit = nullptr;
+    class QPushButton *m_autoRouteStartBtn = nullptr;
+    // The mode's status line: its own label just above the distance
+    // scale legend (operator, 2026-08-28) -- transient toasts keep
+    // their own position and timing, untouched.
+    class QLabel *m_statusLine = nullptr;
     bool m_arqBusy = false;   // pushed by the mainwindow; gates the button
     // Sticky toast text: while non-empty, the toast label reverts to
     // this after any transient toast expires instead of hiding --
