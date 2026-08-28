@@ -694,6 +694,17 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
     // (routable, transmit-alive) join the walk and may anchor chains
     // -- the KS1DMD case: near us, hears us at -13, invisible to a
     // target-centric pool 1500 km away.
+    // [operator's trick, 2026-08-28 -- NOT WIRED UP YET] If we ever
+    // need a LIVE survey of who currently hears us (this set is
+    // built from stored evidence only), transmit
+    //     "WM8Q: @ALLCALL QUERY CALL WM8Q?"
+    // -- the self-query. Every station that hears us answers
+    // "YES <snr> (NOW)", and unlike an HB request it works on
+    // stations that have heartbeats disabled. One 2-frame broadcast
+    // refreshes the whole hears-us picture; the existing QUERY CALL
+    // harvest (#161/#178) already binds the answers into the hearing
+    // store, so wiring this up is only a matter of choosing when the
+    // executor spends the airtime.
     g_book.walk = g_book.pool;
     g_book.firstHops = QSet<QString>(g_book.pool.begin(),
                                      g_book.pool.end());

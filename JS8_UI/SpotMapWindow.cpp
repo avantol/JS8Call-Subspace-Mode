@@ -2956,7 +2956,10 @@ void SpotMapWindow::redraw() {
         QRectF bar{(w - barW) / 2.0,
                    static_cast<qreal>(h - LEGEND_STRIP_PX + 8), barW, 10};
         {
-            qreal const yLine = h - LEGEND_STRIP_PX - 10.0;
+            // [operator 2026-08-28] Bar and its distance legend sit
+            // 2/3 of the legend font height lower than before.
+            qreal const yLine = h - LEGEND_STRIP_PX - 10.0
+                + QFontMetricsF{p.font()}.height() * 2.0 / 3.0;
             p.setPen(QPen{QColor(190, 190, 210), 1});
             p.drawLine(QPointF{bar.left(), yLine},
                        QPointF{bar.right(), yLine});
@@ -3261,6 +3264,7 @@ void SpotMapWindow::positionWindowButtons() {
              m_pskrBtn ? m_pskrBtn->sizeHint().width() : 0});
         m_viewMineBtn->setFixedSize(wBtn, 20);
         m_viewAllBtn->setFixedSize(wBtn, 20);
+        m_leftColW = wBtn; // [autoroute] panel centering reference
         // One font height (~16 px) above the old position so the
         // bottom-center toast can't overlap the stack (operator,
         // 2026-08-14).
@@ -3692,11 +3696,15 @@ void SpotMapWindow::setStickyToast(QString const &text) {
 void SpotMapWindow::autoRouteShowPanel() {
     if (!m_autoRoutePanel) {
         m_autoRoutePanel = new QFrame(this);
+        // [operator 2026-08-28] Same dark gray as the unchecked map
+        // buttons; same font family, normal weight (the button font
+        // IS that, so adopt it wholesale).
         m_autoRoutePanel->setStyleSheet(QStringLiteral(
-            "QFrame { background-color: rgba(30,30,30,235);"
+            "QFrame { background-color: rgba(40,40,55,200);"
             " border-radius: 6px; }"
-            "QLabel { color: white; font-weight: bold;"
+            "QLabel { color: rgb(210,210,225);"
             " background: transparent; }"));
+        m_autoRoutePanel->setFont(m_autoRouteBtn->font());
         auto *lay = new QVBoxLayout(m_autoRoutePanel);
         lay->setContentsMargins(14, 10, 14, 10);
         auto *lbl = new QLabel(
@@ -3757,14 +3765,16 @@ void SpotMapWindow::positionAutoRoutePanel() {
     if (!m_autoRoutePanel)
         return;
     m_autoRoutePanel->adjustSize();
-    // Centered in the space LEFT of the right-hand button column --
-    // equal air on both sides relative to the map buttons (operator,
-    // 2026-08-28).
-    int const avail = width() - m_btnColW - 12;
+    // [operator 2026-08-28, corrected] Equal air on BOTH sides:
+    // (right edge of the LEFT button stack) .. panel .. (left edge
+    // of the RIGHT button stack).
+    int const leftEdge = 6 + m_leftColW;
+    int const rightEdge = width() - m_btnColW - 6;
+    int const avail = rightEdge - leftEdge;
     int const w = qMin(m_autoRoutePanel->sizeHint().width() + 20,
                        avail - 12);
     m_autoRoutePanel->resize(w, m_autoRoutePanel->sizeHint().height());
-    m_autoRoutePanel->move(qMax(6, (avail - w) / 2),
+    m_autoRoutePanel->move(leftEdge + qMax(6, (avail - w) / 2),
                            height() - m_autoRoutePanel->height() - 70);
 }
 
