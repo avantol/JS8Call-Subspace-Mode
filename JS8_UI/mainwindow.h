@@ -1380,6 +1380,11 @@ class UI_Constructor : public QMainWindow {
         QStringList askedHearing, askedGrid;
         bool        relaysBlocked = false;  // freshgate: RESTRICTED
         qint64      gateSilenceMs = 0;       // latest delivered-silent
+        // Proven deliveries that went unanswered THIS attempt
+        // (attempt-scope, reset by reachStart's fresh struct only).
+        // At >= 2 -- the freshgate's own standard -- budget
+        // extensions stop buying re-tests of a settled question.
+        int         silentDeliveries = 0;
     };
     ReachState m_reach;
     // [autoroute 2026-08-28] Auto-route mode: the map picked a

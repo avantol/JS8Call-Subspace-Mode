@@ -1674,8 +1674,19 @@ void UI_Constructor::reachNextMove() {
             bool const fresh =
                 bookEdge(lastHop, T).whenMs >= m_reach.startMs ||
                 bookEdge(T, lastHop).whenMs >= m_reach.startMs;
-            if (!fresh && freshUntriedRemains)
-                continue; // a fresher option is still on the table
+            // [silentcut, operator-approved 2026-08-28] Two proven
+            // deliveries unanswered settles both questions -- relays
+            // CAN deliver, the target does NOT answer -- so an
+            // untried relay no longer justifies an extension (WD4KAV
+            // ran to move 14+ re-testing a settled question). The
+            // >= 2 threshold is the freshgate's own standard, reused
+            // -- one authority, no new constant. Fresh-learned
+            // routes still extend: mid-attempt hearing evidence
+            // means the target transmitted, which reopens the
+            // answer question.
+            if (!fresh && (freshUntriedRemains ||
+                           m_reach.silentDeliveries >= 2))
+                continue;
             reachLog(fresh
                          ? QStringLiteral(
                                "    budget spent, but a route "
@@ -1847,7 +1858,13 @@ void UI_Constructor::reachNextMove() {
                       .arg(m_reach.target));
         return;
     }
-    reachStop(overBudget
+    reachStop(overBudget && m_reach.silentDeliveries >= 2
+                  ? QStringLiteral("NOT REACHED -- delivery proven "
+                                   "%1 times with no answer; the "
+                                   "target is not answering, further "
+                                   "relays add nothing")
+                        .arg(m_reach.silentDeliveries)
+              : overBudget
                   ? QStringLiteral("NOT REACHED -- move budget spent "
                                    "and no fresh route remains; busy "
                                    "or disabled, retry from the top "
@@ -2362,6 +2379,8 @@ void UI_Constructor::reachTick() {
         m_spotMapWindow->queueReachEvent(
             {m_reach.band, m_reach.target, QStringLiteral("ans"),
              QStringLiteral("delivered"), 0, false});
+        // [silentcut] attempt-scope tally; see the extension gate.
+        m_reach.silentDeliveries += 1;
     }
     reachLog(QStringLiteral("    VERDICT +%1s: %2 -- next move")
                  .arg(m_reach.txEndMs
