@@ -3728,8 +3728,14 @@ void SpotMapWindow::autoRouteShowPanel() {
         lay->addLayout(btnRow);
         // Valid = a real amateur callsign (no SWL/freebander fakes,
         // no hyphen nodes) or a grid; Start enables only then, and
-        // Enter is a synonym for Start.
-        auto const isValidTarget = [](QString const &t) {
+        // Enter is a synonym for Start. Our OWN callsign is not a
+        // valid target -- IDENTICAL full-call match, not base call
+        // (operator, 2026-08-28: WM8Q/P stays targetable when we are
+        // WM8Q).
+        auto const isValidTarget = [this](QString const &t) {
+            if (t.compare(m_myCall.trimmed(),
+                          Qt::CaseInsensitive) == 0)
+                return false;
             return Radio::is_routable_callsign(t) ||
                    Maidenhead::valid(t);
         };
@@ -3892,9 +3898,14 @@ void SpotMapWindow::mouseReleaseEvent(QMouseEvent *event) {
                     return;
                 }
                 if (m_autoRouteArmed) {
-                    QString const call = best->spot.receiverCall;
-                    if (Radio::is_routable_callsign(call))
-                        autoRouteChooseTarget(call.trimmed().toUpper());
+                    QString const call =
+                        best->spot.receiverCall.trimmed().toUpper();
+                    // Own full callsign excluded, identical match
+                    // (operator, 2026-08-28).
+                    if (Radio::is_routable_callsign(call) &&
+                        call.compare(m_myCall.trimmed(),
+                                     Qt::CaseInsensitive) != 0)
+                        autoRouteChooseTarget(call);
                     else
                         showToast(tr("%1 is not a valid call sign")
                                       .arg(call));

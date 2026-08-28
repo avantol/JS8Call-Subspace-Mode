@@ -2750,9 +2750,12 @@ void UI_Constructor::drainEarlyTextFrames(int submode, int offset,
 bool UI_Constructor::canChangeSpeedNow() const {
     bool const arqRxBusy =
         m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+    // [autoroute] The executor pins the speed for the whole mode; an
+    // operator change mid-route would break every packed frame count
+    // (operator, 2026-08-28: lock speed buttons AND menu).
     return !m_transmitting && !m_tune && m_txFrameCount == 0 &&
            m_txFrameQueue.isEmpty() && !m_nativeBinaryTxActive &&
-           !arqRxBusy;
+           !arqRxBusy && !m_autoRouteActive;
 }
 
 bool UI_Constructor::hasClosedExistingMessageBuffer(int offset) {

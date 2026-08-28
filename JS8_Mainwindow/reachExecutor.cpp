@@ -1369,6 +1369,31 @@ void UI_Constructor::reachNextMove() {
                   return a.score > b.score;
               });
 
+    // [fulltable, operator 2026-08-28: "we need to print everything
+    // so you can analyze"] EVERY scored candidate, one line each,
+    // rank order -- a station that qualifies but never cracks the
+    // printed top three (KT5DC, WB5BNV attempt) is otherwise
+    // invisible, and a missed opportunity cannot be seen.
+    reachLog(QStringLiteral("    ranking, all %1 candidates:")
+                 .arg(ranked.size()));
+    for (int i = 0; i < ranked.size(); ++i) {
+        auto const &x = ranked.at(i);
+        QString route = x.mv.kind;
+        if (x.mv.kind == QLatin1String("relay"))
+            route = (x.mv.chain.isEmpty()
+                         ? x.mv.via
+                         : x.mv.chain.join(QLatin1Char('>')))
+                    + QLatin1Char('>') + T;
+        else if (!x.mv.via.isEmpty())
+            route += QLatin1Char(' ') + x.mv.via;
+        reachLog(QStringLiteral("      %1. %2  %3/1000s  p=%4 cost=%5s")
+                     .arg(i + 1, 2)
+                     .arg(route)
+                     .arg(x.score * 1000.0, 0, 'f', 4)
+                     .arg(x.mv.p, 0, 'f', 3)
+                     .arg(x.mv.cost, 0, 'f', 0));
+    }
+
     // expected_time (decide.py:705-712)
     auto const expectedTime = [](QVector<Ranked> const &r) {
         double total = 0.0, alive = 1.0;
