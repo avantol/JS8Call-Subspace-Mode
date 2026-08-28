@@ -1032,7 +1032,12 @@ void UI_Constructor::reachNextMove() {
     m_reach.txEndMs = 0;
     m_reach.deadlineMs = 0;
     m_reach.moveCapMs = 0;
+    // Every per-move observation field resets together, chain
+    // included -- a field missed here leaks one move's observation
+    // into the next move's verdict (happened 2026-08-27, AB9MK
+    // attempt, with the since-deleted return-start timestamp).
     m_reach.fwdStartedMs = m_reach.fwdDoneMs = m_reach.ansStartedMs = 0;
+    m_reach.chain.clear();
     m_reach.watchers.clear();
 
     // ---- forced first move (attempt.py:239-246) --------------------
@@ -1633,8 +1638,9 @@ void UI_Constructor::reachExplain(void const *cand) {
                  .arg(escalate, 0, 'f', 1)
                  .arg(abandon, 0, 'f', 1)
                  .arg(m.kind == QLatin1String("relay")
-                          ? QStringLiteral("   (the +58s forward is "
-                                           "the checkpoint)")
+                          ? QStringLiteral("   (via keying in the "
+                                           "first slot is the "
+                                           "checkpoint)")
                           : QString{}));
     for (auto const &f : m.factors)
         reachLog(f);
@@ -1670,37 +1676,34 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
     QString const me = m_config.my_callsign().trimmed().toUpper();
     QString const T = m_reach.target;
 
-    if (m_reach.kind == QLatin1String("relay") &&
-        m_reach.fwdDoneMs != 0 && m_reach.retFwdMs == 0 &&
-        now - m_reach.fwdDoneMs > 5000 &&
-        up.startsWith(m_reach.via + QLatin1String(":"))) {
-        // the via STARTING TX again after its forward = the answer
-        // coming back; give it the PACKED frame count of the exact
-        // expected re-forward ("VIA: ME> SNR -NN *DE* TARGET")
-        m_reach.retFwdMs = now;
-        int const retF = reachReplyFrames(
-            m_reach.via,
-            me + QStringLiteral("> SNR -15 *DE* ") + T);
-        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, retF));
-        reachLog(QStringLiteral("    return forward STARTED +%1s -- "
-                                "deadline extended")
-                     .arg((now - m_reach.txEndMs) / 1000));
-        reachArmTimer();
-    }
+    // [operator's compromise, 2026-08-27 AB9MK attempt] ONE checkpoint
+    // for a relay move: if the via keys AT ALL -- any addressee --
+    // starting in the first expected slot, go straight to the move's
+    // max wait (the 16-period abandon time). The staged windows that
+    // lived here (addressee matching, forward-complete arithmetic, a
+    // return-start detector) saved 1-2 slots of wait at best and
+    // misread WO7I's heartbeat ACK to a third station as "the answer
+    // coming back". A false fire now costs only the wait to the cap;
+    // it can no longer produce a wrong verdict or a wrong habit entry
+    // (both habit writes key on the checksum-proven forward assembly).
+    // The via is identified by its callsign in frame 1, NOT by offset:
+    // measured 2026-08-28 00:48, WO7I forwarded at 1104 Hz after being
+    // heard only at 754/803 Hz (heartbeat sub-band) -- relays answer
+    // on their own chosen offset. "<....>" is the packed placeholder a
+    // slash callsign leaves in frame 1. No slot arithmetic is needed:
+    // this handler only runs while the move is alive, and the initial
+    // one-slot deadline expires before any slot-2 frame can decode.
     if (m_reach.kind == QLatin1String("relay") &&
         m_reach.fwdStartedMs == 0 &&
-        up.startsWith(m_reach.via + QLatin1String(":"))) {
+        (up.startsWith(m_reach.via + QLatin1String(":")) ||
+         up.startsWith(QStringLiteral("<....>:")))) {
         m_reach.fwdStartedMs = now;
-        g_relayOutcomes[m_reach.band].append(
-            {now, true, m_reach.via});
-        m_spotMapWindow->queueReachEvent(
-            {m_reach.band, m_reach.via, QStringLiteral("fwd"),
-             QString{}, now / 1000, true});
-        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 5));
-        reachLog(QStringLiteral("    forward STARTED +%1s -- deadline "
-                                "extended")
+        qint64 const maxWait =
+            m_reach.txEndMs + 16 * JS8::Submode::periodMS(m_nSubMode);
+        m_reach.deadlineMs = qMax(m_reach.deadlineMs, maxWait);
+        reachLog(QStringLiteral("    %1 keyed in the first slot +%2s "
+                                "-- waiting to the move cap")
+                     .arg(m_reach.via)
                      .arg((now - m_reach.txEndMs) / 1000));
         reachArmTimer();
     }
@@ -1865,60 +1868,21 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         from == m_reach.via &&
         line.toUpper().contains(QStringLiteral("*DE* ") + me)) {
         m_reach.fwdDoneMs = now;
-        // [returncheck 2026-08-27, operator's rule verbatim]: "if we
-        // don't hear the first ('from') frame by the end of the 3rd
-        // frame after the period boundary that immediately follows
-        // [the] replying station's end of tx, then we assume no
-        // message is coming." The target starts tx at the boundary
-        // after the forward's end of tx (deterministic, every
-        // measured reply); its answer runs the PACKED frame count
-        // ("TARGET: VIA> ME SNR -NN", from the varicode packer); the
-        // boundary after its end of tx opens a 3-frame window for
-        // the via's return to start. That one window covers BOTH a
-        // late-starting target (+1/+2 slots shifts the return within
-        // it -- KQ4DNM's +2 lands on its last frame) and via queue
-        // displacement, and it sits at the stage we can HEAR.
-        QString const me_ =
-            m_config.my_callsign().trimmed().toUpper();
-        // Chain-aware ([dijkstra]): after chain[0]'s forward, each
-        // middle hop re-forwards (packed frames each, starting at the
-        // next boundary), the target answers the LAST hop, and the
-        // answer retraces the middle hops before chain[0]'s return --
-        // whose start gets the operator's 3-frame window. Every count
-        // from the packer on the composed message for that leg.
-        int middle = 0;
-        for (int i = 1; i < m_reach.chain.size(); ++i) {
-            QStringList tail = m_reach.chain.mid(i + 1);
-            tail << m_reach.target;
-            middle += reachReplyFrames(
-                m_reach.chain[i],
-                tail.join(QLatin1Char('>'))
-                    + QStringLiteral(" SNR? *DE* ") + me_);
-        }
-        QString const lastHop = m_reach.chain.isEmpty()
-                                    ? m_reach.via
-                                    : m_reach.chain.last();
-        int const ansF = reachReplyFrames(
-            m_reach.target,
-            lastHop + QStringLiteral("> ") + me_
-                + QStringLiteral(" SNR -15"));
-        int innerRet = 0;
-        for (int i = m_reach.chain.size() - 1; i >= 1; --i)
-            innerRet += reachReplyFrames(
-                m_reach.chain[i],
-                me_ + QStringLiteral("> SNR -15 *DE* ")
-                    + m_reach.target);
-        int const window = middle + ansF + innerRet + 3;
-        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, window));
-        reachLog(QStringLiteral("    forward complete %1; %2-frame "
-                                "answer via %3 hop(s); %4's return "
-                                "must start within 3 frames after -- "
-                                "reject at %5 slots")
-                     .arg(off, QString::number(ansF))
-                     .arg(m_reach.chain.size())
-                     .arg(m_reach.via)
-                     .arg(window));
+        // Checksum-proven forward: THE fact both habit writes key on
+        // (the delivered-silent negative at verdict time uses this
+        // same timestamp). The staged return-leg windows that were
+        // computed here (the 2026-08-27 verbatim 3-frame rule, chain
+        // legs from packed counts) were replaced by the operator's
+        // one-checkpoint compromise -- the deadline already sits at
+        // the move cap since the via keyed.
+        g_relayOutcomes[m_reach.band].append({now, true, m_reach.via});
+        m_spotMapWindow->queueReachEvent(
+            {m_reach.band, m_reach.via, QStringLiteral("fwd"),
+             QString{}, now / 1000, true});
+        reachLog(QStringLiteral("    forward complete %1 (+%2s, "
+                                "checksum-proven)")
+                     .arg(off)
+                     .arg((now - m_reach.txEndMs) / 1000));
         reachArmTimer();
         return;
     }
@@ -2046,26 +2010,28 @@ void UI_Constructor::reachTick() {
                      .arg(m_reach.watchers.size() - done));
     }
     QString state;
+    // [operator-caught session 2026-08-27, found during the detector
+    // audit] The durable write below ran on EVERY verdict -- missing
+    // braces -- journaling a false did-not-forward mark for vias that
+    // HAD forwarded, and empty-station rows for direct moves.
     if (m_reach.kind == QLatin1String("relay") &&
-        m_reach.fwdStartedMs == 0)
+        m_reach.fwdStartedMs == 0) {
         g_relayOutcomes[m_reach.band].append(
             {DriftingDateTime::currentMSecsSinceEpoch(), false,
              m_reach.via});
         m_spotMapWindow->queueReachEvent(
             {m_reach.band, m_reach.via, QStringLiteral("fwd"),
              QString{}, 0, false});
+    }
     if (capped)
         state = QStringLiteral("move hard cap (330s) reached");
     else if (m_reach.kind == QLatin1String("relay") &&
              m_reach.fwdStartedMs == 0)
         state = QStringLiteral("relay silent -- never keyed");
-    else if (m_reach.retFwdMs != 0)
-        state = QStringLiteral("return forward started but never "
-                               "assembled -- frames lost");
     else if (m_reach.fwdDoneMs != 0)
-        state = QStringLiteral("forwarded, but no return started -- "
-                               "target silent, or the relaying "
-                               "station has nothing to send");
+        state = QStringLiteral("forward delivered; nothing assembled "
+                               "back -- target silent, or the answer "
+                               "was lost");
     else if (m_reach.ansStartedMs != 0) {
         bool allDone = !m_reach.watchers.isEmpty();
         for (auto const &w : m_reach.watchers)
@@ -2076,7 +2042,12 @@ void UI_Constructor::reachTick() {
                              "target itself never answered")
             : QStringLiteral("answer started but never assembled -- "
                              "frames lost");
-    } else if (m_reach.kind == QLatin1String("shout"))
+    } else if (m_reach.kind == QLatin1String("relay"))
+        // past "relay silent" (it keyed) and past fwdDone (nothing
+        // assembled): the one-checkpoint wait ran dry.
+        state = QStringLiteral("the relaying station keyed, but no "
+                               "forward of ours assembled");
+    else if (m_reach.kind == QLatin1String("shout"))
         state = QStringLiteral("the whole group is busy or disabled");
     else
         state = (m_reach.kind == QLatin1String("relay")

@@ -3496,8 +3496,16 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                   .arg(miles ? tr("mi") : tr("km"));
         // [BUILD 340] Country, when not our own (topic DXCC compare);
         // on the distance line since 2026-08-27 (compact hover).
+        // The string form here is "Name; XX" (prefix stripped at the
+        // lookup). NA is the home continent -- stating it adds
+        // nothing, so "Canada; NA" shows as just "Canada" (operator,
+        // 2026-08-27); other continents keep the suffix.
         if (!best->spot.country.isEmpty()) {
-            tip += QStringLiteral(" · ") + best->spot.country;
+            QString country = best->spot.country;
+            if (country.endsWith(QStringLiteral("; NA"))) {
+                country.chop(4);
+            }
+            tip += QStringLiteral(" · ") + country;
         }
         // [hovertime 2026-08-22, operator: "cut the hover info timeout
         // to 50%"] Qt's default when no time is given is

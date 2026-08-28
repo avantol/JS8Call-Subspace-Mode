@@ -1363,9 +1363,8 @@ class UI_Constructor : public QMainWindow {
         qint64      startMs = 0;
         qint64      txEndMs = 0;    // signal end (stopTx, per spec)
         qint64      deadlineMs = 0;
-        qint64      fwdStartedMs = 0;
-        qint64      fwdDoneMs = 0;
-        qint64      retFwdMs = 0;   // return forward (answer inbound)
+        qint64      fwdStartedMs = 0;  // via keyed in the first slot
+        qint64      fwdDoneMs = 0;     // forward assembled (checksum)
         qint64      ansStartedMs = 0;
         QMap<int, ReachWatcher> watchers;   // offset -> watcher
         int         savedSubmode = -1;      // speed restored on stop
