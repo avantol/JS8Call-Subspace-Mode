@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"Tranya\" (v4.1.0.411 hoverlines) by WM8Q"}
+    return QString{"%1 \"Tranya\" (v4.1.0.412 hovercompact) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

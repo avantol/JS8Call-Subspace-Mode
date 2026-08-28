@@ -3453,39 +3453,32 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         // distance] the dated transmit claim.
         // [heardproof, operator: absence of "hears me" and "last
         // heard" says it -- no filler text]
-        // [operator 2026-08-27: own line, not spliced before the
-        // distance -- so every fact below the callsign gets a line]
+        // [operator 2026-08-27, compact hover] one fact per line,
+        // short labels: "RX:" = their copy of my signal, "TX:" = the
+        // dated transmit claim; grid capped at 6 chars; distance and
+        // country/continent share the last line.
         QString txPart;
         if (best->spot.lastTxWhen.isValid()) {
             qint64 const txAge = best->spot.lastTxWhen.secsTo(
                 DriftingDateTime::currentDateTimeUtc());
             txPart = (txAge >= 3600
-                ? tr("last heard %1 hr ago").arg(txAge / 3600)
-                : tr("last heard %1 min ago").arg(txAge / 60))
+                ? tr("TX: %1 hr ago").arg(txAge / 3600)
+                : tr("TX: %1 min ago").arg(txAge / 60))
                 + QStringLiteral("\n");
         }
-        if (best->spot.rxOnly) {
-            tip = tr("%1 (%2)\n%3%4 %5")
-                      .arg(best->spot.receiverCall,
-                           best->spot.receiverGrid, txPart)
-                      .arg(qRound(dist))
-                      .arg(miles ? tr("mi") : tr("km"));
-        } else {
-            // [snrwho] A dB value is shown ONLY when it is a report
-            // of MY signal; -99 is the no-report sentinel, a real
-            // 0 dB report still shows (operator 2026-08-15). All
-            // view: third-party PSKR SNRs never display — only the
-            // hearing store's reported-to-me value qualifies. My
-            // view: the spot's snr IS their copy of me (sentinel
-            // possible on position-only on-air spots).
+        // [snrwho] A dB value is shown ONLY when it is a report
+        // of MY signal; -99 is the no-report sentinel, a real
+        // 0 dB report still shows (operator 2026-08-15). All
+        // view: third-party PSKR SNRs never display — only the
+        // hearing store's reported-to-me value qualifies. My
+        // view: the spot's snr IS their copy of me (sentinel
+        // possible on position-only on-air spots). rxOnly spots
+        // have no report by construction.
+        QString snrPart;
+        if (!best->spot.rxOnly) {
             auto const rep = reportedToMe(best->spot);
-            // [maptruth, operator wording 2026-08-27]: the report
-            // shows ITS OWN age in parentheses; the trailing clause
-            // is the station's newest evidence of any kind, labelled
-            // "updated" so the two cannot be read as one claim.
-            QString snrPart;
             if (rep.snr > -99) {
-                snrPart = tr("hears me at %1 dB").arg(rep.snr);
+                snrPart = tr("RX: %1 dB").arg(rep.snr);
                 if (rep.when.isValid()) {
                     qint64 const rAge = rep.when.secsTo(
                         DriftingDateTime::currentDateTimeUtc());
@@ -3495,17 +3488,16 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 }
                 snrPart += QStringLiteral("\n");
             }
-            tip = tr("%1 (%2)\n%3%4%5 %6")
-                      .arg(best->spot.receiverCall,
-                           best->spot.receiverGrid, snrPart, txPart)
-                      .arg(qRound(dist))
-                      .arg(miles ? tr("mi") : tr("km"));
         }
-        // [BUILD 340] audio-offset line removed 2026-08-27 (operator:
-        // not important). freqHz itself stays stored and dumped.
-        // [BUILD 340] Country, when not our own (topic DXCC compare).
+        tip = tr("%1 (%2)\n%3%4%5 %6")
+                  .arg(best->spot.receiverCall,
+                       best->spot.receiverGrid.left(6), snrPart, txPart)
+                  .arg(qRound(dist))
+                  .arg(miles ? tr("mi") : tr("km"));
+        // [BUILD 340] Country, when not our own (topic DXCC compare);
+        // on the distance line since 2026-08-27 (compact hover).
         if (!best->spot.country.isEmpty()) {
-            tip += QStringLiteral("\n") + best->spot.country;
+            tip += QStringLiteral(" · ") + best->spot.country;
         }
         // [hovertime 2026-08-22, operator: "cut the hover info timeout
         // to 50%"] Qt's default when no time is given is
