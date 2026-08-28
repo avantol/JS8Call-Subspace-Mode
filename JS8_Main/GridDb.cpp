@@ -23,6 +23,18 @@ constexpr qint64 kPruneEverySecs = 60 * 60;
 qint64 nowSecs() {
     return QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
 }
+
+// [nointernet, operator 2026-08-28] JS8_NO_MQTT simulates no
+// internet (MqttClient.cpp:53 disables the connection); with it set,
+// the LOADS also exclude everything internet-derived, so the
+// simulation is "internet never existed", not "internet just went
+// down": grids/edges rows tagged source='mqtt', and station rows
+// with no radio evidence at all (radio_when = 0). Writes are
+// untouched -- the stored data survives for normal sessions.
+bool noInternetSim() {
+    static bool const on = qEnvironmentVariableIsSet("JS8_NO_MQTT");
+    return on;
+}
 } // namespace
 
 GridDb::~GridDb() {
@@ -242,7 +254,11 @@ QHash<QString, QString> GridDb::loadAll() const {
     if (!m_db.isOpen())
         return out;
     QSqlQuery q{m_db};
-    if (!q.exec(QStringLiteral("SELECT call, grid FROM grids"))) {
+    if (!q.exec(noInternetSim()
+                    ? QStringLiteral(
+                          "SELECT call, grid FROM grids WHERE"
+                          " COALESCE(source,'') <> 'mqtt'")
+                    : QStringLiteral("SELECT call, grid FROM grids"))) {
         qCWarning(griddb_js8)
             << "[GRIDDB] load FAILED:" << q.lastError().text();
         return out;
@@ -587,9 +603,13 @@ GridDb::loadEdges(qint64 notOlderThanSecs) const {
         return out;
     QSqlQuery q{m_db};
     q.prepare(QStringLiteral(
-        "SELECT band, hearer, heard, when_s, snr, hearer_grid,"
-        " heard_grid, source FROM edges WHERE when_s >= ?"
-        " ORDER BY when_s"));
+                  "SELECT band, hearer, heard, when_s, snr,"
+                  " hearer_grid, heard_grid, source FROM edges"
+                  " WHERE when_s >= ?%1 ORDER BY when_s")
+                  .arg(noInternetSim()
+                           ? QStringLiteral(
+                                 " AND COALESCE(source,'') <> 'mqtt'")
+                           : QString{}));
     q.addBindValue(nowSecs() - notOlderThanSecs);
     if (!q.exec()) {
         qCWarning(griddb_js8)
@@ -620,9 +640,13 @@ GridDb::loadStations(qint64 notOlderThanSecs) const {
         return out;
     QSqlQuery q{m_db};
     q.prepare(QStringLiteral(
-        "SELECT band, call, grid, country, freq_hz, any_when,"
-        " radio_when, snr_to_me, snr_when, reports_me, rx_only"
-        " FROM stations WHERE any_when >= ? ORDER BY any_when"));
+                  "SELECT band, call, grid, country, freq_hz,"
+                  " any_when, radio_when, snr_to_me, snr_when,"
+                  " reports_me, rx_only FROM stations"
+                  " WHERE any_when >= ?%1 ORDER BY any_when")
+                  .arg(noInternetSim()
+                           ? QStringLiteral(" AND radio_when > 0")
+                           : QString{}));
     q.addBindValue(nowSecs() - notOlderThanSecs);
     if (!q.exec()) {
         qCWarning(griddb_js8)
