@@ -1874,11 +1874,12 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         // computed here (the 2026-08-27 verbatim 3-frame rule, chain
         // legs from packed counts) were replaced by the operator's
         // one-checkpoint compromise -- the deadline already sits at
-        // the move cap since the via keyed.
+        // the move cap since the via keyed. The DURABLE forwarded-ok
+        // journal is NOT written here: the *DE* observation in
+        // processCommandActivity journals every forward of our
+        // traffic, executor or manual -- one authority, no duplicate
+        // rows (the pre-413 keying-time journal doubled it).
         g_relayOutcomes[m_reach.band].append({now, true, m_reach.via});
-        m_spotMapWindow->queueReachEvent(
-            {m_reach.band, m_reach.via, QStringLiteral("fwd"),
-             QString{}, now / 1000, true});
         reachLog(QStringLiteral("    forward complete %1 (+%2s, "
                                 "checksum-proven)")
                      .arg(off)
