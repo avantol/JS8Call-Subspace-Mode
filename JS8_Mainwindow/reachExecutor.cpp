@@ -1540,7 +1540,33 @@ void UI_Constructor::reachNextMove() {
                 bestCall = x.mv.via;
             }
         }
-        if (shoutScore > bestBooked) {
+        // [shoutfirst, operator-approved 2026-08-28] After a silent
+        // direct ask, ask the band BEFORE spending any relay --
+        // UNLESS someone has been heard ON RADIO hearing the target
+        // this session (the RAM hearing store; mqtt rows excluded).
+        // Measured basis: the internet-fed K1BRG run burned 6 relay
+        // moves (~1000 s) on stale book evidence; the radio-only run
+        // shouted on move 2 and nine stations answered in one cycle.
+        // The 15-minute @ALLCALL responder cooldown is priced in and
+        // accepted (operator); this session-freshness exemption is
+        // also what keeps back-to-back attempts from re-shouting.
+        bool shoutFirst = false;
+        if (m_reach.triedAt.contains(QStringLiteral("snr:") + T)) {
+            shoutFirst = true;
+            if (m_spotMapWindow)
+                for (auto const &h :
+                     m_spotMapWindow->hearersOf(m_reach.band, T))
+                    if (h.source != QStringLiteral("mqtt")) {
+                        shoutFirst = false; // fresh radio evidence
+                        break;
+                    }
+            if (shoutFirst)
+                reachLog(QStringLiteral(
+                    "    no one heard hearing %1 on radio this "
+                    "session -- asking the band before spending "
+                    "relays").arg(T));
+        }
+        if (shoutFirst || shoutScore > bestBooked) {
             MoveCand m;
             m.kind = QStringLiteral("shout");
             m.cost = T_SHOUT;
