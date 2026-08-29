@@ -2097,9 +2097,15 @@ void SpotMapWindow::redraw() {
             QDateTime hearerAny, hearerRadio;
             int hearerSnr = -99;
             // [maptruth] the store's dated report pair (snr +
-            // snrWhen, one record) supersedes the 403 me-edge
-            // workaround entirely.
+            // snrWhen, one record) is the report's value and clock.
+            // [oneclass 454] Its CLASS comes from the X->ME edge --
+            // the SAME record the line pass classifies by -- so the
+            // dot and its line can never disagree. Classifying by the
+            // entry's sticky presence label here (maptruth, 08-27)
+            // let an internet report feed radioWhen: dot fresh, edge
+            // hidden with PSKR off -- dots without lines.
             QDateTime hearerSnrWhen = h.value().snrWhen;
+            bool meEdgePskr = true;
             for (auto ed = h.value().heard.constBegin();
                  ed != h.value().heard.constEnd(); ++ed) {
                 bool const edgePskr =
@@ -2151,8 +2157,10 @@ void SpotMapWindow::redraw() {
                 if (!edgePskr &&
                     (!hearerRadio.isValid() || ed.value().when > hearerRadio))
                     hearerRadio = ed.value().when;
-                if (ed.key() == myUp)
+                if (ed.key() == myUp) {
                     hearerSnr = h.value().snr;
+                    meEdgePskr = edgePskr;   // [oneclass 454]
+                }
                 if (m_viewAll) // heard-endpoints: All view only
                     note(ed.key(), edgePskr, ed.value().when, -99);
             }
@@ -2165,8 +2173,7 @@ void SpotMapWindow::redraw() {
             if (hearerAny.isValid() && hearerAny != hearerRadio)
                 note(h.key(), /*pskrEv=*/true, hearerAny, -99);
             if (hearerSnrWhen.isValid() && hearerSnr > -99)
-                note(h.key(),
-                     h.value().source == QStringLiteral("mqtt"),
+                note(h.key(), meEdgePskr,
                      hearerSnrWhen, hearerSnr, hearerSnrWhen);
             // [maptruth #10] a station whose PRESENCE is radio was
             // decoded transmitting -- it is a sender, monitor label
