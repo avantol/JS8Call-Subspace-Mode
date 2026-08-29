@@ -144,11 +144,25 @@ class SpotMapWindow final : public QWidget {
     QVector<GridDb::EdgeRow> edges24h() const;
     // [habitstore] executor's durable habit observations
     void queueReachEvent(GridDb::ReachEventRow const &r) {
+        m_nonRelayersDirty = true; // [nonrelayer] recompute lazily
         m_gridDb.queueReachEvent(r);
     }
     QVector<GridDb::ReachEventRow> reachEvents() const {
         return m_gridDb.loadReachEvents();
     }
+    // [nonrelayer 2026-08-29, operator spec] Stations that transmit
+    // but do not relay when asked: >= 2 failed asks within the
+    // trailing 24 h (both after the most recent successful forward,
+    // ANY band -- relaying is an all-bands setting), shown as a
+    // subtle dashed ring on the dot IF the station also transmitted
+    // within the last hour (WINDOW_SECS). Visual only -- no hover
+    // line, no legend (a barely-observable clue for informed
+    // pro-relay activists; operator may revisit). Derived from the
+    // event store, no new state; a forward clears it by arithmetic,
+    // and it auto-expires ~a day after the last failed ask.
+    QSet<QString> m_nonRelayers;
+    bool m_nonRelayersDirty = true;
+    void refreshNonRelayers();
 
     // heardWhen: optional BACKDATED sighting time for the heard
     // edges ([#161] age-bearing replies) — invalid = now; an edge's

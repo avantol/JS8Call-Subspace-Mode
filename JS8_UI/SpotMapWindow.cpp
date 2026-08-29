@@ -2799,6 +2799,8 @@ void SpotMapWindow::redraw() {
     }
 
     m_screenSpots.clear();
+    if (m_nonRelayersDirty)
+        refreshNonRelayers(); // [nonrelayer] lazy, event-driven
     for (Spot const &s : ordered) {
         // [radioage] Fade on the SAME clock that governs presence —
         // with PSKR off, internet refreshes must not keep a dot
@@ -2845,6 +2847,23 @@ void SpotMapWindow::redraw() {
             p.setBrush(snrColor(paintSnr, alpha));
         }
         p.drawEllipse(pos, DOT_RADIUS_PX, DOT_RADIUS_PX);
+
+        // [nonrelayer] The subtle clue: a thin dashed ring around a
+        // station that transmits (within the hour) but did not relay
+        // when asked twice today. No hover, no legend (operator).
+        if (m_nonRelayers.contains(s.receiverCall.toUpper()) &&
+            s.lastTxWhen.isValid() &&
+            s.lastTxWhen.secsTo(
+                DriftingDateTime::currentDateTimeUtc()) <=
+                WINDOW_SECS) {
+            QPen ring{QColor(190, 190, 205,
+                             static_cast<int>(190 * alpha)), 1};
+            ring.setStyle(Qt::DashLine);
+            p.setPen(ring);
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(pos, DOT_RADIUS_PX + 2.5,
+                          DOT_RADIUS_PX + 2.5);
+        }
 
         m_screenSpots.append({pos, s});
     }
@@ -3825,6 +3844,35 @@ void SpotMapWindow::autoRouteEnded(bool canceled) {
 // button-refresh pass: the Auto-route button is disabled during ARQ
 // mode (and ARQ mode cannot start while auto-route holds the main
 // screen locked, so the two never overlap).
+// [nonrelayer] See header. Derived, no stored state: for each call,
+// count failed relay asks (fwd ok=0) that are BOTH newer than its
+// most recent successful forward on any band AND within the trailing
+// 24 h. Two or more = candidate; the paint site adds the
+// transmitted-within-the-hour test from the spot itself. ~200 rows,
+// sub-ms; recomputed only when the event store changes.
+void SpotMapWindow::refreshNonRelayers() {
+    m_nonRelayersDirty = false;
+    m_nonRelayers.clear();
+    qint64 const now =
+        QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
+    auto const rows = reachEvents(); // one load, two passes
+    QHash<QString, qint64> lastOk;
+    for (auto const &r : rows)
+        if (r.kind == QLatin1String("fwd") && r.ok)
+            lastOk[r.station] = qMax(lastOk.value(r.station), r.when);
+    QHash<QString, int> fails;
+    for (auto const &r : rows) {
+        if (r.kind != QLatin1String("fwd") || r.ok)
+            continue;
+        if (now - r.when > 24 * 3600)
+            continue;
+        if (r.when <= lastOk.value(r.station, 0))
+            continue;
+        if (++fails[r.station] >= 2)
+            m_nonRelayers.insert(r.station);
+    }
+}
+
 // [#187 intelminer] See header.
 int SpotMapWindow::seedLogGrids(QVector<GridDb::LogSeed> const &rows) {
     int inserted = 0;
