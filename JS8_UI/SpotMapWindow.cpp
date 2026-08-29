@@ -2848,16 +2848,27 @@ void SpotMapWindow::redraw() {
         }
         p.drawEllipse(pos, DOT_RADIUS_PX, DOT_RADIUS_PX);
 
-        // [nonrelayer] The subtle clue: a thin dashed ring around a
-        // station that transmits (within the hour) but did not relay
-        // when asked twice today. No hover, no legend (operator).
-        if (m_nonRelayers.contains(s.receiverCall.toUpper()) &&
-            s.lastTxWhen.isValid() &&
+        // [nonrelayer + hbrelay, operator 2026-08-29] Relay status as
+        // a dashed ring, same precedence as the hover lines: RED =
+        // transmits (within the hour) but declined two asks today;
+        // GREEN = relay-enabled (announced via the HB flag, or a
+        // successful forward on the 90-day record). The fresh
+        // negative outranks the positive.
+        QString const callU = s.receiverCall.toUpper();
+        bool const ringRed =
+            m_nonRelayers.contains(callU) && s.lastTxWhen.isValid() &&
             s.lastTxWhen.secsTo(
-                DriftingDateTime::currentDateTimeUtc()) <=
-                WINDOW_SECS) {
-            QPen ring{QColor(190, 190, 205,
-                             static_cast<int>(190 * alpha)), 1};
+                DriftingDateTime::currentDateTimeUtc()) <= WINDOW_SECS;
+        bool const ringGreen =
+            !ringRed && (m_flagRelayers.contains(callU) ||
+                         m_knownRelayers.contains(callU));
+        if (ringRed || ringGreen) {
+            QPen ring{ringRed
+                          ? QColor(225, 60, 60,
+                                   static_cast<int>(200 * alpha))
+                          : QColor(70, 200, 90,
+                                   static_cast<int>(200 * alpha)),
+                      1};
             ring.setStyle(Qt::DashLine);
             p.setPen(ring);
             p.setBrush(Qt::NoBrush);
