@@ -1391,6 +1391,7 @@ class UI_Constructor : public QMainWindow {
     // logs; full re-mine per run (mine.py semantics), skipped when
     // the logs are unchanged. See JS8_Main/IntelMiner.h.
     bool m_intelMineRunning = false;
+    class QThread *m_intelMineThread = nullptr; // joined at shutdown
     void startIntelMine(bool force);
     // [autoroute 2026-08-28] Auto-route mode: the map picked a
     // target and the reaching executor runs it with the main screen

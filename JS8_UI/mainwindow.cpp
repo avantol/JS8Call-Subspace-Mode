@@ -18,6 +18,7 @@
 #include "JS8_Main/NativeBinary.h"
 #include "JS8_Include/SettingsGroup.h"
 
+#include <QThread>
 #include <QFile>
 #include <QFileDialog>
 #include <QInputDialog>
@@ -369,6 +370,16 @@ UI_Constructor::~UI_Constructor() {
     // operator's speed on EVERY exit; app quit mid-attempt must too.
     if (m_reach.active)
         reachStop(QStringLiteral("app shutting down"));
+    // [#187 intelminer] Join the mining thread before teardown: the
+    // interruption lands within milliseconds (checked per line), an
+    // aborted mine never renames its temp file, and the next launch
+    // re-mines. Without this the process tore down under a running
+    // writer -- noise, never corruption (temp + atomic rename), but
+    // not clean.
+    if (m_intelMineThread) {
+        m_intelMineThread->requestInterruption();
+        m_intelMineThread->wait();
+    }
 #ifdef JS8_ENABLE_FT2
     m_l2DecodeTimer.stop();
     m_l2DecodeWatcher.waitForFinished();

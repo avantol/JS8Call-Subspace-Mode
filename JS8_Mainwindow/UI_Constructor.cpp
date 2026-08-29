@@ -2406,6 +2406,11 @@ void UI_Constructor::startIntelMine(bool force) {
                 },
                 Qt::QueuedConnection);
     });
+    m_intelMineThread = th; // joined at shutdown (mainwindow.cpp)
+    QObject::connect(th, &QThread::finished, this, [this, th]() {
+        if (m_intelMineThread == th)
+            m_intelMineThread = nullptr;
+    });
     QObject::connect(th, &QThread::finished, th, &QObject::deleteLater);
     th->start(QThread::LowPriority);
 }

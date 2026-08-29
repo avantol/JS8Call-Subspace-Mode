@@ -7,6 +7,7 @@
  */
 #include "IntelMiner.h"
 #include "Radio.h"
+#include <QThread>
 
 #include <QDateTime>
 #include <QDir>
@@ -225,6 +226,12 @@ IntelMiner::Result IntelMiner::mine(QString const &myCallIn,
     static QRegularExpression const reSeedCq{QStringLiteral(
         "\\bCQ(?:\\s+CQ)*\\s+([A-R]{2}[0-9]{2}(?:[A-Xa-x]{2})?)\\s*$")};
 
+    // [shutdown] Abort lands within one line's work; an aborted mine
+    // never renames its temp file (ok stays false) and the next
+    // launch re-mines.
+    auto interrupted = []() {
+        return QThread::currentThread()->isInterruptionRequested();
+    };
     qint64 const now = QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
     QChar const diamond{0x2666}; // mine.py:305 replaces this with ' '
 
@@ -294,6 +301,10 @@ IntelMiner::Result IntelMiner::mine(QString const &myCallIn,
             QTextStream in{&f};
             QString line;
             while (in.readLineInto(&line)) {
+                if (interrupted()) {
+                    qCWarning(miner_js8) << "[MINER] aborted (shutdown)";
+                    return r;
+                }
                 auto const m = reDirected.match(line);
                 if (!m.hasMatch())
                     continue;
@@ -446,6 +457,10 @@ IntelMiner::Result IntelMiner::mine(QString const &myCallIn,
             QTextStream in{&f};
             QString line;
             while (in.readLineInto(&line)) {
+                if (interrupted()) {
+                    qCWarning(miner_js8) << "[MINER] aborted (shutdown)";
+                    return r;
+                }
                 auto const m = reTx.match(line);
                 if (!m.hasMatch()) {
                     // Not one of our transmissions: grid-bank seeding
@@ -715,6 +730,8 @@ IntelMiner::Result IntelMiner::mine(QString const &myCallIn,
                     "INSERT INTO sightings (ts, call, snr, dial, offset)"
                     " VALUES (?,?,?,?,?)"));
                 for (auto const &s : sightings) {
+                    if (interrupted())
+                        break; // rollback below via !commit
                     q.addBindValue(qlonglong(s.ts));
                     q.addBindValue(s.call);
                     q.addBindValue(s.snr);
@@ -746,8 +763,14 @@ IntelMiner::Result IntelMiner::mine(QString const &myCallIn,
                         myGridIn.trimmed().toUpper());
                 setMeta(QStringLiteral("mined_at"), QString::number(now));
                 setMeta(QStringLiteral("sources_stamp"), stamp);
-                db.commit();
-                wrote = true;
+                if (interrupted()) {
+                    db.rollback();
+                    qCWarning(miner_js8)
+                        << "[MINER] aborted mid-write (shutdown)";
+                } else {
+                    db.commit();
+                    wrote = true;
+                }
             } else {
                 qCWarning(miner_js8) << "[MINER] temp db open FAILED:"
                                      << db.lastError().text();
