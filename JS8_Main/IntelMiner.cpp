@@ -6,6 +6,7 @@
  *        mine.py line range.
  */
 #include "IntelMiner.h"
+#include "Radio.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -459,7 +460,14 @@ IntelMiner::Result IntelMiner::mine(QString const &myCallIn,
                             g = reSeedCq.match(tailPart);
                         if (g.hasMatch()) {
                             QString const call = cm.captured(1).toUpper();
-                            if (!isMe(call)) {
+                            // The BANK is a targeting authority:
+                            // only real amateur shapes may seed it
+                            // (the intel db keeps score-don't-filter;
+                            // 14 corroborated-garbage calls slipped
+                            // through the loose pattern on first
+                            // run, e.g. DUGH67, 0000IH8P8).
+                            if (!isMe(call) &&
+                                Radio::is_amateur_callsign(call)) {
                                 QString const g4 =
                                     g.captured(1).left(4).toUpper();
                                 // decode-line date is cols 0-18
