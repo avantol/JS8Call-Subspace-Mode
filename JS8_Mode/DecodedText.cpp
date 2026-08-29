@@ -173,6 +173,8 @@ bool DecodedText::tryUnpackHeartbeat(QString const &m) {
     frameType_ = type;
     isHeartbeat_ = true;
     isAlt_ = isAlt;
+    // [hbrelay TODO #191] the subtype's historical RELAY meaning
+    hbRelay_ = !isAlt && Varicode::hbBits3Relay(bits3);
     extra_ = parts.value(2, QString());
     compound_ = buildCompound(parts);
     message_ = compound_ % ": ";

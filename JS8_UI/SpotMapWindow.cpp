@@ -3610,6 +3610,8 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 WINDOW_SECS) {
             tip += QStringLiteral("\n") + tr("Relay disabled?");
         } else if (m_knownRelayers.contains(
+                       best->spot.receiverCall.toUpper()) ||
+                   m_flagRelayers.contains(
                        best->spot.receiverCall.toUpper())) {
             // [knownrelayer, operator 2026-08-29] The positive
             // counterpart: a successful forward on the 90-day

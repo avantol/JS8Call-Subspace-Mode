@@ -176,6 +176,15 @@ class Varicode {
     static bool isCompoundCallsign(const QString &callsign);
     static bool isGroupAllowed(const QString &group);
 
+    // [hbrelay 2026-08-29, TODO #191] The revived original-JS8Call
+    // relay flag in the heartbeat's 3-bit subtype: values 2-5 meant
+    // AUTO/RELAY/SPOT combinations pre-2.2; every 2.2+ decoder shows
+    // all values as plain "HB" and ACKs normally, so asserting the
+    // historical "HB RELAY" code (4) is invisible except to code
+    // that looks. TX side reads a process-global set from the
+    // config each GUI tick; RX side exposes hbBits3Relay().
+    static void setHbRelayFlag(bool on);
+    static bool hbBits3Relay(quint8 bits3);
     static QString packHeartbeatMessage(QString const &text,
                                         QString const &callsign, int *n);
     static QStringList unpackHeartbeatMessage(const QString &text,

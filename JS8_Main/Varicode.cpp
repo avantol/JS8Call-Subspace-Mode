@@ -348,6 +348,17 @@ QMap<quint32, QString> cqs = {
 // likely repurpose these flags keep in mind if you change any of these to not
 // start with HB you'll have to address the packHeartbeatMessage and how the
 // function computes the isAlt flag.
+// [hbrelay TODO #191] process-global TX flag; set from the config on
+// the GUI tick (cheap, never stale).
+static bool s_hbRelayFlag = false;
+void Varicode::setHbRelayFlag(bool on) { s_hbRelayFlag = on; }
+// Historical subtypes that carried the RELAY flag (2-5); a pre-2.2
+// station still transmitting them counts too -- we speak their
+// original dialect.
+bool Varicode::hbBits3Relay(quint8 bits3) {
+    return bits3 >= 2 && bits3 <= 5;
+}
+
 QMap<quint32, QString> hbs = {
     {0, "HB"}, // HB
     {1, "HB"}, // HB AUTO
@@ -1470,6 +1481,11 @@ QString Varicode::packHeartbeatMessage(QString const &text,
     if (isAlt) {
         packed_extra |= (1 << 15);
         cqNumber = cqs.key(type, 0);
+    } else if (s_hbRelayFlag) {
+        // [hbrelay TODO #191] Assert the historical "HB RELAY"
+        // subtype when relaying is enabled; see the header note for
+        // the compatibility proof.
+        cqNumber = 4;
     }
 
     frame = packCompoundFrame(callsign, Varicode::FrameHeartbeat, packed_extra,

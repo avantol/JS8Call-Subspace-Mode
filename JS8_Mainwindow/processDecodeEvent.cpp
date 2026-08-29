@@ -683,6 +683,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                             tryNotify("cq", cd.submode);
 
                         } else {
+                            // [hbrelay TODO #191] Harvest the revived
+                            // RELAY subtype: this station announces it
+                            // relays -- feed the map's relay-status
+                            // display passively, no ask spent.
+                            if (decodedtext.heartbeatRelay() &&
+                                m_spotMapWindow)
+                                m_spotMapWindow->noteRelayFlag(cd.call);
                             // convert HEARTBEAT to a directed command and
                             // process...
                             cmd.from = cd.call;

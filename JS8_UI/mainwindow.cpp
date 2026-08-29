@@ -3878,6 +3878,10 @@ void UI_Constructor::guiUpdate() {
             (m_chunkedArq && m_chunkedArq->hasActiveTxSession()) ||
             arqRxBusy ||
             m_autoRouteActive; // [autoroute] locks as ARQ mode does
+        // [hbrelay TODO #191] TX-side flag follows the config every
+        // tick -- cheap, never stale; the packer asserts the
+        // historical "HB RELAY" subtype only while relaying is on.
+        Varicode::setHbRelayFlag(!m_config.relay_off());
         // Two-tier gate (2026-06-08, follow-up):
         //   canChangeSpeed — speed mode buttons (S/N/F/T/⚡). Re-
         //     enabled BETWEEN chunks during an ARQ session so the

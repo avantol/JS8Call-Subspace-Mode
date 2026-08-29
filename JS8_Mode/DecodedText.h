@@ -34,6 +34,8 @@ class DecodedText {
     bool isCompound() const { return !compound_.isEmpty(); }
     bool isDirectedMessage() const { return directed_.length() > 2; }
     bool isHeartbeat() const { return isHeartbeat_; }
+    // [hbrelay TODO #191] the heartbeat's revived RELAY subtype
+    bool heartbeatRelay() const { return hbRelay_; }
     bool isLowConfidence() const { return isLowConfidence_; }
     QString message() const { return message_; }
     int snr() const { return snr_; }
@@ -74,6 +76,7 @@ class DecodedText {
     QString frame_;
     bool isAlt_;
     bool isHeartbeat_;
+    bool hbRelay_ = false; // [hbrelay]
     bool isLowConfidence_;
     QString compound_;
     QStringList directed_;

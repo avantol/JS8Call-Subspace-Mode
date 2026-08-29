@@ -600,6 +600,13 @@ public:
     // mainwindow's.
     void setArqSessionActive(bool active);
     void autoRouteEnded(bool canceled);
+    // [hbrelay TODO #191] A heartbeat announced relay-enabled:
+    // session-RAM set feeding the "Relay enabled" hover alongside
+    // the habit-proven known-relayers.
+    void noteRelayFlag(QString const &call) {
+        m_flagRelayers.insert(call.trimmed().toUpper());
+    }
+    QSet<QString> m_flagRelayers;
     // [#187 intelminer] Seed log-mined grids: bank (INSERT OR
     // IGNORE, source='log') + the RAM map when absent there. Returns
     // rows actually inserted. GUI thread only (owns the bank).
