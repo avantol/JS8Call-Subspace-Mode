@@ -16,6 +16,30 @@
 #include <QTimer>
 
 void UI_Constructor::processCommandActivity() {
+    // [manualask] Expiry sweep, opportunistic on the decode pass (no
+    // timer): a hand-sent relay ask with no observed forward inside
+    // the settle window becomes a journaled failure -- the absence
+    // finally has a deadline-keeper, so manual probes feed the
+    // relay-status flag exactly like executor attempts (operator,
+    // 2026-08-29: KK7UMM declined two manual asks invisibly).
+    if (!m_manualAsks.isEmpty() && m_spotMapWindow) {
+        qint64 const nowMs = DriftingDateTime::currentMSecsSinceEpoch();
+        for (int i = m_manualAsks.size() - 1; i >= 0; --i) {
+            if (nowMs - m_manualAsks.at(i).askedMs
+                    < kManualAskSettleMs)
+                continue;
+            m_spotMapWindow->queueReachEvent(
+                {m_config.bands()->find(dialFrequency()),
+                 m_manualAsks.at(i).via.toUpper(),
+                 QStringLiteral("fwd"), QString{},
+                 m_manualAsks.at(i).askedMs / 1000, false});
+            qCWarning(mainwindow_js8)
+                << "[MANUALASK] no forward from"
+                << m_manualAsks.at(i).via
+                << "within the settle window -- journaled";
+            m_manualAsks.removeAt(i);
+        }
+    }
 #if 0
     if (!m_txFrameQueue.isEmpty()) {
         return;
@@ -204,11 +228,18 @@ void UI_Constructor::processCommandActivity() {
                 // real habit data. Journal it always.
                 if (m_spotMapWindow &&
                     Radio::same_station(
-                        de, m_config.my_callsign().trimmed()))
+                        de, m_config.my_callsign().trimmed())) {
                     m_spotMapWindow->queueReachEvent(
                         {m_config.bands()->find(dialFrequency()),
                          d.from.toUpper(), QStringLiteral("fwd"),
                          QString{}, 0, true});
+                    // [manualask] The success this ask was waiting
+                    // for: clear its pending deadline(s).
+                    for (int i = m_manualAsks.size() - 1; i >= 0; --i)
+                        if (Radio::same_station(
+                                m_manualAsks.at(i).via, d.from))
+                            m_manualAsks.removeAt(i);
+                }
             }
         }
         // [onairspot] A frame addressed TO ME proves the sender hears

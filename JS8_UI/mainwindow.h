@@ -1393,6 +1393,22 @@ class UI_Constructor : public QMainWindow {
     bool m_intelMineRunning = false;
     class QThread *m_intelMineThread = nullptr; // joined at shutdown
     void startIntelMine(bool force);
+    // [manualask 2026-08-29, operator: "manual relay is a worthwhile
+    // probe"] Deadline-keeper for HAND-SENT relay asks: a forward is
+    // a decodable event (the *DE* journal records it whoever asked),
+    // but a failure is the ABSENCE of one, which only becomes a fact
+    // when someone waits with a deadline. The executor waits for its
+    // own asks; this list waits for manual ones. Armed at TX
+    // frame-build for chain sends while the executor is idle;
+    // cleared by the *DE* success journal; expired entries journal a
+    // failed ask after mine.py's own ask-to-forward settle window.
+    struct ManualAsk {
+        QString via;
+        qint64 askedMs = 0;
+    };
+    QVector<ManualAsk> m_manualAsks;
+    static constexpr qint64 kManualAskSettleMs =
+        900 * 1000; // mine.py:267 settle_relays' 15-minute window
     // [autoroute 2026-08-28] Auto-route mode: the map picked a
     // target and the reaching executor runs it with the main screen
     // locked exactly as for ARQ mode (the flag is folded into the

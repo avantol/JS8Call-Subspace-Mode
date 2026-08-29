@@ -5207,6 +5207,16 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
     for (QString const &hop : chain)
         if (!Radio::is_callsign(hop))
             return;
+    // [manualask] Arm the deadline-keeper for a HAND-SENT relay ask:
+    // chain sends at TX frame-build time (txFrames > 0 = the real
+    // transmission, once per send) while the executor is idle (its
+    // own asks carry their own verdicts). Success clears via the
+    // *DE* journal; expiry journals the failed ask
+    // (processCommandActivity sweep).
+    if (txFrames > 0 && chain.size() >= 2 && !m_reach.active)
+        m_manualAsks.append(
+            {chain.first(),
+             DriftingDateTime::currentMSecsSinceEpoch()});
     // SLOT MODEL (2026-08-26, replacing the 2026-08-22 figures which
     // carried ALL.TXT's one-period stamp bias): a responder keys at
     // our TX-end boundary, so the reply slot closes ~one period after
