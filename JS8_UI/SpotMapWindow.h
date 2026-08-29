@@ -456,6 +456,9 @@ class SpotMapWindow final : public QWidget {
     // the "in progress..." status line rides the SAME control as the
     // toast (operator spec).
     QString m_stickyToast;
+    // [hoverabove] last station a tooltip was shown for; a sustained
+    // hover on the same station repositions the text above its dot.
+    QString m_lastTipCall;
     void autoRouteChooseTarget(QString const &target);
     void autoRouteShowPanel();
     void positionAutoRoutePanel();

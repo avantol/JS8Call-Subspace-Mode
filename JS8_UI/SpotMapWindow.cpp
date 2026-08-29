@@ -3690,9 +3690,26 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         // and these tips vary a lot in size.
         int const qtDefaultMs =
             10000 + 40 * qMax(0, tip.size() - 100);
-        QToolTip::showText(event->globalPosition().toPoint(), tip, this,
-                           QRect{}, qtDefaultMs / 2);
+        // [hoverabove, operator 2026-08-29] On a SUSTAINED hover
+        // (same station as the last tooltip), move the text ABOVE
+        // the dot so it stops hiding the lines and stations that the
+        // hover exists to inspect. First touch keeps the normal
+        // at-cursor position; the height estimate comes from the
+        // line count.
+        QString const tipCall = best->spot.receiverCall.toUpper();
+        QPoint at = event->globalPosition().toPoint();
+        if (tipCall == m_lastTipCall) {
+            int const lines = tip.count(QLatin1Char('\n')) + 1;
+            int const estH =
+                lines * (fontMetrics().height() + 2) + 14;
+            at = mapToGlobal(QPoint(
+                int(best->pos.x()),
+                int(best->pos.y()) - estH - DOT_RADIUS_PX - 4));
+        }
+        m_lastTipCall = tipCall;
+        QToolTip::showText(at, tip, this, QRect{}, qtDefaultMs / 2);
     } else {
+        m_lastTipCall.clear();
         QToolTip::hideText();
     }
     QWidget::mouseMoveEvent(event);
