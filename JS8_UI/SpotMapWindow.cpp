@@ -3148,12 +3148,19 @@ void SpotMapWindow::redraw() {
             qreal const xText = xRight - maxW;
             p.setPen(QColor(205, 205, 220));
             p.drawText(QPointF{xText, y + ascent - 1}, rows[i].label);
+            QPointF const symAt{xText - 15, y + rowH / 2.0 - 1};
+            // [operator 2026-08-29] empty station dot inside the
+            // ring, matching how rings read on the map.
+            p.setPen(QPen{QColor(170, 170, 185, 220), 1});
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(symAt, qreal(DOT_RADIUS_PX),
+                          qreal(DOT_RADIUS_PX));
             QPen ring{rows[i].c, rows[i].penW};
             ring.setStyle(Qt::DashLine);
             p.setPen(ring);
             p.setBrush(Qt::NoBrush);
-            p.drawEllipse(QPointF{xText - 15, y + rowH / 2.0 - 1},
-                          DOT_RADIUS_PX + 2.5, DOT_RADIUS_PX + 2.5);
+            p.drawEllipse(symAt, DOT_RADIUS_PX + 2.5,
+                          DOT_RADIUS_PX + 2.5);
         }
     }
 
