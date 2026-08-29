@@ -3609,6 +3609,13 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 DriftingDateTime::currentDateTimeUtc()) <=
                 WINDOW_SECS) {
             tip += QStringLiteral("\n") + tr("Relay disabled?");
+        } else if (m_knownRelayers.contains(
+                       best->spot.receiverCall.toUpper())) {
+            // [knownrelayer, operator 2026-08-29] The positive
+            // counterpart: a successful forward on the 90-day
+            // record. The fresh negative above outranks it (a known
+            // relayer currently declining reads "Relay disabled?").
+            tip += QStringLiteral("\n") + tr("Relay enabled");
         }
         // [hovertime 2026-08-22, operator: "cut the hover info timeout
         // to 50%"] Qt's default when no time is given is
