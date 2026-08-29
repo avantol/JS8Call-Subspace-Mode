@@ -2526,7 +2526,14 @@ void SpotMapWindow::redraw() {
     // the map is drawing.
     QColor pskrLineColor{165, 138, 18, 190};
     double pskrCoverage = 0.0;
-    if (m_showConnections) {
+    // [hovertrace 2026-08-29, operator] The hover tracer works even
+    // with the Connections overlay OFF: hovering a station lifts
+    // ITS lines (and paints our callsign when one reaches us) while
+    // the base mesh stays hidden -- same rationale as the relay hop
+    // pills ignoring the callsign toggle: the moment you ask is the
+    // moment the toggle is off.
+    if (m_showConnections || !m_hoverCall.isEmpty()) {
+        bool const overlayOn = m_showConnections;
         auto const cutoffH = now.addSecs(-m_viewWindowSecs);
         // [linelog] WHY A LINE IS NOT THERE. Operator, 2026-08-24: with
         // Show-all and Add-PSKR both on, no yellow or grey lines at any
@@ -2775,8 +2782,10 @@ void SpotMapWindow::redraw() {
             QVector<Seg> dim, lit;
             for (Seg const &s : segPskr)
                 (s.hover ? lit : dim).append(s);
-            drawGroup(dim, QPen{pskrLineColor, 1});
-            drawGroup(segRadio, penRadio);
+            if (overlayOn) {
+                drawGroup(dim, QPen{pskrLineColor, 1});
+                drawGroup(segRadio, penRadio);
+            }
             QColor const yellow{225, 190, 30, 255};
             QColor const white{255, 250, 225, 255};
             double const t = 1.0 - pskrCoverage;  // 1 = unmuted base
