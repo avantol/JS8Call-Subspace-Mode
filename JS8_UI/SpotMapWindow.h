@@ -161,6 +161,10 @@ class SpotMapWindow final : public QWidget {
     // event store, no new state; a forward clears it by arithmetic,
     // and it auto-expires ~a day after the last failed ask.
     QSet<QString> m_nonRelayers;
+    // [knownrelayer] Same pass, zero extra cost: stations with a
+    // successful forward anywhere in the 90-day record. Presentation
+    // TBD (operator); the set is maintained from here on.
+    QSet<QString> m_knownRelayers;
     bool m_nonRelayersDirty = true;
     void refreshNonRelayers();
 

@@ -3600,6 +3600,16 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
             }
             tip += QStringLiteral(" · ") + country;
         }
+        // [nonrelayer, operator 2026-08-29] Last hover line, only
+        // while the ring is showing (same predicate as the paint).
+        if (m_nonRelayers.contains(
+                best->spot.receiverCall.toUpper()) &&
+            best->spot.lastTxWhen.isValid() &&
+            best->spot.lastTxWhen.secsTo(
+                DriftingDateTime::currentDateTimeUtc()) <=
+                WINDOW_SECS) {
+            tip += QStringLiteral("\n") + tr("Relay disabled?");
+        }
         // [hovertime 2026-08-22, operator: "cut the hover info timeout
         // to 50%"] Qt's default when no time is given is
         //     10000 + 40 * max(0, len - 100) ms
@@ -3853,13 +3863,16 @@ void SpotMapWindow::autoRouteEnded(bool canceled) {
 void SpotMapWindow::refreshNonRelayers() {
     m_nonRelayersDirty = false;
     m_nonRelayers.clear();
+    m_knownRelayers.clear();
     qint64 const now =
         QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
     auto const rows = reachEvents(); // one load, two passes
     QHash<QString, qint64> lastOk;
     for (auto const &r : rows)
-        if (r.kind == QLatin1String("fwd") && r.ok)
+        if (r.kind == QLatin1String("fwd") && r.ok) {
             lastOk[r.station] = qMax(lastOk.value(r.station), r.when);
+            m_knownRelayers.insert(r.station); // [knownrelayer]
+        }
     QHash<QString, int> fails;
     for (auto const &r : rows) {
         if (r.kind != QLatin1String("fwd") || r.ok)
