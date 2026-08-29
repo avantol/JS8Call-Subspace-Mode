@@ -2872,12 +2872,13 @@ void SpotMapWindow::redraw() {
             !ringRed && (m_flagRelayers.contains(callU) ||
                          m_knownRelayers.contains(callU));
         if (ringRed || ringGreen) {
+            // red = 2 px (operator 2026-08-29); green stays 1 px
             QPen ring{ringRed
                           ? QColor(225, 60, 60,
                                    static_cast<int>(200 * alpha))
                           : QColor(70, 200, 90,
                                    static_cast<int>(200 * alpha)),
-                      1};
+                      ringRed ? 2.0 : 1.0};
             ring.setStyle(Qt::DashLine);
             p.setPen(ring);
             p.setBrush(Qt::NoBrush);

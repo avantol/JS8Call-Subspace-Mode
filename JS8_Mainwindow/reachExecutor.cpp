@@ -1064,6 +1064,12 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
     auto *box = new QMessageBox(host);
     box->setAttribute(Qt::WA_DeleteOnClose);
     box->setWindowModality(Qt::NonModal);
+    // [operator 2026-08-29, second report] raise+activateWindow was
+    // not enough -- the window manager may refuse focus theft for a
+    // non-modal box, and the "active window" parent guess loses when
+    // neither of ours is active. Stays-on-top guarantees it fronts
+    // our windows until dismissed.
+    box->setWindowFlag(Qt::WindowStaysOnTopHint, true);
     box->setStandardButtons(QMessageBox::Ok);
     if (success) {
         box->setIcon(QMessageBox::Information);
