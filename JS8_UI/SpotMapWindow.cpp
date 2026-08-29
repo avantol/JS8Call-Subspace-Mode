@@ -2812,6 +2812,13 @@ void SpotMapWindow::redraw() {
             for (Seg const &s : lit)
                 if (nearCenter(s.hearer) || nearCenter(s.heard))
                     m_tracerHitsMe = true;
+            // [operator 2026-08-29] The hovered station hearing us
+            // over RADIO (blue line) shows our callsign too -- not
+            // just the PSKR-reported (yellow/gray) case.
+            for (Seg const &s : segRadio)
+                if (s.hover &&
+                    (nearCenter(s.hearer) || nearCenter(s.heard)))
+                    m_tracerHitsMe = true;
         }
     }
 
@@ -3075,7 +3082,9 @@ void SpotMapWindow::redraw() {
         // One font height lower (operator, 2026-08-14) — the right
         // side of the bottom strip is empty (gradient bar is
         // centered), so the second row may ride into it.
-        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2;
+        // [operator 2026-08-29] up 1/3 of the legend font height
+        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2
+                         - p.fontMetrics().height() / 3.0;
         p.fillRect(QRectF{xRight - maxW - 28, y0 - 2, maxW + 28 + 4,
                           2.0 * rowH + 4},
                    QColor(16, 16, 24, 170));
@@ -3107,7 +3116,9 @@ void SpotMapWindow::redraw() {
                 maxW, static_cast<qreal>(
                           p.fontMetrics().horizontalAdvance(r.label)));
         qreal const xRight = w - 6.0;
-        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2;
+        // [operator 2026-08-29] up 1/3 of the legend font height
+        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2
+                         - p.fontMetrics().height() / 3.0;
         p.fillRect(QRectF{xRight - maxW - 28, y0 - 2, maxW + 28 + 4,
                           2.0 * rowH + 4},
                    QColor(16, 16, 24, 170));
@@ -3594,6 +3605,8 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         QString const now =
             hov ? hov->spot.receiverCall.toUpper() : QString{};
         if (now != m_hoverCall) {
+            if (!m_hoverCall.isEmpty())
+                m_prevHoverCall = m_hoverCall; // [hoverabove v2]
             m_hoverCall = now;
             redraw();
         }
@@ -3690,15 +3703,16 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
         // and these tips vary a lot in size.
         int const qtDefaultMs =
             10000 + 40 * qMax(0, tip.size() - 100);
-        // [hoverabove, operator 2026-08-29] On a SUSTAINED hover
-        // (same station as the last tooltip), move the text ABOVE
-        // the dot so it stops hiding the lines and stations that the
-        // hover exists to inspect. First touch keeps the normal
-        // at-cursor position; the height estimate comes from the
-        // line count.
+        // [hoverabove v2, operator 2026-08-29] The SECOND hover of
+        // the same station shows the text ABOVE the dot from its
+        // first instant -- no delay: the first visit reads at the
+        // cursor, and returning to the station means the operator
+        // now wants the lines under it visible. m_prevHoverCall is
+        // the station of the PREVIOUS hover session (set when a
+        // hover ends).
         QString const tipCall = best->spot.receiverCall.toUpper();
         QPoint at = event->globalPosition().toPoint();
-        if (tipCall == m_lastTipCall) {
+        if (tipCall == m_prevHoverCall) {
             int const lines = tip.count(QLatin1Char('\n')) + 1;
             int const estH =
                 lines * (fontMetrics().height() + 2) + 14;
@@ -3706,10 +3720,8 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
                 int(best->pos.x()),
                 int(best->pos.y()) - estH - DOT_RADIUS_PX - 4));
         }
-        m_lastTipCall = tipCall;
         QToolTip::showText(at, tip, this, QRect{}, qtDefaultMs / 2);
     } else {
-        m_lastTipCall.clear();
         QToolTip::hideText();
     }
     QWidget::mouseMoveEvent(event);
