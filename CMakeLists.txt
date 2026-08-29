@@ -318,6 +318,7 @@ target_sources(
   JS8_UI/ArqMonitorWindow.cpp
   JS8_Main/ArqMonitor.cpp
   JS8_Main/GridDb.cpp
+  JS8_Main/IntelMiner.cpp
   JS8_UI/mainwindow.cpp
   JS8_UI/ICS213Dialog.cpp
   JS8_UI/ICS213Dialog.h

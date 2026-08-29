@@ -1387,6 +1387,11 @@ class UI_Constructor : public QMainWindow {
         int         silentDeliveries = 0;
     };
     ReachState m_reach;
+    // [#187 intelminer] Background corpus build from the user's own
+    // logs; full re-mine per run (mine.py semantics), skipped when
+    // the logs are unchanged. See JS8_Main/IntelMiner.h.
+    bool m_intelMineRunning = false;
+    void startIntelMine(bool force);
     // [autoroute 2026-08-28] Auto-route mode: the map picked a
     // target and the reaching executor runs it with the main screen
     // locked exactly as for ARQ mode (the flag is folded into the

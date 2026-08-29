@@ -3825,6 +3825,22 @@ void SpotMapWindow::autoRouteEnded(bool canceled) {
 // button-refresh pass: the Auto-route button is disabled during ARQ
 // mode (and ARQ mode cannot start while auto-route holds the main
 // screen locked, so the two never overlap).
+// [#187 intelminer] See header.
+int SpotMapWindow::seedLogGrids(QVector<GridDb::LogSeed> const &rows) {
+    int inserted = 0;
+    for (auto const &s : rows) {
+        if (m_gridDb.seedLogGrid(s))
+            ++inserted;
+        if (!m_gridByCall.contains(s.call))
+            m_gridByCall.insert(s.call, s.grid);
+    }
+    if (inserted)
+        qCWarning(mqttclient_js8)
+            << "[SPOTMAP] seeded" << inserted
+            << "log-mined grids into the bank";
+    return inserted;
+}
+
 void SpotMapWindow::setArqSessionActive(bool active) {
     m_arqBusy = active;
     if (m_autoRouteBtn)

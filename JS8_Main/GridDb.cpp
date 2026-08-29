@@ -249,6 +249,31 @@ bool GridDb::ensureSchema() {
     return true;
 }
 
+// [#187 intelminer] See header. INSERT OR IGNORE: an existing row of
+// ANY source wins over a mined one -- the bank's live paths carry
+// fresher provenance.
+bool GridDb::seedLogGrid(LogSeed const &s) {
+    if (!m_db.isOpen())
+        return false;
+    QSqlQuery q{m_db};
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO grids (call, grid, source, first_seen,"
+        " grid_changed, change_count, last_heard, heard_count,"
+        " snr_last) VALUES (?,?,'log',?,?,1,?,?, -99)"));
+    q.addBindValue(s.call);
+    q.addBindValue(s.grid);
+    q.addBindValue(qlonglong(s.whenS));
+    q.addBindValue(qlonglong(s.whenS));
+    q.addBindValue(qlonglong(s.whenS));
+    q.addBindValue(s.count);
+    if (!q.exec()) {
+        qCWarning(griddb_js8)
+            << "[GRIDDB] log seed FAILED:" << q.lastError().text();
+        return false;
+    }
+    return q.numRowsAffected() > 0;
+}
+
 QHash<QString, QString> GridDb::loadAll() const {
     QHash<QString, QString> out;
     if (!m_db.isOpen())

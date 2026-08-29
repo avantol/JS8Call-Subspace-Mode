@@ -577,6 +577,16 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // TX-queue guard).
     connect(m_spotMapWindow.data(), &SpotMapWindow::qsyToOffset,
             this, &UI_Constructor::changeFreq);
+    // [#187 intelminer] Build/refresh the intel corpus from the
+    // user's own logs, in the background, once the window is up.
+    // Full re-mine (mine.py semantics); skipped when logs unchanged.
+    QTimer::singleShot(0, this, [this]() { startIntelMine(false); });
+    if (ui->menuControl) {
+        auto *rebuild = ui->menuControl->addAction(
+            tr("Rebuild routing knowledge"));
+        connect(rebuild, &QAction::triggered, this,
+                [this]() { startIntelMine(true); });
+    }
     // [autoroute 2026-08-28] The map picked a validated target; run
     // the reaching executor with the main screen locked. The map's
     // "Halt auto-route" click cancels the mode. NOTE: connected ONCE,
@@ -2350,4 +2360,52 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // this must be the last statement of constructor
     if (!m_valid)
         throw std::runtime_error{"Fatal initialization exception"};
+}
+
+// [#187 intelminer] Kick a full corpus mine on a worker thread; the
+// result comes back queued to the GUI thread for the grid-bank
+// seeding (GridDb lives there) and the status line. force=true is
+// the "Rebuild routing knowledge" menu action (ignores the
+// unchanged-logs skip).
+#include "JS8_Main/IntelMiner.h"
+#include <QPointer>
+#include <QThread>
+void UI_Constructor::startIntelMine(bool force) {
+    if (m_intelMineRunning)
+        return;
+    QString const call = m_config.my_callsign();
+    if (call.trimmed().isEmpty())
+        return; // no identity configured yet; next launch mines
+    m_intelMineRunning = true;
+    QString const grid = m_config.my_grid();
+    QPointer<UI_Constructor> self{this};
+    QThread *th = QThread::create([self, call, grid, force]() {
+        IntelMiner miner;
+        IntelMiner::Result const res = miner.mine(call, grid, force);
+        if (self)
+            QMetaObject::invokeMethod(
+                self,
+                [self, res]() {
+                    if (!self)
+                        return;
+                    self->m_intelMineRunning = false;
+                    if (res.skipped)
+                        return;
+                    if (res.ok && self->m_spotMapWindow)
+                        self->m_spotMapWindow->seedLogGrids(res.logGrids);
+                    if (res.ok)
+                        self->statusBar()->showMessage(
+                            tr("Routing knowledge rebuilt from your "
+                               "logs: %1 stations, %2 sightings, "
+                               "%3 grids (%4 s)")
+                                .arg(res.stations)
+                                .arg(res.sightings)
+                                .arg(res.logGrids.size())
+                                .arg((res.elapsedMs + 999) / 1000),
+                            10000);
+                },
+                Qt::QueuedConnection);
+    });
+    QObject::connect(th, &QThread::finished, th, &QObject::deleteLater);
+    th->start(QThread::LowPriority);
 }

@@ -69,6 +69,18 @@ class GridDb final {
     // Keep a day on disk; the map still renders only WINDOW_SECS.
     static constexpr qint64 RETAIN_SECS = 24 * 60 * 60;
 
+    // [#187 intelminer] A grid mined from the user's own logs
+    // (heartbeat/CQ fields, corroborated). Seeded INSERT OR IGNORE
+    // with source='log' -- never overwrites radio or mqtt rows, and
+    // survives the JS8_NO_MQTT load filter (it is radio-derived).
+    struct LogSeed {
+        QString call;
+        QString grid;    // 4-char
+        qint64 whenS = 0;
+        int count = 0;   // corroboration
+    };
+    bool seedLogGrid(LogSeed const &s);
+
     struct EdgeRow {
         QString band;
         QString hearer;

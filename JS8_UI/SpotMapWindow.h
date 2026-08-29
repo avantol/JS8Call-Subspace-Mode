@@ -576,6 +576,10 @@ public:
     // mainwindow's.
     void setArqSessionActive(bool active);
     void autoRouteEnded(bool canceled);
+    // [#187 intelminer] Seed log-mined grids: bank (INSERT OR
+    // IGNORE, source='log') + the RAM map when absent there. Returns
+    // rows actually inserted. GUI thread only (owns the bank).
+    int seedLogGrids(QVector<GridDb::LogSeed> const &rows);
     bool autoRouteMode() const { return m_autoRouteActive; }
 
 private:
