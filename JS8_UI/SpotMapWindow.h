@@ -603,10 +603,10 @@ public:
     // [hbrelay TODO #191] A heartbeat announced relay-enabled:
     // session-RAM set feeding the "Relay enabled" hover alongside
     // the habit-proven known-relayers.
-    void noteRelayFlag(QString const &call) {
-        m_flagRelayers.insert(call.trimmed().toUpper());
-    }
+    void noteRelayFlag(QString const &call);
     QSet<QString> m_flagRelayers;
+    // journal throttle: one hbflag row per station per hour
+    QHash<QString, qint64> m_flagJournaledMs;
     // [#187 intelminer] Seed log-mined grids: bank (INSERT OR
     // IGNORE, source='log') + the RAM map when absent there. Returns
     // rows actually inserted. GUI thread only (owns the bank).

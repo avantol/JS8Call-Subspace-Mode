@@ -3033,7 +3033,7 @@ void SpotMapWindow::redraw() {
             // cannot teach a colour the map is not using (it did
             // exactly that once when the line was darkened alone).
             {pskrLineColor, pskrCoverage > 0.25
-                                ? tr("Heard by PSKR (dense)")
+                                ? tr("Heard by PSKR")
                                 : tr("Heard by PSKR")}};
         int const rowH = 11;
         qreal const ascent = p.fontMetrics().ascent();
@@ -3863,6 +3863,25 @@ void SpotMapWindow::autoRouteEnded(bool canceled) {
 // button-refresh pass: the Auto-route button is disabled during ARQ
 // mode (and ARQ mode cannot start while auto-route holds the main
 // screen locked, so the two never overlap).
+// [hbrelay TODO #191] A heartbeat announced relay-enabled. RAM for
+// the instant hover, PLUS a durable hbflag event (existing store,
+// new kind value, no schema change) throttled to one row per
+// station per hour -- so the flag survives restarts and ages out
+// via the same 24 h window the refresh applies (operator: "confirm
+// it passes through to the DB" -- it did not, now it does).
+void SpotMapWindow::noteRelayFlag(QString const &call) {
+    QString const c = call.trimmed().toUpper();
+    m_flagRelayers.insert(c);
+    qint64 const nowMs =
+        QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
+    if (nowMs - m_flagJournaledMs.value(c, 0) >
+        qint64(WINDOW_SECS) * 1000) {
+        m_flagJournaledMs.insert(c, nowMs);
+        queueReachEvent({m_currentBand, c, QStringLiteral("hbflag"),
+                         QString{}, nowMs / 1000, true});
+    }
+}
+
 // [nonrelayer] See header. Derived, no stored state: for each call,
 // count failed relay asks (fwd ok=0) that are BOTH newer than its
 // most recent successful forward on any band AND within the trailing
@@ -3873,15 +3892,23 @@ void SpotMapWindow::refreshNonRelayers() {
     m_nonRelayersDirty = false;
     m_nonRelayers.clear();
     m_knownRelayers.clear();
+    m_flagRelayers.clear(); // rebuilt from durable hbflag events
     qint64 const now =
         QDateTime::currentDateTimeUtc().toSecsSinceEpoch();
     auto const rows = reachEvents(); // one load, two passes
     QHash<QString, qint64> lastOk;
-    for (auto const &r : rows)
+    for (auto const &r : rows) {
         if (r.kind == QLatin1String("fwd") && r.ok) {
             lastOk[r.station] = qMax(lastOk.value(r.station), r.when);
             m_knownRelayers.insert(r.station); // [knownrelayer]
         }
+        // [hbrelay] announcements count while fresh: the flag rides
+        // every heartbeat, so a live relayer re-announces hourly and
+        // a turned-off one ages out within a day.
+        if (r.kind == QLatin1String("hbflag") &&
+            now - r.when <= 24 * 3600)
+            m_flagRelayers.insert(r.station);
+    }
     QHash<QString, int> fails;
     for (auto const &r : rows) {
         if (r.kind != QLatin1String("fwd") || r.ok)

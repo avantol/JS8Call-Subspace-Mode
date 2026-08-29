@@ -251,11 +251,16 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         // native-binary pattern above).
         // SNR check disabled — LDPC CRC validates decode; SNR estimate unreliable at startup.
         // noFlags removed — middle FrameCompoundDirected legitimately has First=Last=Data=0.
-        bool reservedBad = (bits[76] & 1) ||
-                           ((bits[75] & 1) && !(bits[74] & 1));
+        // [TODO #192 phase 1, operator 2026-08-29] TOLERATE bits
+        // 75-76: future fleet builds will assert them ("I'm
+        // subspace" / "relay enabled"), so rejecting them here would
+        // make those frames invisible. Cost accepted: the garbage
+        // filter loses its reserved-bits test and rests on syncLow
+        // alone. Phase 2 (setting the bits) ships only after this
+        // tolerance has aged through the fleet.
         bool noFlags = (frameBits == 0);
         bool syncLow = (sync < 2.2f && snr < -4);
-        bool garbage = reservedBad || syncLow;
+        bool garbage = syncLow;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
                    << "freq=" << freq << "sync=" << sync
@@ -264,7 +269,6 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
                    << "raw72-76=" << int(bits[72]) << int(bits[73])
                    << int(bits[74]) << int(bits[75]) << int(bits[76])
                    << "CRC14-OK"
-                   << (reservedBad ? "RESERVED-BAD" : "")
                    << (noFlags ? "NO-FLAGS" : "")
                    << (syncLow ? "SYNC-LOW" : "")
                    << (garbage ? "FILTERED" : "");
