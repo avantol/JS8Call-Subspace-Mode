@@ -2632,9 +2632,12 @@ void SpotMapWindow::redraw() {
             << "[LINELOG] edges pskr=" << seenPskr << " radio=" << seenRadio
             << " | dropped: old=" << oldEdge << " pskrHidden=" << hidPskr
             << " endpointMissing=" << noEnd
-            << " | drawn pskr=" << drewPskr << " radio=" << drewRadio
+            << " | collected pskr=" << drewPskr << " radio="
+            << drewRadio
             << " | window=" << m_viewWindowSecs << "s showPskr="
-            << m_showPskr << " viewAll=" << m_viewAll
+            << m_showPskr << " showConn=" << m_showConnections
+            << " viewAll=" << m_viewAll
+            << " hover=" << m_hoverCall
             << " plotted=" << posByCall.size();
         }
         // [inkdensity 2026-08-22] METRIC: THE NUMBER OF YELLOW LINES.
