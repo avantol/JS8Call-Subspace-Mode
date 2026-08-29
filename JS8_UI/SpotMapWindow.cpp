@@ -2532,6 +2532,9 @@ void SpotMapWindow::redraw() {
     // the base mesh stays hidden -- same rationale as the relay hop
     // pills ignoring the callsign toggle: the moment you ask is the
     // moment the toggle is off.
+    m_tracerHitsMe = false; // reset even when the block is skipped:
+                            // the label must erase the moment the
+                            // hover ends (operator, 2026-08-29)
     if (m_showConnections || !m_hoverCall.isEmpty()) {
         bool const overlayOn = m_showConnections;
         auto const cutoffH = now.addSecs(-m_viewWindowSecs);
@@ -2796,7 +2799,12 @@ void SpotMapWindow::redraw() {
                                      mix(yellow.green(), white.green()),
                                      mix(yellow.blue(), white.blue()),
                                      255};
-            drawGroup(lit, QPen{tracerColor, 1});
+            // [operator fix 2026-08-29] With the overlay OFF, hover
+            // shows OUR CALLSIGN only -- no lifted yellow/gray
+            // lines; the lit set is still computed for the
+            // reaches-us test below.
+            if (overlayOn)
+                drawGroup(lit, QPen{tracerColor, 1});
             m_lastSegCount = segPskr.size() + segRadio.size();
             auto const nearCenter = [&](QPointF const &pt) {
                 return (pt - center).manhattanLength() < 1.0;
@@ -3080,6 +3088,40 @@ void SpotMapWindow::redraw() {
             qreal const ymid = y + rowH / 2.0 - 1;
             p.drawLine(QPointF{xText - 24, ymid},
                        QPointF{xText - 6, ymid});
+        }
+    } else {
+        // [relaylegend, operator 2026-08-29] Same position, shown
+        // when the PSKR legend is NOT: the relay-status rings.
+        QFont lf = p.font();
+        lf.setPointSize(8);
+        p.setFont(lf);
+        struct Row { QColor c; qreal penW; QString label; };
+        Row const rows[2] = {
+            {QColor(70, 200, 90), 1.0, tr("Relay enabled")},
+            {QColor(225, 60, 60), 2.0, tr("Relay disabled?")}};
+        int const rowH = 11;
+        qreal const ascent = p.fontMetrics().ascent();
+        qreal maxW = 0;
+        for (Row const &r : rows)
+            maxW = std::max(
+                maxW, static_cast<qreal>(
+                          p.fontMetrics().horizontalAdvance(r.label)));
+        qreal const xRight = w - 6.0;
+        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2;
+        p.fillRect(QRectF{xRight - maxW - 28, y0 - 2, maxW + 28 + 4,
+                          2.0 * rowH + 4},
+                   QColor(16, 16, 24, 170));
+        for (int i = 0; i < 2; ++i) {
+            qreal const y = y0 + i * rowH;
+            qreal const xText = xRight - maxW;
+            p.setPen(QColor(205, 205, 220));
+            p.drawText(QPointF{xText, y + ascent - 1}, rows[i].label);
+            QPen ring{rows[i].c, rows[i].penW};
+            ring.setStyle(Qt::DashLine);
+            p.setPen(ring);
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(QPointF{xText - 15, y + rowH / 2.0 - 1},
+                          DOT_RADIUS_PX + 2.5, DOT_RADIUS_PX + 2.5);
         }
     }
 
