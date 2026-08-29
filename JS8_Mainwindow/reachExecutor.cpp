@@ -483,7 +483,6 @@ QString factorLine(QString const &name, QString const &raw,
 // decision; the live-learned YES overlays are re-applied on top.
 void UI_Constructor::reachRefreshBook() {
     qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
-    auto const learned = g_book.learned;
     bool const intelWasOpen = g_book.intelOpen;
     g_book.edges.clear();
     g_book.stations.clear();
@@ -549,10 +548,15 @@ void UI_Constructor::reachRefreshBook() {
                             q.value(4).toString());
     }
 
-    for (auto const &l : learned) {
+    // [oom 2026-08-29] g_book.learned is the durable in-session list
+    // and is NEVER cleared above; re-derive its EDGES only. The old
+    // copy-then-append-back DOUBLED the list every move -- 3 entries
+    // became millions by move 20, each move first copying the whole
+    // list (the lengthening GUI freezes) until the kernel OOM-killed
+    // the app at 62 GB (WA4ZL attempt; W2NYX survived 55 moves only
+    // because its empty shout left the list empty).
+    for (auto const &l : g_book.learned)
         bookAddEdge(l.hearer, l.heard, l.whenMs, l.snr, l.source);
-        g_book.learned.append(l);
-    }
 }
 
 void UI_Constructor::reachStart(QString const &target, int maxMoves,
