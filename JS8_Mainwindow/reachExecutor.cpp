@@ -1128,13 +1128,10 @@ void UI_Constructor::reachNextMove() {
         m_reachTimer->start(m_reach.holdUntilMs - now);
         return;
     }
-    // [budgetextend 2026-08-27, operator: "of course. 'the budget'
-    // is for when there is nothing left to do."] Budget spent does
-    // NOT stop the attempt while a route learned DURING this attempt
-    // remains untried -- the KI4RXJ case: move 6's shout learned a
-    // fresh -12 route and the strict budget threw it away. Over
-    // budget: no direct, no shout, no probes -- only fresh-evidence
-    // routes; when none remain, THEN stop.
+    // [operator ruling 2026-08-30] The move budget is HARD -- no
+    // extensions of any kind. Over budget nothing new is started:
+    // no direct, no shout, no probes, no routes; the in-flight move
+    // finishes its verdict and the attempt stops.
     bool const overBudget = m_reach.moveNo >= m_reach.maxMoves;
     reachRefreshBook();   // [livebook] the store may know more now
     // [relayalive 2026-08-27, operator: "do not exclude is
@@ -1667,29 +1664,16 @@ void UI_Constructor::reachNextMove() {
             QStringLiteral("relay:") + relKey, -1);
         if (tried >= 0)
             continue;   // stale-scored above; fresh candidates first
-        if (overBudget) {
-            // [operator ruling 2026-08-29: "no tricky stuff"] The
-            // ORIGINAL budget rule, restored: past the budget, ONLY
-            // a route resting on evidence learned THIS attempt buys
-            // one more move. The 2026-08-28 "any untried route"
-            // widening walked entire books through dead evening
-            // bands (W2NYX: 55 transmissions, 57 minutes, zero
-            // deliveries) -- when the budget is spent, the right
-            // answer is to stop and let the operator simply try
-            // again later.
-            QString const lastHop = x.mv.chain.isEmpty()
-                                        ? x.mv.via
-                                        : x.mv.chain.last();
-            bool const fresh =
-                bookEdge(lastHop, T).whenMs >= m_reach.startMs ||
-                bookEdge(T, lastHop).whenMs >= m_reach.startMs;
-            if (!fresh)
-                continue;
-            reachLog(QStringLiteral("    budget spent, but a route "
-                                    "learned this attempt remains -- "
-                                    "extending one move via %1")
-                         .arg(x.mv.via));
-        }
+        // [operator ruling 2026-08-30: "cut the extensions"] The
+        // budget is HARD. The learned-this-attempt extension self-fed
+        // on busy bands: every slot's decodes taught new edges, each
+        // one bought another move (IW2GOB: 36 transmissions, 43
+        // minutes, 28 of the moves were extensions -- the attempt
+        // could only end when the band went quiet or the operator
+        // halted it). Budget spent means stop; the operator simply
+        // tries again later.
+        if (overBudget)
+            break;
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = x.mv.via;
         m_reach.chain = x.mv.chain.isEmpty()
@@ -1857,10 +1841,9 @@ void UI_Constructor::reachNextMove() {
                                    "relays add nothing")
                         .arg(m_reach.silentDeliveries)
               : overBudget
-                  ? QStringLiteral("NOT REACHED -- move budget spent "
-                                   "and no fresh route remains; busy "
-                                   "or disabled, retry from the top "
-                                   "later")
+                  ? QStringLiteral("NOT REACHED -- move budget "
+                                   "spent; busy or disabled, retry "
+                                   "from the top later")
                   : QStringLiteral("nothing left to try -- every "
                                    "option is spent; busy or "
                                    "disabled, retry from the top "
