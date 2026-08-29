@@ -1049,7 +1049,15 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
     refreshOutgoingPlaceholder();
     if (canceled)
         return; // the map showed the "canceled" toast
-    auto *box = new QMessageBox(this);
+    // [operator 2026-08-29] The result box was getting lost behind
+    // the main window (auto-route is driven from the map). Parent it
+    // to whichever of OUR windows is active and grab focus with the
+    // ARQ result dialog's exact recipe (show + raise +
+    // activateWindow, chunkedArqHooks.cpp).
+    QWidget *host = this;
+    if (m_spotMapWindow && m_spotMapWindow->isActiveWindow())
+        host = m_spotMapWindow.data();
+    auto *box = new QMessageBox(host);
     box->setAttribute(Qt::WA_DeleteOnClose);
     box->setWindowModality(Qt::NonModal);
     box->setStandardButtons(QMessageBox::Ok);
@@ -1066,6 +1074,8 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
                          .arg(target));
     }
     box->show();
+    box->raise();
+    box->activateWindow();
 }
 
 // Speed restore with retry (audit item 14: the python's atexit fired
