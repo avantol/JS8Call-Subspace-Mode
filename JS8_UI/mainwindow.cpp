@@ -5228,8 +5228,16 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
     // of all replies; the margin has to cover that tail, not just
     // rounding.
     int const period = qMax(1, m_TRperiod);
-    int const waitSecs = txSecs + 3 * period * (chain.size() - 1)
-                         + 2 * period + 6;
+    // [operator 2026-08-29] RELAY-STYLE PATHS (any chain) last the
+    // move's whole possible life: the 16-period abandon time from
+    // TX end -- the same figure the executor's COST line names. The
+    // executor still erases the line the moment it declares a
+    // verdict; this backstop only matters for manual relay sends
+    // with no executor watching, and those wait the full window too.
+    int const waitSecs =
+        chain.size() > 1
+            ? txSecs + 16 * period
+            : txSecs + 2 * period + 6;
     qCWarning(mainwindow_js8) << "[ATTEMPT] noted:" << chain.join(">")
                               << "wait" << waitSecs;
     m_spotMapWindow->noteAttempt(chain, waitSecs);
