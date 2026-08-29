@@ -2875,6 +2875,32 @@ void SpotMapWindow::redraw() {
         }
         p.drawEllipse(pos, DOT_RADIUS_PX, DOT_RADIUS_PX);
 
+        // [presencelog 453, temporary] PSKR display is OFF yet this
+        // dot is on screen: name its clocks. The field mystery
+        // (2026-08-29: KS1DMD "seen 334 s ago" with zero decodes in
+        // 95 min) hinges on whether radioWhen is absent (the
+        // effectiveWhen fallback hole) or somehow fresh.
+        if (!m_showPskr) {
+            qint64 const whenAge =
+                s.when.isValid() ? s.when.secsTo(now) : -1;
+            qint64 const radioAge =
+                s.radioWhen.isValid() ? s.radioWhen.secsTo(now) : -1;
+            if (radioAge < 0 || radioAge > m_viewWindowSecs) {
+                static qint64 s_presLogMs = 0;
+                qint64 const nowMs =
+                    QDateTime::currentMSecsSinceEpoch();
+                if (nowMs - s_presLogMs > 10000) {
+                    s_presLogMs = nowMs;
+                    qCWarning(mqttclient_js8)
+                        << "[PRESENCELOG] pskrOff dot w/ stale-or-no"
+                        << "radio evidence:" << s.receiverCall
+                        << "whenAge=" << whenAge
+                        << "radioAge=" << radioAge
+                        << "(-1 = radioWhen UNSET)";
+                }
+            }
+        }
+
         // [nonrelayer + hbrelay, operator 2026-08-29] Relay status as
         // a dashed ring, same precedence as the hover lines: RED =
         // transmits (within the hour) but declined two asks today;
