@@ -175,6 +175,13 @@ class GridDb final {
     };
     static constexpr qint64 REACH_RETAIN_SECS = 90ll * 24 * 3600;
     void queueReachEvent(ReachEventRow const &r);
+    // [nonrelayer 2026-08-29] Rows queued but not yet flushed --
+    // readers that must see the newest events (the relay-status
+    // hover raced the flush and stayed stale until restart) merge
+    // these with loadReachEvents().
+    QVector<ReachEventRow> const &pendingReachEvents() const {
+        return m_pendingReach;
+    }
     QVector<ReachEventRow> loadReachEvents() const;
 
   private:

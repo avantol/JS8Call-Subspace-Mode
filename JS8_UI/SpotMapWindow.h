@@ -148,7 +148,13 @@ class SpotMapWindow final : public QWidget {
         m_gridDb.queueReachEvent(r);
     }
     QVector<GridDb::ReachEventRow> reachEvents() const {
-        return m_gridDb.loadReachEvents();
+        // Disk PLUS the unflushed queue: a fresh forward must be
+        // visible to the relay-status computation immediately, not
+        // at the next flush (the VE4TIM hover stayed stale until a
+        // restart, 2026-08-29).
+        auto rows = m_gridDb.loadReachEvents();
+        rows += m_gridDb.pendingReachEvents();
+        return rows;
     }
     // [nonrelayer 2026-08-29, operator spec] Stations that transmit
     // but do not relay when asked: >= 2 failed asks within the
