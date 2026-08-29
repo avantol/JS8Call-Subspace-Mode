@@ -3082,9 +3082,7 @@ void SpotMapWindow::redraw() {
         // One font height lower (operator, 2026-08-14) — the right
         // side of the bottom strip is empty (gradient bar is
         // centered), so the second row may ride into it.
-        // [operator 2026-08-29] up 1/3 of the legend font height
-        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2
-                         - p.fontMetrics().height() / 3.0;
+        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2;
         p.fillRect(QRectF{xRight - maxW - 28, y0 - 2, maxW + 28 + 4,
                           2.0 * rowH + 4},
                    QColor(16, 16, 24, 170));
@@ -3116,14 +3114,17 @@ void SpotMapWindow::redraw() {
                 maxW, static_cast<qreal>(
                           p.fontMetrics().horizontalAdvance(r.label)));
         qreal const xRight = w - 6.0;
-        // [operator 2026-08-29] up 1/3 of the legend font height
-        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2
-                         - p.fontMetrics().height() / 3.0;
-        p.fillRect(QRectF{xRight - maxW - 28, y0 - 2, maxW + 28 + 4,
-                          2.0 * rowH + 4},
+        // [operator 2026-08-29 rev2] Only the TOP row lifts 1/3 of
+        // the font height -- the two rings touched at the 11 px
+        // pitch; the bottom row stays aligned with the PSKR legend's
+        // position.
+        qreal const extra = p.fontMetrics().height() / 3.0;
+        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2;
+        p.fillRect(QRectF{xRight - maxW - 28, y0 - 2 - extra,
+                          maxW + 28 + 4, 2.0 * rowH + 4 + extra},
                    QColor(16, 16, 24, 170));
         for (int i = 0; i < 2; ++i) {
-            qreal const y = y0 + i * rowH;
+            qreal const y = y0 + i * rowH - (i == 0 ? extra : 0.0);
             qreal const xText = xRight - maxW;
             p.setPen(QColor(205, 205, 220));
             p.drawText(QPointF{xText, y + ascent - 1}, rows[i].label);
