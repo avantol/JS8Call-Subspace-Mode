@@ -1035,6 +1035,13 @@ void UI_Constructor::autoRouteCancel() {
 // tears down its button/status; the main-screen locks release on the
 // next gate poll once the flag is false.
 void UI_Constructor::autoRouteReachStopped(QString const &reason) {
+    // Idempotent: a grid that resolves to nothing makes reachStart
+    // refuse via reachStop, whose tail already ran this teardown --
+    // autoRouteBegin's refusal check then called it AGAIN with a
+    // cleared target, producing a second (empty-named) failure
+    // dialog (operator, 2026-08-29).
+    if (!m_autoRouteActive)
+        return;
     bool const canceled = m_autoRouteCancel;
     bool const success = (reason == QLatin1String("REACHED"));
     QString const target = m_autoRouteTarget;
