@@ -1086,6 +1086,13 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
     refreshOutgoingPlaceholder();
     if (canceled)
         return; // the map showed the "canceled" toast
+    // [exitghost 2026-08-30] Exiting with a route still running ends
+    // the attempt through this same path -- and the failure box it
+    // built flashed behind the closing main window (operator: "an
+    // extra dialog hidden behind the main window... at exit"). A
+    // teardown is not a verdict; no dialog.
+    if (reason == QLatin1String("app shutting down"))
+        return;
     // [operator 2026-08-29] The result box was getting lost behind
     // the main window (auto-route is driven from the map). Parent it
     // to whichever of OUR windows is active and grab focus with the
