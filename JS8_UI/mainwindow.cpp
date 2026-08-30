@@ -2767,9 +2767,16 @@ void UI_Constructor::drainEarlyTextFrames(int submode, int offset,
 bool UI_Constructor::txIdleNow() const {
     bool const arqRxBusy =
         m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+    // [armedgate 2026-08-30] Send PRESSED but the slot not yet keyed
+    // is busy too: none of the other terms are true in that window,
+    // so an auto-route started there ran concurrently with the
+    // operator's message and adopted ITS end as the probe's TX-END
+    // (field: K4EXA attempt, TX-END 8.4 s after SEND -- impossible
+    // for a Normal frame). The button stays checked from the press
+    // until resetMessage() unchecks it after the completed burst.
     return !m_transmitting && !m_tune && m_txFrameCount == 0 &&
            m_txFrameQueue.isEmpty() && !m_nativeBinaryTxActive &&
-           !arqRxBusy;
+           !arqRxBusy && !ui->startTxButton->isChecked();
 }
 
 // [operator 2026-08-30] ONE wording authority for "the radio is
