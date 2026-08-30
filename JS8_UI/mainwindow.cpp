@@ -5293,7 +5293,13 @@ void UI_Constructor::noteAttemptFromText(QString const &text, int txFrames) {
             : txSecs + 2 * period + 6;
     qCWarning(mainwindow_js8) << "[ATTEMPT] noted:" << chain.join(">")
                               << "wait" << waitSecs;
-    m_spotMapWindow->noteAttempt(chain, waitSecs);
+    // [firstline 2026-08-30] Gate on the OWNER's mode flag, here at
+    // the call site. The map's derived copy is false during move 1
+    // (reachStart transmits synchronously, the map is notified
+    // after), so gating inside the map dropped the first red line --
+    // the direct "T SNR?" call never drew (operator caught it).
+    if (m_autoRouteActive)
+        m_spotMapWindow->noteAttempt(chain, waitSecs);
 }
 
 void UI_Constructor::resetMessage() {

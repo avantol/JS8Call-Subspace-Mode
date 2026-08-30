@@ -522,7 +522,8 @@ void UI_Constructor::processCommandActivity() {
             QString dest = d.to.trimmed();
             while (dest.endsWith('>'))
                 dest.chop(1);
-            if (Radio::same_station(dest, m_config.my_callsign()))
+            if (Radio::same_station(dest, m_config.my_callsign()) &&
+                m_autoRouteActive) // [firstline] owner's flag gates
                 m_spotMapWindow->noteReply(d.from);
         }
 

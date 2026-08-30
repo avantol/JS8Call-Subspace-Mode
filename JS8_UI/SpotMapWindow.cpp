@@ -3550,8 +3550,10 @@ SpotMapWindow::hitTest(QPointF const &pos) const {
 void SpotMapWindow::noteAttempt(QStringList const &path, int waitSecs) {
     // [autoroute, operator spec 2026-08-28] The dashed-red / solid-
     // green layer draws ONLY in auto-route mode.
-    if (!m_autoRouteActive)
-        return;
+    // [firstline 2026-08-30] The mode gate moved to the CALLER (the
+    // owner's flag): this widget's derived copy is still false when
+    // move 1 transmits inside reachStart, and gating here dropped
+    // the first red line.
     if (path.isEmpty())
         return;
     Attempt a;
@@ -3578,10 +3580,8 @@ void SpotMapWindow::noteAttempt(QStringList const &path, int waitSecs) {
 // anywhere in its chain goes green -- a relay answering on the target's
 // behalf is still our path working.
 void SpotMapWindow::noteReply(QString const &from) {
-    // [autoroute] Same gate as noteAttempt: this layer exists only
-    // in auto-route mode.
-    if (!m_autoRouteActive)
-        return;
+    // [autoroute] Same layer as noteAttempt; [firstline] gate lives
+    // at the caller, on the owner's flag.
     QString const f = from.trimmed().toUpper();
     if (f.isEmpty())
         return;
