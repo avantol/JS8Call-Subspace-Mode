@@ -165,6 +165,13 @@ QHash<QString, QVector<RelayOutcome>> g_relayOutcomes;  // per band
 // [habitstore] answered-when-called observations, per band
 struct AnsOutcome { qint64 ms; bool answered; QString station; };
 QHash<QString, QVector<AnsOutcome>> g_ansOutcomes;
+// [relayprior 2026-08-30] The map's ring criteria, consumed by the
+// ranking (operator: announced relay-on should outrank unknown;
+// "demote 'relay disabled?' stations -- just now, it tried one").
+// Refreshed per move in reachRefreshBook; the MAP stays the one
+// authority for both criteria.
+QSet<QString> g_relayAnnounced;
+QHash<QString, int> g_relayFails24;
 bool g_eventsLoaded = false;
 
 double bandTrust(QString const &band, qint64 nowMs) {
@@ -409,7 +416,20 @@ double stAns(QString const &call, qint64 nowMs) {
 double stFwd(QString const &call, QString const &band, qint64 nowMs) {
     auto &s = g_book.stations[call];
     if (s.fwdHabit < 0) {
-        double const base = intelFwd(call);
+        double base = intelFwd(call);
+        // [relayprior] Announced relay-on within 24h (green-ring
+        // criterion) floors the prior at the fleet average: direct
+        // willingness evidence, not an unknown. Applied BEFORE the
+        // demotion so failed asks still beat the announcement.
+        if (g_relayAnnounced.contains(call))
+            base = qMax(base, kFwdPrior);
+        // [relayprior] Red-ring criterion (>=2 failed asks in 24h
+        // since the last success): blend those REAL failures into
+        // the prior un-decayed -- base*2/(2+f) (f=4 reproduces the
+        // K9IMM 0.14). The 45-min session decay had forgotten them
+        // by evening and the ranking asked a ringed station again.
+        if (int const f = g_relayFails24.value(call); f >= 2)
+            base = (base * 2.0) / (2.0 + f);
         double n = 0.0, a = 0.0;
         for (auto const &o : g_relayOutcomes.value(band)) {
             if (o.station != call)
@@ -486,6 +506,10 @@ QString factorLine(QString const &name, QString const &raw,
 // stale data). Rebuilt from the store's layers before EVERY move
 // decision; the live-learned YES overlays are re-applied on top.
 void UI_Constructor::reachRefreshBook() {
+    if (m_spotMapWindow) {   // [relayprior] ring criteria, per move
+        g_relayAnnounced = m_spotMapWindow->announcedRelayers();
+        g_relayFails24 = m_spotMapWindow->nonRelayerFails();
+    }
     qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
     bool const intelWasOpen = g_book.intelOpen;
     g_book.edges.clear();
@@ -1474,8 +1498,15 @@ void UI_Constructor::reachNextMove() {
                               10 * copy_, w)
                 << factorLine(first
                                   + QStringLiteral(" forwards when asked"),
-                              QString::number(fwd_, 'f', 2), 10 * fwd_,
-                              w)
+                              QString::number(fwd_, 'f', 2)
+                                  // [relayprior] show when a ring
+                                  // criterion moved this factor
+                                  + (g_relayFails24.value(first) >= 2
+                                         ? QStringLiteral(" (relay disabled?)")
+                                     : g_relayAnnounced.contains(first)
+                                         ? QStringLiteral(" (announced relay)")
+                                         : QString{}),
+                              10 * fwd_, w)
                 << factorLine(QStringLiteral("target hears ") + lastHop,
                               QString::number(deliver, 'f', 2),
                               10 * deliver, w)

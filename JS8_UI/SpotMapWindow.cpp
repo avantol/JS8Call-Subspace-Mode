@@ -4154,6 +4154,10 @@ void SpotMapWindow::refreshNonRelayers() {
         if (++fails[r.station] >= 2)
             m_nonRelayers.insert(r.station);
     }
+    // [relayprior] The executor demotes by the SAME criterion the
+    // red ring displays; keep the counts so the demotion can feed
+    // the actual failures into the prior instead of a constant.
+    m_nonRelayerFails = fails;
 }
 
 // [#187 intelminer] See header.

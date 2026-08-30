@@ -147,6 +147,19 @@ class SpotMapWindow final : public QWidget {
         m_nonRelayersDirty = true; // [nonrelayer] recompute lazily
         m_gridDb.queueReachEvent(r);
     }
+    // [relayprior] Ranking consumers of the ring criteria -- the
+    // map stays the ONE authority for both: green ring = announced
+    // relay-on within 24h; red ring = >=2 failed asks in 24h since
+    // the last success (counts included so the executor can blend
+    // the real failures, not a constant). Recomputed if stale.
+    QSet<QString> announcedRelayers() {
+        if (m_nonRelayersDirty) refreshNonRelayers();
+        return m_flagRelayers;
+    }
+    QHash<QString, int> nonRelayerFails() {
+        if (m_nonRelayersDirty) refreshNonRelayers();
+        return m_nonRelayerFails;
+    }
     QVector<GridDb::ReachEventRow> reachEvents() const {
         // Disk PLUS the unflushed queue: a fresh forward must be
         // visible to the relay-status computation immediately, not
@@ -167,6 +180,7 @@ class SpotMapWindow final : public QWidget {
     // event store, no new state; a forward clears it by arithmetic,
     // and it auto-expires ~a day after the last failed ask.
     QSet<QString> m_nonRelayers;
+    QHash<QString, int> m_nonRelayerFails;   // [relayprior]
     // [knownrelayer] Same pass, zero extra cost: stations with a
     // successful forward anywhere in the 90-day record. Presentation
     // TBD (operator); the set is maintained from here on.
