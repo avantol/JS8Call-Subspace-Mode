@@ -99,8 +99,12 @@ bool isRoutable(QString const &call) {
 }
 // gridtarget.py:44 GRID_RE
 bool isGridSquare(QString const &s) {
+    // 4, 6, or 8 characters -- MUST accept everything the map
+    // panel's Maidenhead::valid enables Start for (operator
+    // 2026-08-30: an 8-char grid passed the panel and was then
+    // rejected here with the generic failure dialog).
     static QRegularExpression const re(
-        QStringLiteral("^[A-R]{2}[0-9]{2}([A-X]{2})?$"),
+        QStringLiteral("^[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2})?)?$"),
         QRegularExpression::CaseInsensitiveOption);
     return re.match(s.trimmed()).hasMatch();
 }
@@ -590,7 +594,7 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
     // Speed pin (attempt.py:102-128): Normal for the whole attempt,
     // refusal aborts, restored on every exit incl. app quit.
     if (m_nSubMode != Varicode::JS8CallNormal) {
-        if (!canChangeSpeedNow()) {
+        if (!txIdleNow()) {
             reachLog(QStringLiteral("cannot pin Normal speed (tx busy)"
                                     " -- refusing to start"));
             m_reach = ReachState{};
@@ -632,7 +636,11 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
     // occupants are monitors that report us is a PARTIAL SUCCESS:
     // delivery-in provable, two-way not.
     if (isGridSquare(m_reach.target)) {
-        QString const chosen = reachResolveGrid(m_reach.target);
+        // Resolution runs on the 6-char square: precision beyond
+        // that is far below the 120-250 km candidate radius, and
+        // Geodesic takes 4/6-char grids.
+        QString const chosen =
+            reachResolveGrid(m_reach.target.left(6));
         if (chosen.isEmpty()) {
             reachStop(QStringLiteral("no reachable station in %1")
                           .arg(m_reach.target));
@@ -984,6 +992,20 @@ void UI_Constructor::reachStop(QString const &reason) {
 // here; TX-busy speed pin) -- a refusal ends the mode immediately as
 // a failure, never a silent hang.
 void UI_Constructor::autoRouteBegin(QString const &target) {
+    // [operator 2026-08-30] A busy radio is a WAIT, not a failure:
+    // say which kind in a toast and leave everything untouched --
+    // no mode entry, no failure dialog, a running API attempt keeps
+    // its slot. When the radio is idle, the start below pins Normal
+    // speed automatically whatever speed the app was at.
+    if (!txIdleNow()) {
+        if (m_spotMapWindow)
+            m_spotMapWindow->showToast(
+                (m_nativeBinaryTxActive ||
+                 (m_chunkedArq && m_chunkedArq->hasActiveRxWindow()))
+                    ? tr("Transfer already in progress")
+                    : tr("Wait until outgoing message completed"));
+        return;
+    }
     if (m_reach.active) {
         // An API-driven attempt is already running; the operator's
         // auto-route takes over.
@@ -1087,8 +1109,14 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
     } else {
         box->setIcon(QMessageBox::Warning);
         box->setWindowTitle(tr("Auto-route"));
-        box->setText(tr("Auto-route failed to find a path to %1")
-                         .arg(target));
+        // [operator 2026-08-30] Say what actually stopped it: the
+        // one-size text claimed a failed path search for stops that
+        // never searched (the KQ4ODY speed-pin refusal).
+        box->setText(
+            reason.startsWith(QLatin1String("no reachable station"))
+                ? tr("No reachable station near that grid")
+                : tr("Auto-route failed to find a path to %1")
+                      .arg(target));
     }
     box->show();
     box->raise();
@@ -1102,7 +1130,7 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
 void UI_Constructor::reachRestoreSpeed() {
     if (m_reach.savedSubmode < 0)
         return;
-    if (canChangeSpeedNow()) {
+    if (txIdleNow()) {
         setSubmode(m_reach.savedSubmode);
         reachLog(QStringLiteral("speed restored to %1")
                      .arg(m_reach.savedSubmode));

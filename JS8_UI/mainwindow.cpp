@@ -2758,15 +2758,27 @@ void UI_Constructor::drainEarlyTextFrames(int submode, int offset,
 // V3 native frames exist only in the Subspace transport, so a mid-session
 // switch kills the transfer — hence hasActiveRxWindow() (V3-specific);
 // V2 text keeps its mid-session speed freedom by design.
-bool UI_Constructor::canChangeSpeedNow() const {
+// [txidle 2026-08-30] The radio-idle fact ALONE: nothing sending,
+// nothing queued, no transfer under way in either direction. The
+// executor's own speed pin/restore ask THIS question -- asking the
+// operator-lock version below locked the mode out of its own start
+// (KQ4ODY: any start from Fast/Turbo refused "tx busy", because
+// autoRouteBegin had already raised the mode flag).
+bool UI_Constructor::txIdleNow() const {
     bool const arqRxBusy =
         m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
-    // [autoroute] The executor pins the speed for the whole mode; an
-    // operator change mid-route would break every packed frame count
-    // (operator, 2026-08-28: lock speed buttons AND menu).
     return !m_transmitting && !m_tune && m_txFrameCount == 0 &&
            m_txFrameQueue.isEmpty() && !m_nativeBinaryTxActive &&
-           !arqRxBusy && !m_autoRouteActive;
+           !arqRxBusy;
+}
+
+bool UI_Constructor::canChangeSpeedNow() const {
+    // [autoroute] The executor pins the speed for the whole mode; an
+    // operator change mid-route would break every packed frame count
+    // (operator, 2026-08-28: lock speed buttons AND menu). The mode
+    // term belongs ONLY here, on the operator surfaces (speed
+    // buttons, menu, API) -- see txIdleNow() above.
+    return txIdleNow() && !m_autoRouteActive;
 }
 
 bool UI_Constructor::hasClosedExistingMessageBuffer(int offset) {

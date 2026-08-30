@@ -607,6 +607,9 @@ class UI_Constructor : public QMainWindow {
     // [TODO #112] THE speed-change gate — shared by the UI polls and the
     // TCP API so they cannot drift apart.
     bool canChangeSpeedNow() const;
+    // [txidle] The radio-idle half of that gate, without the
+    // auto-route lock term — the executor's own pin/restore use this.
+    bool txIdleNow() const;
     bool canSendNetworkMessage();
     void sendNetworkMessage(QString const &type, QString const &message);
     void sendNetworkMessage(QString const &type, QString const &message,
