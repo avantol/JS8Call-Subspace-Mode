@@ -2283,6 +2283,22 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         m_spotMapWindow->queueReachEvent(
             {m_reach.band, T, QStringLiteral("ans"), QString{}, 0,
              true});
+        // [chaincredit 2026-08-30] The reply arriving through a
+        // relay chain is checksum-grade PROOF that every hop
+        // forwarded -- exact evidence, previously discarded for
+        // hops beyond our decode range (the *DE* observation only
+        // credits relays we HEAR). Journal a forward outcome for
+        // each chain member: fwd habit stays honest on proven
+        // routes, and far hops earn the known-forwarder green ring
+        // and its kFwdPrior ranking floor.
+        if (m_reach.kind == QLatin1String("relay"))
+            for (QString const &hop : m_reach.chain) {
+                g_relayOutcomes[m_reach.band].append(
+                    {now, true, hop});
+                m_spotMapWindow->queueReachEvent(
+                    {m_reach.band, hop, QStringLiteral("fwd"),
+                     QString{}, 0, true});
+            }
         m_spotMapWindow->queueReachEvent(
             {m_reach.band, T, QStringLiteral("reached"),
              path.join(QLatin1Char('>')), 0, true});
