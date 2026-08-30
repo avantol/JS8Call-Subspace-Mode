@@ -1722,16 +1722,44 @@ void UI_Constructor::reachNextMove() {
             QStringLiteral("relay:") + relKey, -1);
         if (tried >= 0)
             continue;   // stale-scored above; fresh candidates first
-        // [operator ruling 2026-08-30: "cut the extensions"] The
-        // budget is HARD. The learned-this-attempt extension self-fed
-        // on busy bands: every slot's decodes taught new edges, each
-        // one bought another move (IW2GOB: 36 transmissions, 43
-        // minutes, 28 of the moves were extensions -- the attempt
-        // could only end when the band went quiet or the operator
-        // halted it). Budget spent means stop; the operator simply
-        // tries again later.
-        if (overBudget)
-            break;
+        // [shoutspend, operator 2026-08-30: "an early shout can
+        // easily return 9 calls, seen it happen, we should try them
+        // all"] The budget is hard for everything EXCEPT stations
+        // that answered THIS attempt's QUERY CALL shout. Unlike the
+        // cut fresh-learned rule (IW2GOB: 36 tx, 28 extensions --
+        // ANY edge touching the target qualified, and a busy band
+        // replenishes those every slot), the responder set is CLOSED
+        // at shout time: YES replies are parsed only while the shout
+        // move is live (yesRe gate on m_reach.kind), so the overrun
+        // is bounded by the responder count, full stop. A responder
+        // self-certified BOTH links a relay needs (it decoded our
+        // shout; it claims the target with SNR+age) -- the highest-
+        // value evidence in the attempt, paid for with the most
+        // expensive move (~97 s); quitting with it untried wastes
+        // the purchase. triedAt dedup gives each responder ONE try.
+        if (overBudget) {
+            QString const lastHop = x.mv.chain.isEmpty()
+                                        ? x.mv.via
+                                        : x.mv.chain.last();
+            bool responder = false;
+            for (int i = m_reach.learnedAt0;
+                 i < g_book.learned.size(); ++i) {
+                auto const &l = g_book.learned.at(i);
+                if (l.hearer == lastHop && l.heard == T &&
+                    (l.source == QLatin1String("yes-frame1") ||
+                     l.source ==
+                         QLatin1String("querycall-live"))) {
+                    responder = true;
+                    break;
+                }
+            }
+            if (!responder)
+                continue;
+            reachLog(QStringLiteral("    budget spent, but %1 "
+                                    "answered the shout -- it gets "
+                                    "its try")
+                         .arg(lastHop));
+        }
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = x.mv.via;
         m_reach.chain = x.mv.chain.isEmpty()
