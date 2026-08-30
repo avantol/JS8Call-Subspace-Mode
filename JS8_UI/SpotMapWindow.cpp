@@ -396,6 +396,16 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     connect(m_relayDoneBtn, &QToolButton::clicked, this, [this]() {
         if (m_relayPath.isEmpty())
             return;
+        // [operator 2026-08-30] Same gate as auto-route Start: a
+        // busy radio is a WAIT, not a failure. Toast which kind and
+        // keep the selected path so Done can simply be clicked again.
+        if (m_txBusyProbe) {
+            if (QString const busy = m_txBusyProbe();
+                !busy.isEmpty()) {
+                showToast(busy);
+                return;
+            }
+        }
         // "HOP1>HOP2>DEST [MESSAGE]" — plain directed relay text, no
         // ARQ wrapping on any hop (operator directive 2026-08-14).
         QString const tpl = m_relayPath.join(QLatin1Char('>')) +

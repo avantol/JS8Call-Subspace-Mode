@@ -610,6 +610,8 @@ class UI_Constructor : public QMainWindow {
     // [txidle] The radio-idle half of that gate, without the
     // auto-route lock term — the executor's own pin/restore use this.
     bool txIdleNow() const;
+    // Busy-wait toast wording, empty when idle — the ONE authority.
+    QString txBusyToastText() const;
     bool canSendNetworkMessage();
     void sendNetworkMessage(QString const &type, QString const &message);
     void sendNetworkMessage(QString const &type, QString const &message,

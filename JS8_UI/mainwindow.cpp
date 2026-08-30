@@ -2772,6 +2772,19 @@ bool UI_Constructor::txIdleNow() const {
            !arqRxBusy;
 }
 
+// [operator 2026-08-30] ONE wording authority for "the radio is
+// busy, wait": empty when idle, otherwise the toast text. Shared by
+// auto-route Start and the relay-builder Done so the two can never
+// say different things for the same state.
+QString UI_Constructor::txBusyToastText() const {
+    if (m_nativeBinaryTxActive ||
+        (m_chunkedArq && m_chunkedArq->hasActiveRxWindow()))
+        return tr("Transfer already in progress");
+    if (!txIdleNow())
+        return tr("Wait until outgoing message completed");
+    return {};
+}
+
 bool UI_Constructor::canChangeSpeedNow() const {
     // [autoroute] The executor pins the speed for the whole mode; an
     // operator change mid-route would break every packed frame count

@@ -551,6 +551,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // [BUILD 340] Country names for spot hover (LogBook/cty.dat by
     // callsign; the map compares topic DXCC codes to skip our own
     // country before calling this).
+    m_spotMapWindow->setTxBusyProbe(
+        [this]() { return txBusyToastText(); });
     m_spotMapWindow->setCountryLookup([this](QString const &call) {
         QString country;
         bool workedCall = false, workedCountry = false;

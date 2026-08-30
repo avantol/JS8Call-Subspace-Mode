@@ -997,13 +997,9 @@ void UI_Constructor::autoRouteBegin(QString const &target) {
     // no mode entry, no failure dialog, a running API attempt keeps
     // its slot. When the radio is idle, the start below pins Normal
     // speed automatically whatever speed the app was at.
-    if (!txIdleNow()) {
+    if (QString const busy = txBusyToastText(); !busy.isEmpty()) {
         if (m_spotMapWindow)
-            m_spotMapWindow->showToast(
-                (m_nativeBinaryTxActive ||
-                 (m_chunkedArq && m_chunkedArq->hasActiveRxWindow()))
-                    ? tr("Transfer already in progress")
-                    : tr("Wait until outgoing message completed"));
+            m_spotMapWindow->showToast(busy);
         return;
     }
     if (m_reach.active) {

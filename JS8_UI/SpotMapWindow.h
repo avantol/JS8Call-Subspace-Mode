@@ -336,8 +336,16 @@ class SpotMapWindow final : public QWidget {
     // Country-name lookup by callsign (LogBook/cty.dat, injected by
     // the main window — this widget has no logbook dependency).
     std::function<QString(QString const &)> m_countryLookup;
+    // [operator 2026-08-30] Busy-wait probe installed by the main
+    // window: empty string = radio idle, otherwise the toast text
+    // ("Wait until outgoing message completed" / "Transfer already
+    // in progress"). The relay-builder Done gate asks it.
+    std::function<QString()> m_txBusyProbe;
 
   public:
+    void setTxBusyProbe(std::function<QString()> fn) {
+        m_txBusyProbe = std::move(fn);
+    }
     void setCountryLookup(std::function<QString(QString const &)> fn) {
         m_countryLookup = std::move(fn);
     }
