@@ -125,10 +125,10 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
                 m_gridDb.openFailure() ==
                         GridDb::OpenFailure::DriverMissing
                     ? tr("Grid database driver missing -- the "
-                         "installation is incomplete (SQLite "
-                         "driver plugin not found). Grids, habit "
-                         "history and relay events will not "
-                         "persist.")
+                         "installation is incomplete (sqldrivers\\"
+                         "qsqlite.dll or libsqlite3-0.dll not "
+                         "found/loadable). Grids, habit history "
+                         "and relay events will not persist.")
                     : tr("Grid database could not be opened (%1). "
                          "Check file permissions beside the "
                          "settings file. Grids, habit history and "

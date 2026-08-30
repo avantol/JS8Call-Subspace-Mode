@@ -71,7 +71,16 @@ bool GridDb::open(QString const &path) {
                                      m_connName);
     m_db.setDatabaseName(path);
     if (!m_db.open()) {
-        m_openFailure = OpenFailure::OpenFailed;
+        // [sqlerr2] Windows field log 2026-08-30 18:52Z: QSQLITE was
+        // in the AVAILABLE list (registration reads metadata only)
+        // yet load failed "Driver not loaded" -- the plugin file
+        // shipped but its engine DLL did not. That is the broken-
+        // install class, not a permissions problem.
+        m_openFailure =
+            m_db.lastError().text().contains(
+                QStringLiteral("Driver not loaded"))
+                ? OpenFailure::DriverMissing
+                : OpenFailure::OpenFailed;
         m_openErrorText = m_db.lastError().text();
         qCWarning(griddb_js8)
             << "[GRIDDB] open FAILED:" << path
