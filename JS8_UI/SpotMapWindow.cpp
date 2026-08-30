@@ -3963,15 +3963,15 @@ void SpotMapWindow::autoRouteShowPanel() {
                     QString const up = s.trimmed().toUpper();
                     static QRegularExpression const grid6(
                         QStringLiteral("^[A-R]{2}[0-9]{2}[A-X]{2}$"));
-                    // A grid-shaped prefix can also open a real
-                    // callsign (AB12CD/P): clamp ONLY when the 7th
-                    // character CONTINUES a grid (the standard's 4th
-                    // pair is digits), so a '/' or letter typed after
-                    // six grid-shaped characters is left alone.
+                    // [operator 2026-08-30, second ruling] If the
+                    // first 6 characters are a valid grid, adding
+                    // MORE is simply disabled -- the earlier
+                    // digit-only clamp let "EN45OOOO" grow with
+                    // Start dark and no hint why. No callsign
+                    // exception: [gridintent] already rules a
+                    // grid-shaped opening to BE a grid.
                     if (up.size() > 6 &&
-                        grid6.match(up.left(6)).hasMatch() &&
-                        up.at(6).isDigit() &&
-                        !Radio::is_routable_callsign(up)) {
+                        grid6.match(up.left(6)).hasMatch()) {
                         m_autoRouteEdit->setText(up.left(6));
                         return; // re-fires with the clamped text
                     }
