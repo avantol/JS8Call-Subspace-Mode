@@ -4073,10 +4073,6 @@ void SpotMapWindow::autoRouteEnded(bool canceled) {
     requestReplot();
 }
 
-// [autoroute] ARQ session state, pushed from the mainwindow's
-// button-refresh pass: the Auto-route button is disabled during ARQ
-// mode (and ARQ mode cannot start while auto-route holds the main
-// screen locked, so the two never overlap).
 // [hbrelay TODO #191] A heartbeat announced relay-enabled. RAM for
 // the instant hover, PLUS a durable hbflag event (existing store,
 // new kind value, no schema change) throttled to one row per
@@ -4150,12 +4146,6 @@ int SpotMapWindow::seedLogGrids(QVector<GridDb::LogSeed> const &rows) {
             << "[SPOTMAP] seeded" << inserted
             << "log-mined grids into the bank";
     return inserted;
-}
-
-void SpotMapWindow::setArqSessionActive(bool active) {
-    m_arqBusy = active;
-    if (m_autoRouteBtn)
-        m_autoRouteBtn->setEnabled(!active);
 }
 
 void SpotMapWindow::showRelayPathToast() {
@@ -4291,7 +4281,11 @@ void SpotMapWindow::changeEvent(QEvent *event) {
         // [autoroute] No hint toast during the mode -- the status
         // line and prompt already say what matters (operator,
         // 2026-08-28).
-        !m_autoRouteActive && !m_autoRouteArmed) {
+        !m_autoRouteActive && !m_autoRouteArmed &&
+        // [operator 2026-08-30] ...and none while a standard message
+        // or ARQ transfer is under way: the hint advertises
+        // click-to-compose, which must not be used mid-send.
+        (!m_txBusyProbe || m_txBusyProbe().isEmpty())) {
         // [relaysel] While selecting relays, the activation hint
         // teaches THAT gesture, not click-to-compose (operator,
         // 2026-08-14).

@@ -458,7 +458,6 @@ class SpotMapWindow final : public QWidget {
     // scale legend (operator, 2026-08-28) -- transient toasts keep
     // their own position and timing, untouched.
     class QLabel *m_statusLine = nullptr;
-    bool m_arqBusy = false;   // pushed by the mainwindow; gates the button
     // Sticky toast text: while non-empty, the toast label reverts to
     // this after any transient toast expires instead of hiding --
     // the "in progress..." status line rides the SAME control as the
@@ -609,7 +608,6 @@ public:
     // Auto-route button) and reports mode end. canceled=true shows
     // the "canceled" toast; success/failure dialogs are the
     // mainwindow's.
-    void setArqSessionActive(bool active);
     void autoRouteEnded(bool canceled);
     // [modeowner] Owner notification: the mode actually started.
     // The ONLY setter of this widget's active-mode UI state.

@@ -2765,8 +2765,11 @@ void UI_Constructor::drainEarlyTextFrames(int submode, int offset,
 // (KQ4ODY: any start from Fast/Turbo refused "tx busy", because
 // autoRouteBegin had already raised the mode flag).
 bool UI_Constructor::txIdleNow() const {
-    bool const arqRxBusy =
-        m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+    // [arqgap 2026-08-30] Either direction: an active TX session
+    // owns the radio through its between-chunk gaps too.
+    bool const arqBusy =
+        m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+                         m_chunkedArq->hasActiveRxWindow());
     // [armedgate 2026-08-30] Send PRESSED but the slot not yet keyed
     // is busy too: none of the other terms are true in that window,
     // so an auto-route started there ran concurrently with the
@@ -2776,7 +2779,7 @@ bool UI_Constructor::txIdleNow() const {
     // until resetMessage() unchecks it after the completed burst.
     return !m_transmitting && !m_tune && m_txFrameCount == 0 &&
            m_txFrameQueue.isEmpty() && !m_nativeBinaryTxActive &&
-           !arqRxBusy && !ui->startTxButton->isChecked();
+           !arqBusy && !ui->startTxButton->isChecked();
 }
 
 // [operator 2026-08-30] ONE wording authority for "the radio is
@@ -2784,8 +2787,12 @@ bool UI_Constructor::txIdleNow() const {
 // auto-route Start and the relay-builder Done so the two can never
 // say different things for the same state.
 QString UI_Constructor::txBusyToastText() const {
+    // [arqgap 2026-08-30] hasActiveTxSession covers the quiet gaps
+    // BETWEEN chunks of an outgoing ARQ transfer, where nothing is
+    // keyed and the queues are empty but the session owns the radio.
     if (m_nativeBinaryTxActive ||
-        (m_chunkedArq && m_chunkedArq->hasActiveRxWindow()))
+        (m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+                          m_chunkedArq->hasActiveRxWindow())))
         return tr("Transfer already in progress");
     if (!txIdleNow())
         return tr("Wait until outgoing message completed");
@@ -9474,14 +9481,11 @@ void UI_Constructor::updateButtonDisplay() {
                            (m_chunkedArq->hasActiveTxSession() ||
                             m_chunkedArq->hasActiveRxWindow())) ||
                           m_autoRouteActive; // [autoroute] ARQ-style lock
-    // [autoroute] Push ARQ-session state to the map so its
-    // Auto-route button greys during ARQ mode (and only then --
-    // m_autoRouteActive itself must not disable the button, it IS
-    // the Halt control).
-    if (m_spotMapWindow)
-        m_spotMapWindow->setArqSessionActive(
-            m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
-                             m_chunkedArq->hasActiveRxWindow()));
+    // [arqgap 2026-08-30] The map's Auto-route button no longer greys
+    // during ARQ: a greyed button was a dead click with no feedback
+    // (operator). The button stays live and the owner's busy gate
+    // answers any start request with the "Transfer already in
+    // progress" toast, through the installed busy probe.
 
     auto selectedCallsign = callsignSelected(true);
     bool emptyCallsign = selectedCallsign.isEmpty();
