@@ -3937,8 +3937,19 @@ void SpotMapWindow::autoRouteShowPanel() {
             if (t.compare(m_myCall.trimmed(),
                           Qt::CaseInsensitive) == 0)
                 return false;
-            return Radio::is_routable_callsign(t) ||
-                   Maidenhead::valid(t);
+            // [gridintent, operator 2026-08-30] An entry that OPENS
+            // like a grid square is a grid, full stop: only a
+            // complete 4- or 6-char grid enables Start. Without this
+            // the half-typed grid EN45D read as a valid Ukrainian
+            // callsign shape and the search ran for a station of
+            // that name. Cost, accepted: a special-event callsign
+            // that begins exactly like a grid square cannot be typed
+            // as a target.
+            static QRegularExpression const gridOpen(
+                QStringLiteral("^[A-R]{2}[0-9]{2}"));
+            if (gridOpen.match(t).hasMatch())
+                return Maidenhead::valid(t);
+            return Radio::is_routable_callsign(t);
         };
         connect(m_autoRouteEdit, &QLineEdit::textChanged, this,
                 [this, isValidTarget](QString const &s) {
