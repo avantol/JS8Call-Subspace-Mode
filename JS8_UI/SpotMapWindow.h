@@ -156,6 +156,13 @@ class SpotMapWindow final : public QWidget {
         if (m_nonRelayersDirty) refreshNonRelayers();
         return m_flagRelayers;
     }
+    // [relayprior] The other half of the green ring: at least one
+    // PROVEN forward in the journal (90-day memory, unwindowed --
+    // same rule the ring draws by).
+    QSet<QString> knownRelayers() {
+        if (m_nonRelayersDirty) refreshNonRelayers();
+        return m_knownRelayers;
+    }
     QHash<QString, int> nonRelayerFails() {
         if (m_nonRelayersDirty) refreshNonRelayers();
         return m_nonRelayerFails;

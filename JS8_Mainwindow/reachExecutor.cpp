@@ -170,7 +170,12 @@ QHash<QString, QVector<AnsOutcome>> g_ansOutcomes;
 // "demote 'relay disabled?' stations -- just now, it tried one").
 // Refreshed per move in reachRefreshBook; the MAP stays the one
 // authority for both criteria.
-QSet<QString> g_relayAnnounced;
+// g_relayGreen = the FULL green-ring criterion (announced within
+// 24h OR proven forwarder in the journal) -- operator 2026-08-30:
+// "the point was to use that green-ring status". Boost consuming
+// only the announced half was a half-port; map and ranking must
+// read the same union.
+QSet<QString> g_relayGreen;
 QHash<QString, int> g_relayFails24;
 bool g_eventsLoaded = false;
 
@@ -421,7 +426,7 @@ double stFwd(QString const &call, QString const &band, qint64 nowMs) {
         // criterion) floors the prior at the fleet average: direct
         // willingness evidence, not an unknown. Applied BEFORE the
         // demotion so failed asks still beat the announcement.
-        if (g_relayAnnounced.contains(call))
+        if (g_relayGreen.contains(call))
             base = qMax(base, kFwdPrior);
         // [relayprior] Red-ring criterion (>=2 failed asks in 24h
         // since the last success): blend those REAL failures into
@@ -507,7 +512,8 @@ QString factorLine(QString const &name, QString const &raw,
 // decision; the live-learned YES overlays are re-applied on top.
 void UI_Constructor::reachRefreshBook() {
     if (m_spotMapWindow) {   // [relayprior] ring criteria, per move
-        g_relayAnnounced = m_spotMapWindow->announcedRelayers();
+        g_relayGreen = m_spotMapWindow->announcedRelayers();
+        g_relayGreen.unite(m_spotMapWindow->knownRelayers());
         g_relayFails24 = m_spotMapWindow->nonRelayerFails();
     }
     qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
@@ -1503,8 +1509,8 @@ void UI_Constructor::reachNextMove() {
                                   // criterion moved this factor
                                   + (g_relayFails24.value(first) >= 2
                                          ? QStringLiteral(" (relay disabled?)")
-                                     : g_relayAnnounced.contains(first)
-                                         ? QStringLiteral(" (announced relay)")
+                                     : g_relayGreen.contains(first)
+                                         ? QStringLiteral(" (relay enabled)")
                                          : QString{}),
                               10 * fwd_, w)
                 << factorLine(QStringLiteral("target hears ") + lastHop,
