@@ -1030,7 +1030,14 @@ void UI_Constructor::autoRouteBegin(QString const &target) {
         // Refused (speed pin while transmitting, bad grid resolve
         // path, etc.) -- reachStop never fired, so close out here.
         autoRouteReachStopped(QStringLiteral("refused"));
+        return;
     }
+    // [modeowner 2026-08-30] The mode ACTUALLY started -- only now
+    // does the map hear about it and flip its UI. The map no longer
+    // arms itself at click time, so a refusal above leaves it
+    // untouched (prompt open, target still typed).
+    if (m_spotMapWindow)
+        m_spotMapWindow->autoRouteStarted(m_autoRouteTarget);
 }
 
 // [autoroute] Operator cancel -- the map button or the main Halt.

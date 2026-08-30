@@ -3942,8 +3942,30 @@ void SpotMapWindow::autoRouteShowPanel() {
         };
         connect(m_autoRouteEdit, &QLineEdit::textChanged, this,
                 [this, isValidTarget](QString const &s) {
+                    // [operator 2026-08-30] Grid targets clamp to 6
+                    // characters -- the position math computes at 6
+                    // everywhere (the Build 364 standard), so extra
+                    // precision only creates format mismatches. A
+                    // 7th character onto a valid 6-char grid is
+                    // dropped as typed or pasted; callsigns are
+                    // unaffected.
+                    QString const up = s.trimmed().toUpper();
+                    static QRegularExpression const grid6(
+                        QStringLiteral("^[A-R]{2}[0-9]{2}[A-X]{2}$"));
+                    // A grid-shaped prefix can also open a real
+                    // callsign (AB12CD/P): clamp ONLY when the 7th
+                    // character CONTINUES a grid (the standard's 4th
+                    // pair is digits), so a '/' or letter typed after
+                    // six grid-shaped characters is left alone.
+                    if (up.size() > 6 &&
+                        grid6.match(up.left(6)).hasMatch() &&
+                        up.at(6).isDigit() &&
+                        !Radio::is_routable_callsign(up)) {
+                        m_autoRouteEdit->setText(up.left(6));
+                        return; // re-fires with the clamped text
+                    }
                     m_autoRouteStartBtn->setEnabled(
-                        isValidTarget(s.trimmed().toUpper()));
+                        isValidTarget(up));
                 });
         connect(m_autoRouteStartBtn, &QToolButton::clicked, this,
                 [this]() {
@@ -3985,18 +4007,36 @@ void SpotMapWindow::positionAutoRoutePanel() {
                            height() - m_autoRoutePanel->height() - 70);
 }
 
-// [autoroute] A validated target: mode goes active, the prompt
-// closes, map clicks are dead until exit, and the mainwindow takes
-// over (executor start + main-screen lock).
+// [modeowner 2026-08-30] A validated target is a REQUEST, nothing
+// more. The map changes NO state of its own here: the mainwindow
+// owns the mode, and this widget's active-mode UI is set only by
+// its autoRouteStarted()/autoRouteEnded() notifications. A refused
+// request (busy radio -> toast) therefore leaves the prompt open
+// with the target still typed, ready to retry -- the 2026-08-30
+// field failure was exactly this function declaring the mode active
+// optimistically while the owner refused, after which every copy of
+// the state disagreed (status line up, Halt dead, prompt stuck).
 void SpotMapWindow::autoRouteChooseTarget(QString const &target) {
+    Q_EMIT autoRouteStart(target);
+}
+
+// [modeowner] Owner says the mode actually STARTED -- only now does
+// the map's UI flip: prompt away, Halt label, sticky status.
+void SpotMapWindow::autoRouteStarted(QString const &target) {
     m_autoRouteArmed = false;
     m_autoRouteActive = true;
     m_autoRouteTarget = target;
     if (m_autoRoutePanel)
         m_autoRoutePanel->hide();
+    {
+        // The mode can start with the button unchecked (target sent
+        // while a prior teardown unchecked it); the label and check
+        // state are DERIVED from the owner's notification.
+        QSignalBlocker const b(m_autoRouteBtn);
+        m_autoRouteBtn->setChecked(true);
+    }
     m_autoRouteBtn->setText(tr("Halt auto-route"));
     setStickyToast(tr("Auto-route to %1 in progress...").arg(target));
-    Q_EMIT autoRouteStart(target);
 }
 
 // [autoroute] Mode over (success, failure, or cancel) -- the
@@ -4302,6 +4342,20 @@ void SpotMapWindow::closeEvent(QCloseEvent *event) {
     // "starts up without the spots map sometimes. a race?").
     if (event->spontaneous() && !m_shuttingDown)
         m_restoreVisible = false; // [visrace] user clicked the X
+    // [modeowner, operator 2026-08-30] Closing the map clears the
+    // target prompt (pure local UI); a RUNNING auto-route is the
+    // owner's state and continues untouched -- reopening the map
+    // redraws Halt/status from that fact.
+    if (m_autoRouteArmed && !m_autoRouteActive) {
+        m_autoRouteArmed = false;
+        if (m_autoRoutePanel)
+            m_autoRoutePanel->hide();
+        {
+            QSignalBlocker const b(m_autoRouteBtn);
+            m_autoRouteBtn->setChecked(false);
+        }
+        m_relaySelBtn->setEnabled(true);
+    }
     saveSettings(); // full state, incl. geometry — crash-safe too
     m_resetOnNextShow = true; // [showfix] genuine close -> next show resets
     Q_EMIT closed();

@@ -611,6 +611,9 @@ public:
     // mainwindow's.
     void setArqSessionActive(bool active);
     void autoRouteEnded(bool canceled);
+    // [modeowner] Owner notification: the mode actually started.
+    // The ONLY setter of this widget's active-mode UI state.
+    void autoRouteStarted(QString const &target);
     // [hbrelay TODO #191] A heartbeat announced relay-enabled:
     // session-RAM set feeding the "Relay enabled" hover alongside
     // the habit-proven known-relayers.
