@@ -115,14 +115,16 @@ jobs:
             done
         }
         walk_deps build/JS8Call/JS8Call.exe build/JS8Call/
-        # Plugins copied by windeployqt have their own dependencies too
-        for plugin in build/JS8Call/platforms/*.dll \
-                      build/JS8Call/imageformats/*.dll \
-                      build/JS8Call/multimedia/*.dll \
-                      build/JS8Call/styles/*.dll \
-                      build/JS8Call/tls/*.dll \
-                      build/JS8Call/iconengines/*.dll \
-                      build/JS8Call/networkinformation/*.dll; do
+        # Plugins copied by windeployqt have their own dependencies
+        # too. EVERY plugin subdirectory, generically -- the previous
+        # hand-list (7 dirs, written at Build 137) predated Qt Sql:
+        # when Build 371 added it, windeployqt placed
+        # sqldrivers/qsqlite.dll but nothing walked its imports, so
+        # libsqlite3-0.dll was never bundled and every Windows
+        # installer since shipped a dead grid bank ("Driver not
+        # loaded", field logs 2026-08-30). A glob cannot repeat that
+        # mistake for the next module.
+        for plugin in build/JS8Call/*/*.dll; do
             [ -f "$plugin" ] && walk_deps "$plugin" build/JS8Call/
         done
         # Walk again on Qt6*.dll because they were placed by windeployqt
