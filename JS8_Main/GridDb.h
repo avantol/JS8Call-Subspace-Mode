@@ -136,6 +136,13 @@ class GridDb final {
 
     bool open(QString const &path);
     bool isOpen() const { return m_db.isOpen(); }
+    // [sqlerr] Why open() failed, for the UI owner's startup dialog:
+    // DriverMissing = broken installation (the SQLite plugin never
+    // shipped); OpenFailed = driver fine, file unopenable
+    // (permissions / corruption). None after a successful open.
+    enum class OpenFailure { None, DriverMissing, OpenFailed };
+    OpenFailure openFailure() const { return m_openFailure; }
+    QString openErrorText() const { return m_openErrorText; }
 
     // ---- grids: the original authority tier -----------------------
     QHash<QString, QString> loadAll() const;
@@ -190,6 +197,8 @@ class GridDb final {
 
     QSqlDatabase m_db;
     QString m_connName;
+    OpenFailure m_openFailure = OpenFailure::None;   // [sqlerr]
+    QString m_openErrorText;
     QVector<EdgeRow> m_pendingEdges;
     QVector<ReachEventRow> m_pendingReach;
     QVector<StationRow> m_pendingStations;

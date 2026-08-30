@@ -51,16 +51,34 @@ bool GridDb::open(QString const &path) {
     // Unique connection name — a second instance ([multiinst]) in the
     // same process (tests) must not collide.
     static int serial = 0;
+    // [sqlerr 2026-08-30, operator: "wouldn't an error message be
+    // more appropriate?"] A missing QSQLITE driver is a BROKEN
+    // INSTALLATION (Windows/MSIX: sqldrivers\qsqlite.dll +
+    // libsqlite3-0.dll are separately-losable files), and until now
+    // it only wrote a diag line while the app ran on with no grid
+    // bank, no habit journal, no reach events -- a masked
+    // deterministic failure. Record the failure class; the UI owner
+    // shows the dialog (this class stays widget-free).
+    if (!QSqlDatabase::isDriverAvailable(QStringLiteral("QSQLITE"))) {
+        m_openFailure = OpenFailure::DriverMissing;
+        m_openErrorText = QStringLiteral("QSQLITE driver not found");
+        qCWarning(griddb_js8)
+            << "[GRIDDB] SQLite DRIVER MISSING -- broken install";
+        return false;
+    }
     m_connName = QStringLiteral("griddb-%1").arg(++serial);
     m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
                                      m_connName);
     m_db.setDatabaseName(path);
     if (!m_db.open()) {
+        m_openFailure = OpenFailure::OpenFailed;
+        m_openErrorText = m_db.lastError().text();
         qCWarning(griddb_js8)
             << "[GRIDDB] open FAILED:" << path
             << m_db.lastError().text();
         return false;
     }
+    m_openFailure = OpenFailure::None;
     // Write-behind wants WAL: readers never block, and NORMAL means we
     // are not fsyncing per transaction. A crash can cost the last
     // flush interval, which is band observations we can re-hear.

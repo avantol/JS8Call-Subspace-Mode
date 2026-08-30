@@ -36,6 +36,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QButtonGroup>
+#include <QMessageBox>
 #include <QToolTip>
 
 #include "JS8_Include/Maidenhead.h"
@@ -114,6 +115,29 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
             // [#168 part 3] Restore happens in setStation(), not
             // here: m_myGrid is unknown at ctor time (bearings) and
             // the first setStation() used to clear everything.
+        } else {
+            // [sqlerr, operator 2026-08-30] A silent open failure
+            // masqueraded as an empty band (no grid bank, no habit
+            // journal, no reach events). Say it ONCE, at startup,
+            // with the class-specific remedy. Deferred to the event
+            // loop: the constructor runs before any window shows.
+            QString const text =
+                m_gridDb.openFailure() ==
+                        GridDb::OpenFailure::DriverMissing
+                    ? tr("Grid database driver missing -- the "
+                         "installation is incomplete (SQLite "
+                         "driver plugin not found). Grids, habit "
+                         "history and relay events will not "
+                         "persist.")
+                    : tr("Grid database could not be opened (%1). "
+                         "Check file permissions beside the "
+                         "settings file. Grids, habit history and "
+                         "relay events will not persist.")
+                          .arg(m_gridDb.openErrorText());
+            QTimer::singleShot(0, this, [this, text]() {
+                QMessageBox::warning(this, tr("Grid database"),
+                                     text);
+            });
         }
     }
     // [#168 part 3] Write-behind: RAM answers every query, the queue
