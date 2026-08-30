@@ -1359,6 +1359,11 @@ class UI_Constructor : public QMainWindow {
         int         moveNo = 0;
         int         sent = 0;
         int         maxMoves = 6;
+        // [#196] g_book.learned size at attempt start -- exact
+        // "learned during THIS attempt" counter for the failure
+        // dialog's will/can line (append-time truth; edge whenMs can
+        // be backdated by QUERY CALL ages, so it cannot serve).
+        int         learnedAt0 = 0;
         QString     kind;           // "snr" | "shout" | "relay"
         QString     via;            // relay move only: chain[0]
         QStringList chain;          // full relay chain (excl. target)

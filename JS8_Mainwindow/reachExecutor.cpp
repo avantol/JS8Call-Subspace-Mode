@@ -590,6 +590,7 @@ void UI_Constructor::reachStart(QString const &target, int maxMoves,
     m_reach.maxMoves = qBound(1, maxMoves, 12);
     m_reach.startMs = DriftingDateTime::currentMSecsSinceEpoch();
     m_reach.band = m_config.bands()->find(dialFrequency());
+    m_reach.learnedAt0 = g_book.learned.size();   // [#196]
 
     // Speed pin (attempt.py:102-128): Normal for the whole attempt,
     // refusal aborts, restored on every exit incl. app quit.
@@ -1115,11 +1116,37 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
         // [operator 2026-08-30] Say what actually stopped it: the
         // one-size text claimed a failed path search for stops that
         // never searched (the KQ4ODY speed-pin refusal).
-        box->setText(
+        QString text =
             reason.startsWith(QLatin1String("no reachable station"))
                 ? tr("No reachable station near that grid")
                 : tr("Auto-route failed to find a path to %1")
-                      .arg(target));
+                      .arg(target);
+        // [#196] Second line when the attempt left something behind.
+        // "will": an ask/answer outcome was journaled this attempt --
+        // those re-weight the SAME candidates' factors on a retry
+        // (45-min half-life), so the next search is guaranteed to
+        // rank differently. "can": no outcomes, but the book learned
+        // new stations/edges while we listened -- new information
+        // that MAY open a route. Neither: no line (e.g. halted
+        // before any transmission). startMs == 0 means the attempt
+        // was refused at the door and nothing ran.
+        qint64 const t0 = m_reach.startMs;
+        bool will = false;
+        if (t0 > 0) {
+            for (auto const &o : g_relayOutcomes.value(m_reach.band))
+                if (o.ms >= t0) { will = true; break; }
+            if (!will)
+                for (auto const &o : g_ansOutcomes.value(m_reach.band))
+                    if (o.ms >= t0) { will = true; break; }
+        }
+        bool const can = !will && t0 > 0 &&
+                         g_book.learned.size() > m_reach.learnedAt0;
+        if (will || can)
+            text += tr("\n\nIf you want to try again, the "
+                       "information from this attempt %1 help the "
+                       "next search.")
+                        .arg(will ? tr("will") : tr("can"));
+        box->setText(text);
     }
     box->show();
     box->raise();
