@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"relayprior\" (v4.1.0.457) by WM8Q"}
+    return QString{"%1 \"zerotime\" (v4.1.0.457) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

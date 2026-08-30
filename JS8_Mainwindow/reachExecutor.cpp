@@ -1943,13 +1943,26 @@ void UI_Constructor::reachNextMove() {
                          bookEdge(m_reach.target, lastHop).whenMs);
         }
         if (!wCall.isEmpty())
-            reachLog(QStringLiteral("    withheld best: %1  %2/1000s "
-                                    "(target-side evidence %3h older "
-                                    "than the silence)")
-                         .arg(wCall)
-                         .arg(wBest * 1000.0, 0, 'f', 4)
-                         .arg((m_reach.gateSilenceMs - wWhen)
-                                  / 3600000.0, 0, 'f', 1));
+            // [zerotime] wWhen == 0 is a PAIR THE BOOK NEVER SAW
+            // (bookEdge returns a default edge), not an old one --
+            // the subtraction printed "496697.2h older" (the age of
+            // the Unix epoch, field 2026-08-30). Scoring was never
+            // affected: pLinkRaw guards whenMs<=0 with kUnseenLink,
+            // and every other consumer tests whenMs>0 first.
+            reachLog(
+                wWhen > 0
+                    ? QStringLiteral("    withheld best: %1  %2/1000s "
+                                     "(target-side evidence %3h "
+                                     "older than the silence)")
+                          .arg(wCall)
+                          .arg(wBest * 1000.0, 0, 'f', 4)
+                          .arg((m_reach.gateSilenceMs - wWhen)
+                                   / 3600000.0, 0, 'f', 1)
+                    : QStringLiteral("    withheld best: %1  %2/1000s "
+                                     "(no target-side evidence in "
+                                     "the book at all)")
+                          .arg(wCall)
+                          .arg(wBest * 1000.0, 0, 'f', 4));
         reachStop(QStringLiteral("direct call unanswered; delivery to "
                                  "%1 was already proven, no station "
                                  "has heard it since, and no route "
