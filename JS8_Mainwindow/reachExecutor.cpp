@@ -2427,8 +2427,16 @@ void UI_Constructor::reachTick() {
 
 void UI_Constructor::reachPlaceTemplate(QStringList const &path) {
     clearCallsignSelected();
-    QString const tpl = path.join(QLatin1Char('>'))
-                        + QStringLiteral(" [MESSAGE]");
+    QString tpl = path.join(QLatin1Char('>'))
+                  + QStringLiteral(" [MESSAGE]");
+    // [operator 2026-08-30] Teach the reached station the return
+    // path, single-relay successes only (deeper chains unlikely to
+    // carry a reply; direct contacts need no instruction). Left
+    // unhighlighted on purpose: the operator DELETES it when no
+    // reply is expected, so its presence is a meaningful request.
+    if (path.size() == 2)
+        tpl += QStringLiteral(" REPLY TO \"%1>%2\"")
+                   .arg(path.first(), m_config.my_callsign());
     ui->extFreeTextMsgEdit->setPlainText(tpl);
     QTextCursor c = ui->extFreeTextMsgEdit->textCursor();
     if (int const at = tpl.indexOf(QStringLiteral("[MESSAGE]"));
