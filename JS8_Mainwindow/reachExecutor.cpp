@@ -2038,8 +2038,14 @@ void UI_Constructor::reachSend(QString const &wire) {
     m_reach.lastWire = wire;
     // [autoroute] Path counter on the owned Last Tx label.
     if (m_autoRouteActive)
+        // [operator 2026-08-30] "... Path #x/6" -- show the budget
+        // so the operator can see how much attempt remains. A
+        // shout-responder overrun past the budget reads honestly
+        // as e.g. #7/6.
         last_tx_label.setText(
-            QStringLiteral("Auto-route: Path #%1").arg(m_reach.moveNo));
+            QStringLiteral("Auto-route: Path #%1/%2")
+                .arg(m_reach.moveNo)
+                .arg(m_reach.maxMoves));
     m_reach.moveCapMs = DriftingDateTime::currentMSecsSinceEpoch()
                         + kMoveCapMs;   // attempt.py:320-321
     reachLog(QStringLiteral("[%1] SEND %2")
