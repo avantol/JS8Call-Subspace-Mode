@@ -1178,11 +1178,28 @@ void UI_Constructor::autoRouteReachStopped(QString const &reason) {
         }
         bool const can = !will && t0 > 0 &&
                          g_book.learned.size() > m_reach.learnedAt0;
-        if (will || can)
+        if (will || can) {
             text += tr("\n\nIf you want to try again, the "
                        "information from this attempt %1 help the "
                        "next search.")
                         .arg(will ? tr("will") : tr("can"));
+            // [retrybtn, operator 2026-08-30] When the attempt left
+            // usable information behind, offer the retry right in
+            // the verdict. Retry re-enters through the normal front
+            // door (autoRouteBegin), so the busy gate, mode locks
+            // and map notification all apply as if Start were
+            // clicked.
+            box->setStandardButtons(QMessageBox::Retry |
+                                    QMessageBox::Cancel);
+            box->setDefaultButton(QMessageBox::Retry);
+            QString const retryTarget = target;
+            connect(box, &QMessageBox::buttonClicked, this,
+                    [this, box, retryTarget](QAbstractButton *b) {
+                        if (box->standardButton(b) ==
+                            QMessageBox::Retry)
+                            autoRouteBegin(retryTarget);
+                    });
+        }
         box->setText(text);
     }
     box->show();
