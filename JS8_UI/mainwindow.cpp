@@ -2799,13 +2799,19 @@ QString UI_Constructor::txBusyToastText() const {
     return {};
 }
 
+// [speedsplit] "May the operator change speed?" -- the Build-362
+// terms exactly (blocks only what a speed change would corrupt in
+// flight: keyed TX, tune, frames pending, queue, binary send, ARQ
+// RECEIVE window) plus the auto-route mode lock (2026-08-28: the
+// executor pins the speed for the whole mode). Deliberately ALLOWS
+// the ARQ send session's between-chunk waits and the Send-armed
+// pre-key seconds, as every build through last night did.
 bool UI_Constructor::canChangeSpeedNow() const {
-    // [autoroute] The executor pins the speed for the whole mode; an
-    // operator change mid-route would break every packed frame count
-    // (operator, 2026-08-28: lock speed buttons AND menu). The mode
-    // term belongs ONLY here, on the operator surfaces (speed
-    // buttons, menu, API) -- see txIdleNow() above.
-    return txIdleNow() && !m_autoRouteActive;
+    bool const arqRxBusy =
+        m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
+    return !m_transmitting && !m_tune && m_txFrameCount == 0 &&
+           m_txFrameQueue.isEmpty() && !m_nativeBinaryTxActive &&
+           !arqRxBusy && !m_autoRouteActive;
 }
 
 bool UI_Constructor::hasClosedExistingMessageBuffer(int offset) {
