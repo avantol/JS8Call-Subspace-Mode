@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"mapfour\" (v4.1.0.461) by WM8Q"}
+    return QString{"%1 \"queueclear\" (v4.1.0.461) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

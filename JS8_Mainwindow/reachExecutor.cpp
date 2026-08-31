@@ -1055,6 +1055,17 @@ void UI_Constructor::autoRouteBegin(QString const &target) {
     // queue only drains into an EMPTY box) and the banner belongs
     // there anyway (operator, 2026-08-28: clear at start).
     ui->extFreeTextMsgEdit->clear();
+    // [queueclear, operator 2026-08-31] The mode is the only
+    // speaker AND the only listener: anything already in the
+    // OUTGOING message queue would drain into the first free slot
+    // -- exactly the listening window -- and defeat the wait
+    // (there is no room in the auto-route protocol to pause a
+    // drain). Anything in the INBOUND command queue would churn
+    // mid-mode (its replies are gated at [REPLY-GATE] anyway).
+    // Both cleared at mode entry; new replies stay suppressed for
+    // the mode's duration by the existing gate.
+    m_txMessageQueue = {};
+    m_rxCommandQueue.clear();
     refreshOutgoingPlaceholder();
     reachStart(target);
     if (!m_reach.active) {
