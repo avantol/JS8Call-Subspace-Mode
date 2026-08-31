@@ -2059,6 +2059,8 @@ void UI_Constructor::reachOnTxComplete() {
     if (!m_reach.active || m_reach.txEndMs != 0)
         return;
     m_reach.txEndMs = DriftingDateTime::currentMSecsSinceEpoch();
+    m_reach.sawBandActivity = false;   // [adaptiveslot] per move
+    m_reach.heldSecondSlot = false;
     // [twoslot 2026-08-30, operator: "build the 2-slot wait after
     // the SNR? and we'll see if it works better"] The 1-slot verdict
     // collided with second-opportunity repliers: verdict at
@@ -2066,15 +2068,17 @@ void UI_Constructor::reachOnTxComplete() {
     // boundary a station keys when its decode+enqueue missed the
     // first one. Half-duplex ate the answer AND journaled a false
     // ans=false (self-inflicted habit contamination). Direct pings
-    // now listen through the second boundary; cost is +1 slot per
-    // SILENT move only.
-    // [twoslot v2, operator 2026-08-31: relay move gave a 1-slot
-    // verdict -- "only one slot then move to next path"] The
-    // collision model applies to EVERY move kind that waits for a
-    // first response: the relay's forward keying has the same
-    // decode+enqueue race as a direct reply. Uniform 2 slots; the
-    // watchers still extend from the first detected start.
-    m_reach.deadlineMs = reachSlotEndMs(m_reach.txEndMs, 2);
+    // now listen through the second boundary WHEN THE BAND IS BUSY.
+    // [adaptiveslot, operator 2026-08-31: "exactly. adaptive."] The
+    // field test settled it: 22 pings on a near-empty band, all 10
+    // answers in the FIRST slot, none later -- the second-slot
+    // population is traffic-induced queueing, so a uniform 2-slot
+    // wait pays its cost exactly where it returns nothing. The
+    // trigger is a boolean FACT, not a tuned threshold (no pads):
+    // any frame decoded during slot 1 = the band has traffic =
+    // hold the second slot (see reachTick). Quiet slot 1 = old
+    // 1-slot tempo.
+    m_reach.deadlineMs = reachSlotEndMs(m_reach.txEndMs, 1);
     reachLog(QStringLiteral("    TX-END; deadline %1")
                  .arg(fmtClock(m_reach.deadlineMs)));
     reachArmTimer();
@@ -2083,6 +2087,7 @@ void UI_Constructor::reachOnTxComplete() {
 void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
     if (!m_reach.active || m_reach.txEndMs == 0)
         return;
+    m_reach.sawBandActivity = true;   // [adaptiveslot] band-wide feed
     qint64 const now = DriftingDateTime::currentMSecsSinceEpoch();
     QString const up = d.text.trimmed().toUpper();
     QString const me = m_config.my_callsign().trimmed().toUpper();
@@ -2466,6 +2471,20 @@ void UI_Constructor::reachTick() {
             }
         }
         if (now < m_reach.deadlineMs) {
+            reachArmTimer();
+            return;
+        }
+        // [adaptiveslot] Slot-1 deadline reached with no reply
+        // started, but the band showed traffic during the wait:
+        // queueing is plausible, so hold ONE more slot. Boolean
+        // trigger, applied once per move, all move kinds.
+        if (!m_reach.heldSecondSlot && m_reach.sawBandActivity &&
+            m_reach.watchers.isEmpty()) {
+            m_reach.heldSecondSlot = true;
+            m_reach.deadlineMs =
+                reachSlotEndMs(m_reach.txEndMs, 2);
+            reachLog(QStringLiteral("    band active in slot 1 -- "
+                                    "holding a second slot"));
             reachArmTimer();
             return;
         }

@@ -1364,6 +1364,10 @@ class UI_Constructor : public QMainWindow {
         // dialog's will/can line (append-time truth; edge whenMs can
         // be backdated by QUERY CALL ages, so it cannot serve).
         int         learnedAt0 = 0;
+        // [adaptiveslot] any frame decoded during this move's wait
+        // (band-wide) => hold a second slot at the 1-slot deadline.
+        bool        sawBandActivity = false;
+        bool        heldSecondSlot = false;
         QString     kind;           // "snr" | "shout" | "relay"
         QString     via;            // relay move only: chain[0]
         QStringList chain;          // full relay chain (excl. target)
