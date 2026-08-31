@@ -2059,7 +2059,20 @@ void UI_Constructor::reachOnTxComplete() {
     if (!m_reach.active || m_reach.txEndMs != 0)
         return;
     m_reach.txEndMs = DriftingDateTime::currentMSecsSinceEpoch();
-    m_reach.deadlineMs = reachSlotEndMs(m_reach.txEndMs, 1);
+    // [twoslot 2026-08-30, operator: "build the 2-slot wait after
+    // the SNR? and we'll see if it works better"] The 1-slot verdict
+    // collided with second-opportunity repliers: verdict at
+    // slot-end+1s, move 2 keyed at the NEXT boundary -- exactly the
+    // boundary a station keys when its decode+enqueue missed the
+    // first one. Half-duplex ate the answer AND journaled a false
+    // ans=false (self-inflicted habit contamination). Direct pings
+    // now listen through the second boundary; cost is +1 slot per
+    // SILENT ping only (69 historical busy verdicts = ~17 min total
+    // across every run ever). Other move kinds keep their measured
+    // deadlines (the shout already waits longer by design).
+    m_reach.deadlineMs = reachSlotEndMs(
+        m_reach.txEndMs,
+        m_reach.kind == QLatin1String("snr") ? 2 : 1);
     reachLog(QStringLiteral("    TX-END; deadline %1")
                  .arg(fmtClock(m_reach.deadlineMs)));
     reachArmTimer();
