@@ -553,6 +553,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // country before calling this).
     m_spotMapWindow->setTxBusyProbe(
         [this]() { return txBusyToastText(); });
+    m_spotMapWindow->setCongestionProbe(
+        [this]() { return bandCongestionIndex(); });
     m_spotMapWindow->setCountryLookup([this](QString const &call) {
         QString country;
         bool workedCall = false, workedCountry = false;

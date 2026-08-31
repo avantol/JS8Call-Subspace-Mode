@@ -2835,6 +2835,21 @@ QString UI_Constructor::txBusyToastText() const {
 // executor pins the speed for the whole mode). Deliberately ALLOWS
 // the ARQ send session's between-chunk waits and the Send-armed
 // pre-key seconds, as every build through last night did.
+// [congestion 2026-08-31] ceil(10 x occupied fraction) over the 20
+// completed slots before the current one; floor 1 so the scale is
+// honest ("1" = essentially clear, never zero-looking). Calibration
+// so far (operator labels): quiet ~= 2-3, light ~= 5.
+int UI_Constructor::bandCongestionIndex() const {
+    int const period = qMax(1, static_cast<int>(m_TRperiod));
+    qint64 const nowSlot =
+        QDateTime::currentSecsSinceEpoch() / period;
+    int occ = 0;
+    for (qint64 s = nowSlot - 20; s < nowSlot; ++s)
+        if (m_congestionSlots.contains(s))
+            ++occ;
+    return qMax(1, (occ * 10 + 19) / 20);   // ceil(10*occ/20), min 1
+}
+
 bool UI_Constructor::canChangeSpeedNow() const {
     bool const arqRxBusy =
         m_chunkedArq && m_chunkedArq->hasActiveRxWindow();

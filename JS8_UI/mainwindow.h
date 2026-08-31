@@ -612,6 +612,9 @@ class UI_Constructor : public QMainWindow {
     bool txIdleNow() const;
     // Busy-wait toast wording, empty when idle — the ONE authority.
     QString txBusyToastText() const;
+    // [congestion] 1-10 = ceil(10 x occupied-slot fraction, trailing
+    // 20 slots). Radio-only; works with no internet.
+    int bandCongestionIndex() const;
     bool canSendNetworkMessage();
     void sendNetworkMessage(QString const &type, QString const &message);
     void sendNetworkMessage(QString const &type, QString const &message,
@@ -1421,6 +1424,9 @@ class UI_Constructor : public QMainWindow {
         qint64 askedMs = 0;
     };
     QVector<ManualAsk> m_manualAsks;
+    // [congestion 2026-08-31] slot ids (epochSecs / current period)
+    // that contained >=1 decoded frame; pruned in the recorder.
+    mutable QSet<qint64> m_congestionSlots;
     static constexpr qint64 kManualAskSettleMs =
         900 * 1000; // mine.py:267 settle_relays' 15-minute window
     // [autoroute 2026-08-28] Auto-route mode: the map picked a

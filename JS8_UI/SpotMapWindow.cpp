@@ -3099,6 +3099,19 @@ void SpotMapWindow::redraw() {
                        QStringLiteral("%1 %2")
                            .arg(scaleLabelValue())
                            .arg(unitLabel));
+            // [congestion, operator 2026-08-31] Band congestion
+            // index just above the distance legend: 1-10 =
+            // occupied-slot fraction of the trailing 20 slots.
+            if (m_congestionProbe) {
+                int const ci = m_congestionProbe();
+                p.setPen(ci >= 7 ? QColor(235, 120, 110)
+                         : ci >= 4 ? QColor(230, 200, 120)
+                                   : QColor(150, 210, 150));
+                p.drawText(
+                    QRectF{bar.left(), yLine - 38.0, barW, 16.0},
+                    Qt::AlignHCenter | Qt::AlignBottom,
+                    tr("Band congestion: %1/10").arg(ci));
+            }
         }
         QLinearGradient lg{bar.topLeft(), bar.topRight()};
         for (int i = 0; i <= 10; ++i) {

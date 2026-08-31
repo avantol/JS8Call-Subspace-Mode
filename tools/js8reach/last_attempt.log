@@ -103,3 +103,174 @@
 03:17:14.300      VERDICT +91s: forwarded, but the target never answered -- retry from the top later
 03:17:14.300  NOT REACHED after 6 transmissions (593s total) -- verdict: busy or disabled; retry from the top later (rerun this command)
 03:17:14.322  speed restored to 2 -- done
+16:50:25 [SNRTEST] start band=20m period=15s mygrid=DN61OK targets=25
+16:50:25 [SNRTEST]   N1MAG      DM79QJ      292 km
+16:50:25 [SNRTEST]   WH6HJH-RX  DM78PU      337 km
+16:50:25 [SNRTEST]   KG7RXU     DN55NG      458 km
+16:50:25 [SNRTEST]   KJ7ROX     DM44II      881 km
+16:50:25 [SNRTEST]   W5SDR      DM72DV      955 km
+16:50:25 [SNRTEST]   K5SRL      EM04SR85HK   1042 km
+16:50:25 [SNRTEST]   VE4TIM     EN19RL     1197 km
+16:50:25 [SNRTEST]   VE4DRK     EN19LU     1202 km
+16:50:25 [SNRTEST]   VE4TM      EN19QQ     1209 km
+16:50:25 [SNRTEST]   KC7VQR     CN96RP     1240 km
+16:50:25 [SNRTEST]   K7RIE      CN96OU     1267 km
+16:50:25 [SNRTEST]   W6MFB/FULLERTON DM13BU     1288 km
+16:50:25 [SNRTEST]   N7EAL      DM03UU     1316 km
+16:50:25 [SNRTEST]   KC7IMD     CN85NN09   1373 km
+16:50:25 [SNRTEST]   N9EAT      EN41WT     1384 km
+16:50:25 [SNRTEST]   K9IMM      EN52CV     1408 km
+16:50:25 [SNRTEST]   KC0KVR     EM48RP     1415 km
+16:50:25 [SNRTEST]   KD7HGL     CN87TS     1417 km
+16:50:25 [SNRTEST]   VE6JXN     DO33EP     1450 km
+16:50:25 [SNRTEST]   KI6HQT     EM10DG     1485 km
+16:50:25 [SNRTEST]   VE7OES     CN88HK     1515 km
+16:50:25 [SNRTEST]   NO9G       EN51VV     1541 km
+16:50:25 [SNRTEST]   VA3ROM     EN58JK     1583 km
+16:50:25 [SNRTEST]   KC9VFR     EN61LO     1641 km
+16:50:25 [SNRTEST]   WA9TDD     EM79FE10   1814 km
+16:50:25 [SNRTEST] (1/25) -> N1MAG SNR?  (292 km)
+16:51:32 [SNRTEST]   silent (49s)
+16:51:32 [SNRTEST] (2/25) -> WH6HJH-RX SNR?  (337 km)
+16:53:02 [SNRTEST]   silent (49s)
+16:53:02 [SNRTEST] (3/25) -> KG7RXU SNR?  (458 km)
+16:54:17 [SNRTEST]   silent (49s)
+16:54:17 [SNRTEST] (4/25) -> KJ7ROX SNR?  (881 km)
+16:55:32 [SNRTEST]   silent (49s)
+16:55:32 [SNRTEST] (5/25) -> W5SDR SNR?  (955 km)
+16:56:12 [SNRTEST]   REPLY W5SDR +13.8s (start period ~1) snr=-13
+16:56:12 [SNRTEST] (6/25) -> K5SRL SNR?  (1042 km)
+16:57:17 [SNRTEST]   silent (49s)
+16:57:17 [SNRTEST] (7/25) -> VE4TIM SNR?  (1197 km)
+16:57:57 [SNRTEST]   REPLY VE4TIM +13.8s (start period ~1) snr=-11
+16:57:57 [SNRTEST] (8/25) -> VE4DRK SNR?  (1202 km)
+16:59:02 [SNRTEST]   silent (49s)
+16:59:02 [SNRTEST] (9/25) -> VE4TM SNR?  (1209 km)
+16:59:42 [SNRTEST]   REPLY VE4TM +13.8s (start period ~1) snr=-5
+16:59:42 [SNRTEST] (10/25) -> KC7VQR SNR?  (1240 km)
+17:00:47 [SNRTEST]   silent (49s)
+17:00:47 [SNRTEST] (11/25) -> K7RIE SNR?  (1267 km)
+17:02:02 [SNRTEST]   silent (49s)
+17:02:02 [SNRTEST] (12/25) -> W6MFB/FULLERTON SNR?  (1288 km)
+17:03:32 [SNRTEST]   silent (49s)
+17:03:32 [SNRTEST] (13/25) -> N7EAL SNR?  (1316 km)
+17:04:47 [SNRTEST]   silent (49s)
+17:04:47 [SNRTEST] (14/25) -> KC7IMD SNR?  (1373 km)
+17:06:02 [SNRTEST]   silent (49s)
+17:06:02 [SNRTEST] (15/25) -> N9EAT SNR?  (1384 km)
+17:07:17 [SNRTEST]   silent (49s)
+17:07:17 [SNRTEST] (16/25) -> K9IMM SNR?  (1408 km)
+17:08:32 [SNRTEST]   silent (49s)
+17:08:32 [SNRTEST] (17/25) -> KC0KVR SNR?  (1415 km)
+17:09:47 [SNRTEST]   silent (49s)
+17:09:47 [SNRTEST] (18/25) -> KD7HGL SNR?  (1417 km)
+17:11:02 [SNRTEST]   silent (49s)
+17:11:02 [SNRTEST] (19/25) -> VE6JXN SNR?  (1450 km)
+17:11:42 [SNRTEST]   REPLY VE6JXN +13.8s (start period ~1) snr=-2
+17:11:42 [SNRTEST] (20/25) -> KI6HQT SNR?  (1485 km)
+17:12:47 [SNRTEST]   silent (49s)
+17:12:47 [SNRTEST] (21/25) -> VE7OES SNR?  (1515 km)
+17:14:02 [SNRTEST]   silent (49s)
+17:14:02 [SNRTEST] (22/25) -> NO9G SNR?  (1541 km)
+17:15:17 [SNRTEST]   silent (49s)
+17:15:17 [SNRTEST] (23/25) -> VA3ROM SNR?  (1583 km)
+17:16:32 [SNRTEST]   silent (49s)
+17:16:32 [SNRTEST] (24/25) -> KC9VFR SNR?  (1641 km)
+17:17:47 [SNRTEST]   silent (49s)
+17:17:47 [SNRTEST] (25/25) -> WA9TDD SNR?  (1814 km)
+17:18:27 [SNRTEST]   REPLY WA9TDD +13.8s (start period ~1) snr=-1
+17:18:27 [SNRTEST] DONE: 25 asked, 5 answered (20%)
+17:18:27 [SNRTEST]   start period 1: 5
+17:18:27 [SNRTEST]   start period 2: 0
+17:18:27 [SNRTEST]   start period 3: 0
+17:18:27 [SNRTEST]   nearest answer W5SDR 955km, farthest WA9TDD 1814km
+17:48:19 [SNRTEST] start band=40m period=15s mygrid=DN61OK targets=25
+17:48:19 [SNRTEST]   N0AIU      DM79KT      229 km
+17:48:19 [SNRTEST]   WB7TSQ     DN30XM      452 km
+17:48:19 [SNRTEST]   WA1TYB     DN46BO      703 km
+17:48:19 [SNRTEST]   KL7UT      DN35BE      708 km
+17:48:19 [SNRTEST]   KS1DMD     EM07PP      811 km
+17:48:19 [SNRTEST]   W7YSB      DM44XE      855 km
+17:48:19 [SNRTEST]   K8JOK      EN14KV08    872 km
+17:48:19 [SNRTEST]   KJ7ROX     DM44II      881 km
+17:48:19 [SNRTEST]   KS0TOR     EM17GR      899 km
+17:48:19 [SNRTEST]   WH6AKZ     EN21AC      906 km
+17:48:19 [SNRTEST]   KK7UMM     DM33WV      961 km
+17:48:19 [SNRTEST]   ND7M       DM16XF      988 km
+17:48:19 [SNRTEST]   KI4RXJ     EM28GX     1000 km
+17:48:19 [SNRTEST]   K5TRB      EM15FL     1042 km
+17:48:19 [SNRTEST]   N0MTV      EM29SC     1077 km
+17:48:19 [SNRTEST]   KD7WPQ     DN18RH54   1082 km
+17:48:19 [SNRTEST]   WX5OKE     EM26EJ     1116 km
+17:48:19 [SNRTEST]   N6CYB      EM26UV88   1189 km
+17:48:19 [SNRTEST]   KF0DRT     EN35MH     1196 km
+17:48:19 [SNRTEST]   VE4DRK     EN19LU     1202 km
+17:48:19 [SNRTEST]   KV5R       EM02WT     1227 km
+17:48:19 [SNRTEST]   W0MQD      EM38QW     1234 km
+17:48:19 [SNRTEST]   KN6OEH     DM13HV     1252 km
+17:48:19 [SNRTEST]   N0AAS      EM38UT23UA   1265 km
+17:48:19 [SNRTEST]   WA6PZB     DM03XS77   1305 km
+17:48:19 [SNRTEST] (1/25) -> N0AIU SNR?  (229 km)
+17:49:32 [SNRTEST]   silent (3 periods)
+17:49:32 [SNRTEST] (2/25) -> WB7TSQ SNR?  (452 km) [pipelined]
+17:49:57 [SNRTEST]   REPLY WB7TSQ +13.8s (start period ~1) snr=10
+17:49:57 [SNRTEST] (3/25) -> WA1TYB SNR?  (703 km)
+17:50:42 [SNRTEST]   REPLY WA1TYB +28.8s (start period ~2) snr=9
+17:50:42 [SNRTEST] (4/25) -> KL7UT SNR?  (708 km)
+17:51:12 [SNRTEST]   REPLY KL7UT +13.8s (start period ~1) snr=8
+17:51:12 [SNRTEST] (5/25) -> KS1DMD SNR?  (811 km)
+17:51:42 [SNRTEST]   REPLY KS1DMD +13.8s (start period ~1) snr=0
+17:51:42 [SNRTEST] (6/25) -> W7YSB SNR?  (855 km)
+17:52:12 [SNRTEST]   REPLY W7YSB +13.8s (start period ~1) snr=-2
+17:52:12 [SNRTEST] (7/25) -> K8JOK SNR?  (872 km)
+17:52:42 [SNRTEST]   REPLY K8JOK +13.8s (start period ~1) snr=4
+17:52:42 [SNRTEST] (8/25) -> KJ7ROX SNR?  (881 km)
+17:53:10 [SNRTEST]   REPLY KJ7ROX +11.8s (start period ~1) snr=-1
+17:53:10 [SNRTEST] (9/25) -> KS0TOR SNR?  (899 km)
+17:53:42 [SNRTEST]   REPLY KS0TOR +13.8s (start period ~1) snr=-8
+17:53:42 [SNRTEST] (10/25) -> WH6AKZ SNR?  (906 km)
+17:54:47 [SNRTEST]   silent (3 periods)
+17:54:47 [SNRTEST] (11/25) -> KK7UMM SNR?  (961 km) [pipelined]
+17:55:13 [SNRTEST]   REPLY KK7UMM +14.8s (start period ~1) snr=-23
+17:55:13 [SNRTEST] (12/25) -> ND7M SNR?  (988 km)
+17:55:38 [SNRTEST]   REPLY ND7M +9.8s (start period ~1) snr=-2
+17:55:38 [SNRTEST] (13/25) -> KI4RXJ SNR?  (1000 km)
+17:56:12 [SNRTEST]   REPLY KI4RXJ +13.8s (start period ~1) snr=1
+17:56:12 [SNRTEST] (14/25) -> K5TRB SNR?  (1042 km)
+17:57:17 [SNRTEST]   silent (3 periods)
+17:57:17 [SNRTEST] (15/25) -> N0MTV SNR?  (1077 km) [pipelined]
+17:57:42 [SNRTEST]   REPLY N0MTV +13.8s (start period ~1) snr=-5
+17:57:42 [SNRTEST] (16/25) -> KD7WPQ SNR?  (1082 km)
+17:58:12 [SNRTEST]   REPLY KD7WPQ +13.8s (start period ~1) snr=-15
+17:58:12 [SNRTEST] (17/25) -> WX5OKE SNR?  (1116 km)
+17:59:17 [SNRTEST]   silent (3 periods)
+17:59:17 [SNRTEST] (18/25) -> N6CYB SNR?  (1189 km) [pipelined]
+17:59:42 [SNRTEST]   REPLY N6CYB +13.8s (start period ~1) snr=-6
+17:59:42 [SNRTEST] (19/25) -> KF0DRT SNR?  (1196 km)
+18:00:12 [SNRTEST]   REPLY KF0DRT +13.8s (start period ~1) snr=-17
+18:00:12 [SNRTEST] (20/25) -> VE4DRK SNR?  (1202 km)
+18:01:17 [SNRTEST]   silent (3 periods)
+18:01:17 [SNRTEST] (21/25) -> KV5R SNR?  (1227 km) [pipelined]
+18:01:42 [SNRTEST]   REPLY KV5R +13.8s (start period ~1) snr=-8
+18:01:42 [SNRTEST] (22/25) -> W0MQD SNR?  (1234 km)
+18:02:47 [SNRTEST]   silent (3 periods)
+18:02:47 [SNRTEST] (23/25) -> KN6OEH SNR?  (1252 km) [pipelined]
+18:03:12 [SNRTEST]   REPLY KN6OEH +13.8s (start period ~1) snr=-12
+18:03:12 [SNRTEST] (24/25) -> N0AAS SNR?  (1265 km)
+18:03:39 [SNRTEST]   REPLY N0AAS +10.8s (start period ~1) snr=-12
+18:03:39 [SNRTEST] (25/25) -> WA6PZB SNR?  (1305 km)
+18:04:47 [SNRTEST]   silent (3 periods)
+18:04:47 [SNRTEST] DONE: 25 asked, 18 answered (72%)
+18:04:47 [SNRTEST]   start period 1: 17
+18:04:47 [SNRTEST]   start period 2: 1
+18:04:47 [SNRTEST]   start period 3: 0
+18:04:47 [SNRTEST]   nearest answer WB7TSQ 452km, farthest N0AAS 1265km
+18:04:47 [SNRTEST] waiting 240s for PSKR batches, then verifying silent targets...
+18:08:47 [SNRTEST]   silent N0AIU: no PSKR evidence they heard us
+18:08:47 [SNRTEST]   silent WH6AKZ: PSKR: HEARD US (spotted -15 dB) and stayed silent
+18:08:47 [SNRTEST]   silent K5TRB: no PSKR evidence they heard us
+18:08:47 [SNRTEST]   silent WX5OKE: no PSKR evidence they heard us
+18:08:47 [SNRTEST]   silent VE4DRK: no PSKR evidence they heard us
+18:08:47 [SNRTEST]   silent W0MQD: no PSKR evidence they heard us
+18:08:47 [SNRTEST]   silent WA6PZB: no PSKR evidence they heard us
+18:08:47 [SNRTEST] complete.

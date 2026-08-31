@@ -366,10 +366,16 @@ class SpotMapWindow final : public QWidget {
     // ("Wait until outgoing message completed" / "Transfer already
     // in progress"). The relay-builder Done gate asks it.
     std::function<QString()> m_txBusyProbe;
+    std::function<int()> m_congestionProbe;   // [congestion]
 
   public:
     void setTxBusyProbe(std::function<QString()> fn) {
         m_txBusyProbe = std::move(fn);
+    }
+    // [congestion] band congestion index probe (1-10), installed by
+    // the main window; painted above the distance legend.
+    void setCongestionProbe(std::function<int()> fn) {
+        m_congestionProbe = std::move(fn);
     }
     void setCountryLookup(std::function<QString(QString const &)> fn) {
         m_countryLookup = std::move(fn);
