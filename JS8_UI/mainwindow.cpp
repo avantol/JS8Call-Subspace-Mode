@@ -11024,6 +11024,19 @@ void UI_Constructor::processTxQueue() {
         return;
     }
 
+    // [arqhold, operator 2026-08-31: "hold-while-session-active"]
+    // A queued message draining between ARQ chunks keys into the
+    // ACK-listening window and stomps the session. Hold the WHOLE
+    // drain while a session owns the radio (either direction);
+    // protocol ACK/NACKs bypass this queue entirely, so the session
+    // cannot starve itself. The backlog drains after the session --
+    // deliberately hold-not-clear (the operator can type during ARQ,
+    // so queued items have legitimacy auto-route's do not).
+    if (m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+                         m_chunkedArq->hasActiveRxWindow())) {
+        return;
+    }
+
     // grab the next message...
     auto head = m_txMessageQueue.head();
 

@@ -2145,9 +2145,17 @@ void UI_Constructor::processCommandActivity() {
         // arqProtocolReply is exempt via isRemoteObligation, so our own
         // ACK/NACK to the transfer peer keep flowing — that traffic IS
         // the session and must not be suppressed.
-        if (m_chunkedArq && m_chunkedArq->hasActiveRxTransfer() &&
+        // [arqtwin 2026-08-31] ...and the SEND-side twin (#112 was
+        // "RX side only" by the original request; the missing half
+        // let third-party replies queue during outbound transfers
+        // and key into the between-chunk ACK windows). Either
+        // direction now: session active = no courtesy replies;
+        // protocol obligations stay exempt.
+        if (m_chunkedArq &&
+            (m_chunkedArq->hasActiveRxTransfer() ||
+             m_chunkedArq->hasActiveTxSession()) &&
             !isRemoteObligation) {
-            qWarning() << "[REPLY-GATE] suppressed: ARQ transfer inbound"
+            qWarning() << "[REPLY-GATE] suppressed: ARQ session active"
                        << "from=" << d.from << "cmd=" << d.cmd
                        << "reply=" << reply.left(40);
             continue;
