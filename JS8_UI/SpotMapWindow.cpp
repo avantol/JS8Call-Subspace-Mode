@@ -2514,6 +2514,7 @@ void SpotMapWindow::redraw() {
     if (!m_myCall.isEmpty())
         posByCall.insert(m_myCall.toUpper(), center); // upper: edge
                                                       // keys are upper
+    m_centerPx = center;   // [selfhover #204] for hover hit-testing
 
     // [connlines] Connections overlay, drawn UNDER the dots.
     // Dark-yellow = PSKR-sourced ([linecolor]); blue = on-air mesh,
@@ -3697,8 +3698,18 @@ void SpotMapWindow::mouseMoveEvent(QMouseEvent *event) {
     // the effect is worth.
     {
         ScreenSpot const *hov = hitTest(event->position());
-        QString const now =
+        QString now =
             hov ? hov->spot.receiverCall.toUpper() : QString{};
+        // [selfhover #204, operator] The triangle is not a
+        // ScreenSpot; test it directly so hovering my own station
+        // shows tracers like any other. touchesHover and posByCall
+        // already handle my call -- only the hover identity was
+        // missing.
+        if (now.isEmpty() && !m_myCall.isEmpty()) {
+            QPointF const d = event->position() - m_centerPx;
+            if (d.x() * d.x() + d.y() * d.y() <= 12.0 * 12.0)
+                now = m_myCall.trimmed().toUpper();
+        }
         if (now != m_hoverCall) {
             if (!m_hoverCall.isEmpty())
                 m_prevHoverCall = m_hoverCall; // [hoverabove v2]

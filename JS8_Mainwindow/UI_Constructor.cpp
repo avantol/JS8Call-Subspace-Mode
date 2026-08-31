@@ -2258,7 +2258,28 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 return; // one balloon per startup
             }
 
-            // Priority 3: waterfall double-click-to-call discovery
+            // Priority 3: Auto-route discovery (TODO #203).
+            if (!self->m_settings
+                     ->value("FirstRunAutoRouteHintShown", false)
+                     .toBool()) {
+                auto *bar = self->menuBar();
+                auto *balloon = new SpeechBalloon(
+                    tr("Auto-route can find a relay path to a "
+                       "station or grid square for you: open the "
+                       "Spots Map from this menu and click "
+                       "'Auto-route'. Click to dismiss."),
+                    bar);
+                balloon->setTargetRectOverride(bar->actionGeometry(
+                    self->ui->menuWindow->menuAction()));
+                balloon->setTailSide(SpeechBalloon::TailSide::Top);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue(
+                    "FirstRunAutoRouteHintShown", true);
+                return; // one balloon per startup
+            }
+
+            // Priority 4: waterfall double-click-to-call discovery
             // (Build 336). Only when the waterfall window is visible
             // — otherwise the flag stays unset and the hint shows on
             // a later startup.

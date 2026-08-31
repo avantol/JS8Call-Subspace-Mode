@@ -1787,8 +1787,8 @@ QTextEdit[transmitting=&quot;true&quot;] {
 <item>
  <widget class="QPushButton" name="modeBtnFT2">
   <property name="sizePolicy"><sizepolicy hsizetype="Fixed" vsizetype="Fixed"><horstretch>0</horstretch><verstretch>0</verstretch></sizepolicy></property>
-  <property name="minimumSize"><size><width>22</width><height>30</height></size></property>
-  <property name="maximumSize"><size><width>22</width><height>30</height></size></property>
+  <property name="minimumSize"><size><width>27</width><height>30</height></size></property>
+  <property name="maximumSize"><size><width>27</width><height>30</height></size></property>
   <property name="toolTip"><string>Subspace mode</string></property>
   <property name="styleSheet"><string notr="true">QPushButton { font-size: 16px; font-weight: bold; } QPushButton:checked { background-color: #6699ff; font-size: 16px; font-weight: bold; }</string></property>
   <property name="text"><string>⚡</string></property>

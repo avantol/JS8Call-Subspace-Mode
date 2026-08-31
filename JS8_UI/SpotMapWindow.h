@@ -193,6 +193,10 @@ class SpotMapWindow final : public QWidget {
     // TBD (operator); the set is maintained from here on.
     QSet<QString> m_knownRelayers;
     bool m_nonRelayersDirty = true;
+    // [selfhover #204] The triangle's screen position from the last
+    // paint, for hover hit-testing (it is not a ScreenSpot). Starts
+    // far off-screen so a pre-first-paint move can't false-hit.
+    QPointF m_centerPx{-1e9, -1e9};
     void refreshNonRelayers();
 
     // heardWhen: optional BACKDATED sighting time for the heard
