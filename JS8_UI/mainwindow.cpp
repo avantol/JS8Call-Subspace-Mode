@@ -1605,6 +1605,33 @@ void UI_Constructor::updateCurrentBand() {
         return;
     }
 
+    // [#199 bandhalt, operator 2026-08-30] A band change halts ALL
+    // activity: anything left running would spend TX and journal
+    // evidence against a band it no longer belongs to. Routed
+    // through the operator-Halt path (stopTxMechanical, auto-route
+    // cancel, ARQ haltAll both directions, HB/CQ loop cancel,
+    // visible-hail abort) plus the three things that path
+    // deliberately leaves alone:
+    //  - a bare API-driven attempt (autoRouteCancel returns early
+    //    without the mode flag);
+    //  - m_txMessageQueue (documented to SURVIVE Halt so queued
+    //    relays finish -- but on a new band they'd key wrong);
+    //  - pending manual-ask deadline keepers (the reply window died
+    //    with the band: VOID, never journal a false failure).
+    // The same-band guard above fires this exactly once per genuine
+    // transition; at startup everything is idle and it is a no-op.
+    // NOT stopped, deliberately: MQTT (band-independent), decoding
+    // (the new band's RX), map accumulation.
+    if (!m_lastBand.isEmpty()) {
+        qWarning() << "[TX-CAUSE] band change halts all activity:"
+                   << m_lastBand << "->" << band_name;
+        on_stopTxButton_clicked();
+        if (m_reach.active)
+            reachStop(QStringLiteral("band changed"));
+        m_txMessageQueue = {};
+        m_manualAsks.clear();
+    }
+
     cacheActivity(m_lastBand);
 
     // clear activity on startup if asked or on when the previous band is not
