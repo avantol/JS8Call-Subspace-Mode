@@ -2067,12 +2067,14 @@ void UI_Constructor::reachOnTxComplete() {
     // first one. Half-duplex ate the answer AND journaled a false
     // ans=false (self-inflicted habit contamination). Direct pings
     // now listen through the second boundary; cost is +1 slot per
-    // SILENT ping only (69 historical busy verdicts = ~17 min total
-    // across every run ever). Other move kinds keep their measured
-    // deadlines (the shout already waits longer by design).
-    m_reach.deadlineMs = reachSlotEndMs(
-        m_reach.txEndMs,
-        m_reach.kind == QLatin1String("snr") ? 2 : 1);
+    // SILENT move only.
+    // [twoslot v2, operator 2026-08-31: relay move gave a 1-slot
+    // verdict -- "only one slot then move to next path"] The
+    // collision model applies to EVERY move kind that waits for a
+    // first response: the relay's forward keying has the same
+    // decode+enqueue race as a direct reply. Uniform 2 slots; the
+    // watchers still extend from the first detected start.
+    m_reach.deadlineMs = reachSlotEndMs(m_reach.txEndMs, 2);
     reachLog(QStringLiteral("    TX-END; deadline %1")
                  .arg(fmtClock(m_reach.deadlineMs)));
     reachArmTimer();
