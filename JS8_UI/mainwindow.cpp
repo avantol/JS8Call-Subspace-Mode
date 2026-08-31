@@ -1630,6 +1630,9 @@ void UI_Constructor::updateCurrentBand() {
             reachStop(QStringLiteral("band changed"));
         m_txMessageQueue = {};
         m_manualAsks.clear();
+        // [congestion] the index describes THIS band's channel; the
+        // old band's trailing slots must not bleed into the new one.
+        m_congestionSlots.clear();
     }
 
     cacheActivity(m_lastBand);

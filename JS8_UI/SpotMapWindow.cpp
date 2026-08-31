@@ -184,7 +184,9 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
         m_viewWindowSecs =
             m_settings->value("ViewWindowSecs", DEFAULT_VIEW_SECS)
                 .toInt();
-        if (m_viewWindowSecs != 5 * 60 && m_viewWindowSecs != 15 * 60 &&
+        if (m_viewWindowSecs == 5 * 60)      // [#209] migrate 5m
+            m_viewWindowSecs = 450;
+        if (m_viewWindowSecs != 450 && m_viewWindowSecs != 15 * 60 &&
             m_viewWindowSecs != 30 * 60 && m_viewWindowSecs != 60 * 60) {
             qCWarning(mqttclient_js8)
                 << "[SPOTMAP] discarding out-of-set ViewWindowSecs"
@@ -258,19 +260,19 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     // auto-exclusive (siblings); selection persists ([persistui]).
     // Storage always keeps the full hour; these only filter the
     // display.
-    m_win5Btn = makeZoomButton(QStringLiteral("5m"));
+    m_win5Btn = makeZoomButton(QStringLiteral("7.5m")); // [#209]
     m_win15Btn = makeZoomButton(QStringLiteral("15m"));
     m_win30Btn = makeZoomButton(QStringLiteral("30m"));
     m_win60Btn = makeZoomButton(QStringLiteral("60m"));
     struct WinDef { QToolButton *b; int secs; };
-    for (WinDef const wd : {WinDef{m_win5Btn, 5 * 60},
+    for (WinDef const wd : {WinDef{m_win5Btn, 450}, // [#209] 7.5m: spans PSKR batch cycles (see #205)
                             WinDef{m_win15Btn, 15 * 60},
                             WinDef{m_win30Btn, 30 * 60},
                             WinDef{m_win60Btn, 60 * 60}}) {
         wd.b->setCheckable(true);
         wd.b->setAutoExclusive(true);
         wd.b->setToolTip(tr("Show spots from the last %1 minutes")
-                             .arg(wd.secs / 60));
+                             .arg(QString::number(wd.secs / 60.0)));
         connect(wd.b, &QToolButton::clicked, this, [this, wd]() {
             m_viewWindowSecs = wd.secs;
             qCWarning(mqttclient_js8)
@@ -279,7 +281,7 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
         });
     }
     // [persistui] Reflect the persisted time range (default 60m).
-    (m_viewWindowSecs == 5 * 60    ? m_win5Btn
+    (m_viewWindowSecs == 450       ? m_win5Btn
      : m_viewWindowSecs == 15 * 60 ? m_win15Btn
      : m_viewWindowSecs == 30 * 60 ? m_win30Btn
                                    : m_win60Btn)
@@ -2324,8 +2326,16 @@ void SpotMapWindow::redraw() {
     // [autofit] The box covers the COMPLETE render set — spots and
     // store anchors alike; Auto must fit ALL of them.
     double const availW = std::max(40.0, w - 2.0 * MARGIN_PX);
+    // [#208, operator] Auto-fit's lower bound is the TOP of the
+    // "Show stations..." button stack, not the legend strip: the
+    // full-height fit kept hiding southern stations behind the
+    // buttons.
+    double bottomReserved = LEGEND_STRIP_PX;
+    if (m_viewMineBtn && m_viewMineBtn->isVisible())
+        bottomReserved = std::max<double>(
+            bottomReserved, h - m_viewMineBtn->y());
     double const availH = std::max(
-        40.0, h - TITLE_STRIP_PX - LEGEND_STRIP_PX - 2.0 * MARGIN_PX);
+        40.0, h - TITLE_STRIP_PX - bottomReserved - 2.0 * MARGIN_PX);
     float const needKm = static_cast<float>(
         R * std::max((maxX - minX) / availW, (maxY - minY) / availH));
     // [ladder] Auto obeys the same range manual can reach (audit
@@ -3930,12 +3940,11 @@ void SpotMapWindow::setStickyToast(QString const &text) {
     }
     m_statusLine->setText(text);
     m_statusLine->adjustSize();
-    // Same row as "Add PSKReporter spots" / "Show connections"
-    // (both sit at height - LEGEND_STRIP_PX - 44; operator,
-    // 2026-08-28), centered between the two button stacks.
+    // [operator 2026-08-31] Just ABOVE the congestion index (which
+    // sits ~40-56 px above the legend strip), centered.
     m_statusLine->move((width() - m_statusLine->width()) / 2,
-                       height() - LEGEND_STRIP_PX - 44
-                           + (20 - m_statusLine->height()) / 2);
+                       height() - LEGEND_STRIP_PX - 58
+                           - m_statusLine->height());
     m_statusLine->show();
     m_statusLine->raise();
 }
