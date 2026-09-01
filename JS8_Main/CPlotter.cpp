@@ -1033,11 +1033,16 @@ void CPlotter::mouseReleaseEvent(QMouseEvent *event) {
         }
         Q_EMIT changeFreq(static_cast<int>(freqFromX(m_lastMouseX)));
     } else if (Qt::RightButton == event->button()) {
-        // [stamon] Station-monitor entry point (second attempt --
-        // the first resolver's tolerance was too tight to hit).
-        Q_EMIT rightClickFreq(
-            static_cast<int>(freqFromX(event->pos().x())),
-            event->globalPosition().toPoint());
+        // [stamon] Station-monitor entry: the double-click's own
+        // label proximity test. Hit or miss logs, so a silent
+        // failure is attributable.
+        QString const call = callAt(event->pos());
+        qWarning() << "[STAMON] waterfall right-click ->"
+                   << (call.isEmpty() ? QStringLiteral("no label")
+                                      : call);
+        if (!call.isEmpty())
+            Q_EMIT callRightClicked(
+                call, event->globalPosition().toPoint());
     } else {
         event->ignore();
     }

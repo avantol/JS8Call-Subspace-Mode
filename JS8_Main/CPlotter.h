@@ -185,9 +185,11 @@ class CPlotter final : public QWidget {
     // [BUILD 336] Double-click landed on (or very near) a painted
     // callsign label. Payload: the callsign.
     void callDoubleClicked(QString const &call);
-    // [stamon] Right-click: audio offset under the cursor + where
-    // to pop a menu.
-    void rightClickFreq(int freq, QPoint const &globalPos);
+    // [stamon] Right-click landed on a painted callsign label --
+    // SAME proximity test as the double-click (callAt, operator
+    // ruling 2026-09-01).
+    void callRightClicked(QString const &call,
+                          QPoint const &globalPos);
 
   protected:
     // Event Handlers

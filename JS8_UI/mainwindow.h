@@ -623,9 +623,6 @@ class UI_Constructor : public QMainWindow {
     // Pop the env-gated "Open station monitor" menu at globalPos.
     void stationMonitorMenu(QString const &call,
                             QPoint const &globalPos);
-    // Waterfall right-click: station whose last-heard offset lies
-    // within its signal's own bandwidth of the click. Logged.
-    QString stationAtOffset(int freq) const;
     void feedStationMonitors(QString const &from, QString const &to,
                              QString const &relayPath,
                              QString const &text, int offset,
