@@ -2869,6 +2869,13 @@ void UI_Constructor::setReachWaitConfig(int mode, int threshOnAir,
     m_reachWaitMode = qBound(0, mode, 3);
     m_reachBusyThreshold = qBound(1, threshOnAir, 10);
     m_reachBusyThresholdPskr = qBound(1, threshPskr, 10);
+    // Timestamp every change: a mid-run mode switch changes the
+    // wait math, and the 2026-09-01 21:00 run was unattributable
+    // without this.
+    qCWarning(mainwindow_js8)
+        << "[REACH] wait config: mode" << m_reachWaitMode
+        << "(0 short/1 on-air/2 long/3 pskr) thresholds"
+        << m_reachBusyThreshold << "/" << m_reachBusyThresholdPskr;
     m_settings->beginGroup("UI_Constructor");
     m_settings->setValue("ReachWaitMode", m_reachWaitMode);
     m_settings->setValue("ReachBusyThreshold", m_reachBusyThreshold);
