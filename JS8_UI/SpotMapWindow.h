@@ -506,6 +506,11 @@ class SpotMapWindow final : public QWidget {
     std::function<void(int, int)> m_waitSink;
     void optionsShowPanel();
     void positionOverlayPanel(QFrame *panel);
+    // [pskrbusy] MQTT spot arrival stamps (ms), trailing 5 min on
+    // the current band topic; pruned on arrival, cleared on
+    // resubscribe.
+    QVector<qint64> m_pskrArrivals;
+    int pskrCongestionIndex() const;
     int m_btnColW = 0;   // right-hand button column width (layout)
     int m_leftColW = 0;  // left-hand button column width (layout)
     // The mode's status line: its own label just above the distance

@@ -53,6 +53,11 @@ namespace {
 constexpr double DEG2RAD = 0.017453292519943295;
 constexpr int TITLE_STRIP_PX = 24;
 constexpr int LEGEND_STRIP_PX = 40;
+// [pskrbusy 2026-09-01] PSKR congestion scale: 10 = peak 5-minute
+// MQTT spot count observed in recent diag logs (1121, busy session
+// 2026-08-31 02:44Z) + the operator's 30% margin.
+constexpr int PSKR_BUSY_CEILING_5MIN = 1457;
+constexpr qint64 PSKR_BUSY_WINDOW_MS = 5 * 60 * 1000;
 constexpr int MARGIN_PX = 18;
 constexpr int DOT_RADIUS_PX = 3;
 constexpr float DEFAULT_SCALE_KM = 5000.0f;
@@ -588,8 +593,26 @@ void SpotMapWindow::rebuildTopics() {
     m_accumStart = DriftingDateTime::currentDateTimeUtc();
     m_mqtt->setClientIdPrefix(QStringLiteral("JS8Call_%1").arg(topicCall));
     m_mqtt->setTopics({topic});
+    m_pskrArrivals.clear(); // [pskrbusy] new band = new count
     m_debugDumpsLeft = 20;
     m_mqtt->start();
+}
+
+// [pskrbusy 2026-09-01, operator spec] Internet twin of the on-air
+// congestion index: 1-10 = MQTT spots on the current band in the
+// trailing 5 minutes, scaled so 10 = the peak 5-minute count in the
+// recent diag logs (1121, busy session 2026-08-31 02:44Z) + the
+// operator's 30% margin = 1457.
+int SpotMapWindow::pskrCongestionIndex() const {
+    qint64 const cutMs =
+        QDateTime::currentMSecsSinceEpoch() - PSKR_BUSY_WINDOW_MS;
+    int n = 0;
+    for (qint64 const t : m_pskrArrivals)
+        if (t >= cutMs)
+            ++n;
+    return qBound(1, (n * 10 + PSKR_BUSY_CEILING_5MIN - 1) /
+                         PSKR_BUSY_CEILING_5MIN,
+                  10);
 }
 
 void SpotMapWindow::setStation(QString const &callsign, QString const &grid) {
@@ -1388,6 +1411,17 @@ void SpotMapWindow::onMqttState(QString const &state) {
 
 void SpotMapWindow::onMqttMessage(QString const &topic,
                                   QByteArray const &payload) {
+    // [pskrbusy 2026-09-01] Every message on our band-filtered topic
+    // is one PSKR spot on the current band: stamp it and prune the
+    // trailing window here (arrival side), so the paint-side index
+    // read stays const.
+    {
+        qint64 const nowMs = QDateTime::currentMSecsSinceEpoch();
+        m_pskrArrivals.append(nowMs);
+        while (!m_pskrArrivals.isEmpty() &&
+               m_pskrArrivals.first() < nowMs - PSKR_BUSY_WINDOW_MS)
+            m_pskrArrivals.removeFirst();
+    }
     // Runtime schema verification: dump the first N messages after
     // each (re)subscribe so topic-level ordering and field names can
     // be confirmed live before trusting them.
@@ -3148,10 +3182,16 @@ void SpotMapWindow::redraw() {
                 p.setPen(ci >= 7 ? QColor(235, 120, 110)
                          : ci >= 4 ? QColor(230, 200, 120)
                                    : QColor(150, 210, 150));
+                // [pskrbusy] Wider rect than the bar so the longer
+                // two-metric line never clips; still bar-centered.
                 p.drawText(
-                    QRectF{bar.left(), yLine - 38.0, barW, 16.0},
+                    QRectF{bar.center().x() - 220.0, yLine - 38.0,
+                           440.0, 16.0},
                     Qt::AlignHCenter | Qt::AlignBottom,
-                    tr("Band congestion: %1/10").arg(ci));
+                    tr("Band congestion: %1/10 (on-air), %2/10 "
+                       "(PSKR)")
+                        .arg(ci)
+                        .arg(pskrCongestionIndex()));
             }
         }
         QLinearGradient lg{bar.topLeft(), bar.topRight()};
