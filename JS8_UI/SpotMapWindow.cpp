@@ -3105,7 +3105,15 @@ void SpotMapWindow::redraw() {
         // scale legend above it IS the radius length (operator
         // 2026-08-15); SNR bar matches it.
         qreal const barW = static_cast<qreal>(R);
-        QRectF bar{(w - barW) / 2.0,
+        // [operator 2026-09-01] The center info display (congestion,
+        // distance, SNR bar) centers between the FACING edges of the
+        // two button stacks, not the window -- same rule as the
+        // overlay panels.
+        qreal const cx =
+            (m_leftColW > 0 && m_btnColW > 0)
+                ? (6.0 + m_leftColW + (w - 6.0 - m_btnColW)) / 2.0
+                : w / 2.0;
+        QRectF bar{cx - barW / 2.0,
                    static_cast<qreal>(h - LEGEND_STRIP_PX + 8), barW, 10};
         {
             // [operator 2026-08-28] Bar and its distance legend sit
@@ -3196,7 +3204,10 @@ void SpotMapWindow::redraw() {
             maxW = std::max(
                 maxW, static_cast<qreal>(
                           p.fontMetrics().horizontalAdvance(l)));
-        qreal const xRight = w - 6.0;
+        // [operator 2026-09-01] The right button column now reaches
+        // the bottom edge; these legend rows sit to its LEFT.
+        qreal const xRight =
+            w - 6.0 - (m_btnColW > 0 ? m_btnColW + 8.0 : 0.0);
         // [operator 2026-08-29] top row lifted 1/3 font height, same
         // as the relay legend's top row.
         qreal const extra = p.fontMetrics().height() / 3.0;
@@ -3240,7 +3251,10 @@ void SpotMapWindow::redraw() {
             maxW = std::max(
                 maxW, static_cast<qreal>(
                           p.fontMetrics().horizontalAdvance(l)));
-        qreal const xRight = w - 6.0;
+        // [operator 2026-09-01] The right button column now reaches
+        // the bottom edge; these legend rows sit to its LEFT.
+        qreal const xRight =
+            w - 6.0 - (m_btnColW > 0 ? m_btnColW + 8.0 : 0.0);
         // [operator 2026-08-29 rev2] Only the TOP row lifts 1/3 of
         // the font height -- the two rings touched at the 11 px
         // pitch; the bottom row stays aligned with the PSKR legend's
@@ -3527,18 +3541,11 @@ void SpotMapWindow::positionWindowButtons() {
         if (m_optionsBtn)
             wConn = std::max(wConn, m_optionsBtn->sizeHint().width());
         m_btnColW = wConn; // [autoroute] panel centering reference
-        // [operator 2026-09-01] The right group's floor is the TOP
-        // of the ring/PSKR legend rows painted above the legend
-        // strip (rowH 11, box pads 2+2, top row lifted fm/3) --
-        // the column comes down only as far as those lines allow.
-        int legendRowsTop;
-        {
-            QFont lf = font();
-            lf.setPointSize(8);
-            legendRowsTop = height() - LEGEND_STRIP_PX - 11 - 4 -
-                            QFontMetrics{lf}.height() / 3;
-        }
-        int const yConn = legendRowsTop - 4 - 20;
+        // [operator 2026-09-01, rev2] Group dropped so its lowest
+        // button sits a little above the WINDOW bottom edge, same
+        // as the left stack; the ring/PSKR legend rows shift LEFT
+        // of this column (paint side) to make the room.
+        int const yConn = height() - 6 - 20;
         m_connBtn->setFixedSize(wConn, 20);
         m_connBtn->move(width() - wConn - 6, yConn);
         // [callsbtn] Directly above Show connections.
@@ -4181,10 +4188,11 @@ void SpotMapWindow::optionsShowPanel() {
         m_waitAdaptive->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(m_waitAdaptive, &QWidget::customContextMenuRequested,
                 this, [this](QPoint const &) {
-                    m_threshSpin->move(
-                        m_waitAdaptive->x() + m_waitAdaptive->width()
-                            + 8,
-                        m_waitAdaptive->y() - 1);
+                    // [operator 2026-09-01] Over the "Adaptive"
+                    // text (past the radio circle), not off the
+                    // panel's right edge.
+                    m_threshSpin->move(m_waitAdaptive->x() + 24,
+                                       m_waitAdaptive->y() - 1);
                     m_threshSpin->show();
                     m_threshSpin->raise();
                     m_threshSpin->setFocus();
