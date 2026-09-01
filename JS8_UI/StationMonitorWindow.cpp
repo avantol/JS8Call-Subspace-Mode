@@ -45,7 +45,8 @@ StationMonitorWindow::StationMonitorWindow(
     QString const &station, QString const &directedTxtPath,
     QString const &allTxtPath, QString const &myCall,
     QWidget *parent)
-    : QWidget{parent}, m_station{station} {
+    : QWidget{parent}, m_station{station}, m_myCall{myCall},
+      m_directedTxtPath{directedTxtPath}, m_allTxtPath{allTxtPath} {
     setWindowFlag(Qt::Window);
     setWindowTitle(tr("Station monitor: %1").arg(station));
     setMinimumSize(560, 360);
@@ -61,7 +62,6 @@ StationMonitorWindow::StationMonitorWindow(
 
     m_members.insert(station);
     updateHeadline();
-    backfill(directedTxtPath, allTxtPath, myCall);
 }
 
 void StationMonitorWindow::feed(QString const &from, QString const &to,
@@ -80,19 +80,19 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
         if (!parties.contains(c))
             parties << c;
 
-    bool admit = false;
-    for (QString const &c : parties)
-        if (m_members.contains(c)) {
-            admit = true;
-            break;
-        }
-    // Same/close offset: LIVE traffic only (the band-activity
-    // row-migration rule, JS8::Submode::rxThreshold -- one
-    // authority). Historic lines neither join by offset nor record
-    // one: an offset in the log is whoever owned it THEN (operator
-    // field-caught 2026-09-01: WD4KAV's old offset pulled in its
-    // later occupants).
-    if (!admit && !historical && offset > 0) {
+    // [operator ruling 2026-09-01, second revision] Transitive
+    // growth is OUT -- the measured 6h replay showed HB-ACK webs
+    // connect the whole band in two hops (KQ4KLX arrived via
+    // XE2MAM with no seed relation). Rules now:
+    //   SHOW: lines the SEED station is party to, plus OUR OWN
+    //         transmissions ("seed lines only plus my
+    //         transmissions").
+    //   GROW: interlocutors from seed lines only (headline count).
+    //   OFFSET: live-only, and only the SEED's own offsets -- an
+    //         unattributed transmission at the seed's current
+    //         offset is (probably) the seed mid-message.
+    bool seedLine = parties.contains(m_station);
+    if (!seedLine && !historical && offset > 0) {
         int const range = JS8::Submode::rxThreshold(
             submode >= 0 ? submode : Varicode::JS8CallNormal);
         qint64 const nowMs = utc.toMSecsSinceEpoch();
@@ -100,27 +100,45 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
              it != m_memberOffsets.constEnd(); ++it)
             if (qAbs(it.key() - offset) <= range &&
                 nowMs - it.value() <= OFFSET_TTL_MS) {
-                admit = true;
+                seedLine = true;
                 break;
             }
     }
-    if (!admit)
+    bool const ourTx =
+        !m_myCall.isEmpty() && from.startsWith(m_myCall);
+    if (!seedLine && !ourTx)
         return;
 
-    for (QString const &c : parties)
-        m_members.insert(c);
-    if (!historical && offset > 0) {
-        m_memberOffsets[offset] = utc.toMSecsSinceEpoch();
-        for (auto it = m_memberOffsets.begin();
-             it != m_memberOffsets.end();)
-            if (utc.toMSecsSinceEpoch() - it.value() > OFFSET_TTL_MS)
-                it = m_memberOffsets.erase(it);
-            else
-                ++it;
+    if (seedLine) {
+        for (QString const &c : parties)
+            m_members.insert(c);
+        // Record only offsets the seed itself TRANSMITS on -- a
+        // partner ACKing the seed keys its own offset, not his.
+        bool const seedSent =
+            validParties(from).contains(m_station) ||
+            text.startsWith(m_station + QStringLiteral(":"));
+        if (seedSent && !historical && offset > 0) {
+            m_memberOffsets[offset] = utc.toMSecsSinceEpoch();
+            for (auto it = m_memberOffsets.begin();
+                 it != m_memberOffsets.end();)
+                if (utc.toMSecsSinceEpoch() - it.value() >
+                    OFFSET_TTL_MS)
+                    it = m_memberOffsets.erase(it);
+                else
+                    ++it;
+        }
     }
 
     // The conversation panel's exact preamble (mainwindow.cpp
     // writeMessageTextToUI): mode letter - time - (offset) - text.
+    // Heartbeat-related lines skipped when the View menu hides
+    // them -- SAME tokens as the band-activity filter
+    // (displayBandActivity.cpp showHB block).
+    if (m_showHb && !m_showHb() &&
+        (text.contains(QStringLiteral(" HEARTBEAT ")) ||
+         text.contains(QStringLiteral(" @HB "))))
+        return;
+
     m_log->appendPlainText(
         QStringLiteral("%1 - %2 - (%3) - %4")
             .arg(historical ? QStringLiteral("?")
@@ -170,14 +188,12 @@ QDateTime parseUtc(QString const &s) {
 //  - ALL.TXT "Transmitting" lines: OUR side, per-frame with no
 //    offset; consecutive frames <=30 s apart stitch into one
 //    assembled message credited to myCall.
-void StationMonitorWindow::backfill(QString const &directedTxtPath,
-                                    QString const &allTxtPath,
-                                    QString const &myCall) {
+void StationMonitorWindow::runBackfill() {
     QDateTime const cutoff = QDateTime::currentDateTimeUtc().addSecs(
         -BACKFILL_HOURS * 3600);
     QList<HistLine> hist;
 
-    for (QByteArray const &raw : tailLines(directedTxtPath)) {
+    for (QByteArray const &raw : tailLines(m_directedTxtPath)) {
         QString const line = QString::fromUtf8(raw).trimmed();
         QStringList const cols = line.split(QLatin1Char('\t'));
         if (cols.size() < 5)
@@ -196,16 +212,16 @@ void StationMonitorWindow::backfill(QString const &directedTxtPath,
     }
 
     // Our transmissions: stitch consecutive per-frame lines.
-    HistLine tx{QDateTime(), myCall, QString(), 0};
+    HistLine tx{QDateTime(), m_myCall, QString(), 0};
     QDateTime lastFrame;
     auto const flushTx = [&]() {
         if (tx.utc.isValid() && !tx.text.trimmed().isEmpty())
             hist.append(tx);
-        tx = {QDateTime(), myCall, QString(), 0};
+        tx = {QDateTime(), m_myCall, QString(), 0};
     };
     static QRegularExpression const txRe{QStringLiteral(
         R"(^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+Transmitting .*JS8:\s(.*)$)")};
-    for (QByteArray const &raw : tailLines(allTxtPath)) {
+    for (QByteArray const &raw : tailLines(m_allTxtPath)) {
         auto const m =
             txRe.match(QString::fromUtf8(raw).trimmed());
         if (!m.hasMatch())

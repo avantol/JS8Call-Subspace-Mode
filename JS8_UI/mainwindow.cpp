@@ -2893,8 +2893,12 @@ void UI_Constructor::openStationMonitor(QString const &call) {
         m_config.writeable_data_dir().absoluteFilePath(
             QStringLiteral("ALL.TXT")),
         m_config.my_callsign());
+    w->setShowHbProbe([this]() {
+        return ui->actionShow_Band_Heartbeats_and_ACKs->isChecked();
+    });
     w->setAttribute(Qt::WA_DeleteOnClose);
     m_stationMonitors.insert(call, w);
+    w->runBackfill(); // after the probes: backfill obeys HB filter
     w->show();
 }
 

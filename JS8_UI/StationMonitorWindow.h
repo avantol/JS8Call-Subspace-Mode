@@ -19,6 +19,8 @@
 #include <QSet>
 #include <QWidget>
 
+#include <functional>
+
 class QLabel;
 class QPlainTextEdit;
 
@@ -37,6 +39,15 @@ class StationMonitorWindow final : public QWidget {
 
     QString station() const { return m_station; }
 
+    // [operator 2026-09-01] Honor the main window's View-menu
+    // "Show Band Heartbeats and ACKs" toggle: when it says hide,
+    // heartbeat-related lines are skipped (checked per line, so
+    // the toggle applies from that moment on). Membership math
+    // still runs on skipped lines.
+    void setShowHbProbe(std::function<bool()> fn) {
+        m_showHb = std::move(fn);
+    }
+
     // One assembled directed message (the composed "FROM: TO ..."
     // line). historical = a backfilled DIRECTED.TXT line: its mode
     // letter is unknown ("?") but membership math runs identically.
@@ -45,16 +56,22 @@ class StationMonitorWindow final : public QWidget {
               int offset, QDateTime const &utc, int submode,
               bool historical = false);
 
+    // Called by the owner AFTER the probes are installed (backfill
+    // must see the HB filter).
+    void runBackfill();
+
   private:
-    void backfill(QString const &directedTxtPath,
-                  QString const &allTxtPath, QString const &myCall);
     void updateHeadline();
 
     QString m_station;
+    QString m_myCall; // our TX lines always display
+    QString m_directedTxtPath; // backfill sources, held until
+    QString m_allTxtPath;      // runBackfill()
     QSet<QString> m_members;
     // offset -> last-seen ms; an unattributed sender keying within
     // the submode's rx threshold of a member offset joins the set.
     QHash<int, qint64> m_memberOffsets;
+    std::function<bool()> m_showHb;
     QLabel *m_headline;
     QPlainTextEdit *m_log;
 };
