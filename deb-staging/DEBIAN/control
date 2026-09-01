@@ -1,5 +1,5 @@
 Package: js8call-subspace
-Version: 4.1.0.462.1-waitopts
+Version: 4.1.0.462.2-waitopts2
 Section: hamradio
 Priority: optional
 Architecture: amd64
