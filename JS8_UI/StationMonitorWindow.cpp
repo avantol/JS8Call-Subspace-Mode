@@ -13,6 +13,7 @@
 #include <QPlainTextEdit>
 #include <QRegularExpression>
 #include <QTimeZone>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -62,6 +63,13 @@ StationMonitorWindow::StationMonitorWindow(
 
     m_members.insert(station);
     updateHeadline();
+    refreshTitle();
+    // Keep the title's age honest between events.
+    auto *ageTimer = new QTimer(this);
+    ageTimer->setInterval(30 * 1000);
+    connect(ageTimer, &QTimer::timeout, this,
+            &StationMonitorWindow::refreshTitle);
+    ageTimer->start();
 }
 
 void StationMonitorWindow::feed(QString const &from, QString const &to,
@@ -104,9 +112,10 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
                 break;
             }
     }
-    bool const ourTx =
-        !m_myCall.isEmpty() && from.startsWith(m_myCall);
-    if (!seedLine && !ourTx)
+    // [operator 2026-09-01] Our transmissions show only when
+    // DIRECTED TO the target -- and such a line names the target,
+    // so it is already a seed line. No separate our-TX admit.
+    if (!seedLine)
         return;
 
     if (seedLine) {
@@ -117,6 +126,15 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
         bool const seedSent =
             validParties(from).contains(m_station) ||
             text.startsWith(m_station + QStringLiteral(":"));
+        // [operator 2026-09-01] Title bar carries the target's most
+        // recent transmit: age, offset, speed when known.
+        if (seedSent && (!m_lastSeedUtc.isValid() ||
+                         utc >= m_lastSeedUtc)) {
+            m_lastSeedUtc = utc;
+            m_lastSeedOffset = offset;
+            m_lastSeedSubmode = historical ? -1 : submode;
+            refreshTitle();
+        }
         if (seedSent && !historical && offset > 0) {
             m_memberOffsets[offset] = utc.toMSecsSinceEpoch();
             for (auto it = m_memberOffsets.begin();
@@ -245,6 +263,25 @@ void StationMonitorWindow::runBackfill() {
     for (HistLine const &h : hist)
         feed(h.from, QString(), QString(), h.text, h.offset, h.utc,
              -1, true);
+}
+
+void StationMonitorWindow::refreshTitle() {
+    QString title = tr("Station monitor: %1").arg(m_station);
+    if (m_lastSeedUtc.isValid()) {
+        qint64 const s =
+            m_lastSeedUtc.secsTo(QDateTime::currentDateTimeUtc());
+        QString const age =
+            s < 60      ? tr("%1s ago").arg(qMax<qint64>(0, s))
+            : s < 3600  ? tr("%1m ago").arg(s / 60)
+                        : tr("%1h %2m ago").arg(s / 3600).arg(s % 3600 / 60);
+        title += QStringLiteral(" -- TX %1").arg(age);
+        if (m_lastSeedOffset > 0)
+            title += tr(", %1 Hz").arg(m_lastSeedOffset);
+        if (m_lastSeedSubmode >= 0)
+            title += QStringLiteral(", %1").arg(
+                JS8::Submode::name(m_lastSeedSubmode));
+    }
+    setWindowTitle(title);
 }
 
 void StationMonitorWindow::updateHeadline() {

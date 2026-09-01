@@ -620,6 +620,12 @@ class UI_Constructor : public QMainWindow {
     // [stamon] create-or-raise a per-station follow window; feed all
     // open windows one assembled directed line.
     void openStationMonitor(QString const &call);
+    // Pop the env-gated "Open station monitor" menu at globalPos.
+    void stationMonitorMenu(QString const &call,
+                            QPoint const &globalPos);
+    // Waterfall right-click: nearest recently-heard station at the
+    // offset, or empty.
+    QString stationAtOffset(int freq) const;
     void feedStationMonitors(QString const &from, QString const &to,
                              QString const &relayPath,
                              QString const &text, int offset,

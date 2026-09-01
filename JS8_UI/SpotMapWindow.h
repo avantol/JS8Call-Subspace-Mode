@@ -228,6 +228,9 @@ class SpotMapWindow final : public QWidget {
     // [BUILD 340] Double-click on a spot: QSY to the DX station's
     // audio offset (only emitted when it's above 1000 Hz).
     void qsyToOffset(int audioHz);
+    // [stamon] Right-click landed on a plotted station (any kind).
+    void stationRightClicked(QString const &call,
+                             QPoint const &globalPos);
     // [relaysel] "Done" pressed in relay-select mode: the composed
     // relay template ("HOP1>HOP2>DEST [MESSAGE]") for the outgoing
     // box; the main window highlights the placeholder for typing.

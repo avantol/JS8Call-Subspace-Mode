@@ -62,6 +62,7 @@ class StationMonitorWindow final : public QWidget {
 
   private:
     void updateHeadline();
+    void refreshTitle();
 
     QString m_station;
     QString m_myCall; // our TX lines always display
@@ -71,6 +72,10 @@ class StationMonitorWindow final : public QWidget {
     // offset -> last-seen ms; an unattributed sender keying within
     // the submode's rx threshold of a member offset joins the set.
     QHash<int, qint64> m_memberOffsets;
+    // Most recent transmit BY the target, for the title bar.
+    QDateTime m_lastSeedUtc;
+    int m_lastSeedOffset = 0;
+    int m_lastSeedSubmode = -1;
     std::function<bool()> m_showHb;
     QLabel *m_headline;
     QPlainTextEdit *m_log;

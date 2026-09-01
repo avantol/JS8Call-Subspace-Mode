@@ -4507,6 +4507,14 @@ void SpotMapWindow::mousePressEvent(QMouseEvent *event) {
         // [wheelzoom] Push the scroll wheel to zoom in (operator,
         // 2026-08-16).
         zoomIn();
+    } else if (event->button() == Qt::RightButton) {
+        // [stamon] Right-click on any plotted station (on-air,
+        // PSKR, whatever ring it wears) -> offer the monitor.
+        if (auto const *s = hitTest(event->position());
+            s && !s->spot.receiverCall.isEmpty())
+            Q_EMIT stationRightClicked(
+                s->spot.receiverCall,
+                event->globalPosition().toPoint());
     }
     QWidget::mousePressEvent(event);
 }

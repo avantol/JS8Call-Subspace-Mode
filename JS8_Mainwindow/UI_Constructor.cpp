@@ -593,6 +593,17 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // TX-queue guard).
     connect(m_spotMapWindow.data(), &SpotMapWindow::qsyToOffset,
             this, &UI_Constructor::changeFreq);
+    // [stamon] Station-monitor right-clicks: map spots directly;
+    // waterfall resolves the station from the clicked offset.
+    connect(m_spotMapWindow.data(),
+            &SpotMapWindow::stationRightClicked, this,
+            &UI_Constructor::stationMonitorMenu);
+    connect(m_wideGraph.data(), &WideGraph::rightClickFreq, this,
+            [this](int freq, QPoint const &pos) {
+                if (QString const call = stationAtOffset(freq);
+                    !call.isEmpty())
+                    stationMonitorMenu(call, pos);
+            });
     // [#187 intelminer] Build/refresh the intel corpus from the
     // user's own logs, in the background, once the window is up.
     // Full re-mine (mine.py semantics); skipped when logs unchanged.
@@ -1872,7 +1883,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 if (!mcall.isEmpty() &&
                     !mcall.startsWith(QLatin1Char('@'))) {
                     auto *monAction = menu->addAction(
-                        tr("Station monitor: %1").arg(mcall));
+                        tr("Open station monitor"));
                     connect(monAction, &QAction::triggered, this,
                             [this, mcall]() {
                                 openStationMonitor(mcall);
