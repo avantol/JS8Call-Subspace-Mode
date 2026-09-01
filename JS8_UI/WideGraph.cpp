@@ -151,7 +151,8 @@ WideGraph::WideGraph(QSettings *settings, QWidget *parent)
                                 : call);
                     if (!call.isEmpty()) {
                         auto monAction = menu->addAction(
-                            tr("Open station monitor"));
+                            tr("Open station monitor for %1")
+                                .arg(call));
                         connect(monAction, &QAction::triggered,
                                 this, [this, call]() {
                                     Q_EMIT openStationMonitor(call);

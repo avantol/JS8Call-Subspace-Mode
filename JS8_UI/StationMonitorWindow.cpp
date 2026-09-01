@@ -9,6 +9,7 @@
 #include "JS8_Main/Varicode.h"
 #include "JS8_Mode/JS8Submode.h"
 
+#include <QApplication>
 #include <QFile>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -196,6 +197,18 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
             .arg(shown));
     if (wasAtBottom)
         sb->setValue(sb->maximum());
+    // [operator 2026-09-01] Visual ping on LIVE lines only: a brief
+    // green border pulse (theme-neutral), plus the platform's
+    // attention flash when the window is not the active one.
+    if (!historical) {
+        m_log->setStyleSheet(QStringLiteral(
+            "QPlainTextEdit { border: 2px solid rgb(80,170,80); }"));
+        QTimer::singleShot(400, m_log, [log = m_log]() {
+            log->setStyleSheet(QString());
+        });
+        if (!isActiveWindow())
+            QApplication::alert(this, 0);
+    }
     updateHeadline();
 }
 
