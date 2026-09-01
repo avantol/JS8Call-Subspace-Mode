@@ -2168,9 +2168,6 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         bool const foreign =
             !ours && !tok.isEmpty() &&
             (tok.startsWith(QLatin1Char('@')) ||
-             tok == QLatin1String("CQ") ||
-             tok == QLatin1String("HB") ||
-             tok == QLatin1String("HEARTBEAT") ||
              Radio::is_callsign(tok));
         m_reach.fwdStartedMs = now;   // it DID key (aliveness truth;
                                       // also keeps the false
@@ -2210,34 +2207,12 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         // proves this is not our forward.
         m_reach.fwdFrames += 1;
         m_reach.fwdLastMs = now;
-        // [operator 2026-08-31] The last-frame flag (bit 73) is
-        // in-band: frame N of OUR forward must carry it, so frame N
-        // decoding WITHOUT it already proves the transmission is
-        // longer than ours -- verdict at frame N's decode, no next
-        // slot needed. (The fade case still takes one silent period:
-        // absence has no flag.)
-        bool const lastFlag = (d.bits & Varicode::JS8CallLast) != 0;
-        // [spec gap 2, operator audit 2026-08-31] A transmission
-        // ENDING cleanly before frame N is equally not ours -- the
-        // wrong length in either direction convicts. (Our own
-        // forward's assembly fires the BUFFERED path before this
-        // frame handler could mislabel it.)
         if (m_reach.fwdExpFrames > 0 &&
-            (m_reach.fwdFrames > m_reach.fwdExpFrames ||
-             (m_reach.fwdFrames == m_reach.fwdExpFrames &&
-              !lastFlag) ||
-             (m_reach.fwdFrames < m_reach.fwdExpFrames &&
-              lastFlag))) {
-            reachLog(QStringLiteral("    frame %1 of expected %2 "
-                                    "%3 -- not our message")
+            m_reach.fwdFrames > m_reach.fwdExpFrames) {
+            reachLog(QStringLiteral("    frame %1 exceeds our "
+                                    "forward's %2 -- not our message")
                          .arg(m_reach.fwdFrames)
-                         .arg(m_reach.fwdExpFrames)
-                         .arg(m_reach.fwdFrames > m_reach.fwdExpFrames
-                                  ? QStringLiteral("exceeds it")
-                              : m_reach.fwdFrames < m_reach.fwdExpFrames
-                                  ? QStringLiteral("ends early")
-                                  : QStringLiteral(
-                                        "lacks the last-frame flag")));
+                         .arg(m_reach.fwdExpFrames));
             m_reach.forcedVerdict =
                 QStringLiteral("the relaying station keyed, but no "
                                "forward of ours assembled");
