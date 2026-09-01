@@ -2894,7 +2894,7 @@ void UI_Constructor::openStationMonitor(QString const &call) {
         return;
     }
     auto *w = new StationMonitorWindow(
-        call,
+        m_settings, call,
         m_config.writeable_data_dir().absoluteFilePath(
             QStringLiteral("DIRECTED.TXT")),
         m_config.writeable_data_dir().absoluteFilePath(

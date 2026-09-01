@@ -4,6 +4,7 @@
 
 #include "StationMonitorWindow.h"
 
+#include "JS8_Include/SettingsGroup.h"
 #include "JS8_Main/Radio.h"
 #include "JS8_Main/Varicode.h"
 #include "JS8_Mode/JS8Submode.h"
@@ -12,6 +13,9 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QRegularExpression>
+#include <QResizeEvent>
+#include <QScrollBar>
+#include <QSettings>
 #include <QTimeZone>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -43,17 +47,26 @@ QStringList validParties(QString const &joined) {
 } // namespace
 
 StationMonitorWindow::StationMonitorWindow(
-    QString const &station, QString const &directedTxtPath,
-    QString const &allTxtPath, QString const &myCall,
-    QWidget *parent)
+    QSettings *settings, QString const &station,
+    QString const &directedTxtPath, QString const &allTxtPath,
+    QString const &myCall, QWidget *parent)
     : QWidget{parent}, m_station{station}, m_myCall{myCall},
-      m_directedTxtPath{directedTxtPath}, m_allTxtPath{allTxtPath} {
+      m_directedTxtPath{directedTxtPath}, m_allTxtPath{allTxtPath},
+      m_settings{settings} {
     setWindowFlag(Qt::Window);
     setWindowTitle(tr("Station monitor: %1").arg(station));
     // Resizable down to a sliver (operator 2026-09-01) -- a corner
     // strip showing just the latest lines is a valid use.
     setMinimumSize(180, 100);
-    resize(560, 360);
+    // [operator 2026-09-01] New windows take the last monitor's
+    // DIMENSIONS (never its position); resizeEvent keeps the value
+    // current, and the same key persists it across sessions.
+    QSize sz{560, 360};
+    if (m_settings) {
+        SettingsGroup g{m_settings, "StationMonitor"};
+        sz = m_settings->value("size", sz).toSize();
+    }
+    resize(sz.expandedTo(minimumSize()));
     auto *lay = new QVBoxLayout(this);
     // [operator 2026-09-01] No headline -- the log is the window.
     m_log = new QPlainTextEdit(this);
@@ -168,6 +181,11 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
         shown = QStringLiteral("<b>%1</b>%2")
                     .arg(m_station.toHtmlEscaped(),
                          text.mid(m_station.size()).toHtmlEscaped());
+    // [operator 2026-09-01] Conditional auto-scroll: follow new
+    // lines only when the view was ALREADY at the bottom -- a
+    // scrolled-back review position stays put.
+    auto *sb = m_log->verticalScrollBar();
+    bool const wasAtBottom = sb->value() == sb->maximum();
     m_log->appendHtml(
         QStringLiteral("%1 - %2 - (%3) - %4")
             .arg(historical ? QStringLiteral("?")
@@ -176,6 +194,8 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
             .arg(offset > 0 ? QString::number(offset)
                             : QStringLiteral("?"))
             .arg(shown));
+    if (wasAtBottom)
+        sb->setValue(sb->maximum());
     updateHeadline();
 }
 
@@ -291,6 +311,14 @@ void StationMonitorWindow::runBackfill() {
     for (HistLine const &h : hist)
         feed(h.from, QString(), QString(), h.text, h.offset, h.utc,
              -1, true);
+}
+
+void StationMonitorWindow::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    if (m_settings) {
+        SettingsGroup g{m_settings, "StationMonitor"};
+        m_settings->setValue("size", size());
+    }
 }
 
 void StationMonitorWindow::refreshTitle() {

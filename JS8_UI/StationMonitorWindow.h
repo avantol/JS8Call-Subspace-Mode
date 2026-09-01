@@ -31,7 +31,8 @@ class StationMonitorWindow final : public QWidget {
     // Backfill sources: DIRECTED.TXT (RX, assembled) and ALL.TXT
     // (our own per-frame "Transmitting" lines, stitched into
     // messages and credited to myCall).
-    StationMonitorWindow(QString const &station,
+    StationMonitorWindow(class QSettings *settings,
+                         QString const &station,
                          QString const &directedTxtPath,
                          QString const &allTxtPath,
                          QString const &myCall,
@@ -60,9 +61,13 @@ class StationMonitorWindow final : public QWidget {
     // must see the HB filter).
     void runBackfill();
 
+  protected:
+    void resizeEvent(class QResizeEvent *event) override;
+
   private:
     void updateHeadline();
     void refreshTitle();
+    class QSettings *m_settings;
 
     QString m_station;
     QString m_myCall; // our TX lines always display
