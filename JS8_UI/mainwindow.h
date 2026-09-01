@@ -1371,6 +1371,13 @@ class UI_Constructor : public QMainWindow {
         // (band-wide) => hold a second slot at the 1-slot deadline.
         bool        sawBandActivity = false;
         bool        heldSecondSlot = false;
+        // [fwdclass] frame-1 classifier + bounded forward watch
+        // (truth source: relay_frame_accounting.md, 2026-08-31)
+        int         fwdExpFrames = 0;  // 0 = bound disabled
+        int         fwdFrames = 0;
+        int         fwdOffset = 0;
+        qint64      fwdLastMs = 0;
+        QString     forcedVerdict;
         QString     kind;           // "snr" | "shout" | "relay"
         QString     via;            // relay move only: chain[0]
         QStringList chain;          // full relay chain (excl. target)
