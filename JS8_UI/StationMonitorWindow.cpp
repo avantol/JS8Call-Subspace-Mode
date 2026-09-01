@@ -239,6 +239,8 @@ void StationMonitorWindow::runBackfill() {
     };
     static QRegularExpression const txRe{QStringLiteral(
         R"(^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+Transmitting .*JS8:\s(.*)$)")};
+    QString prevFrame;
+    QDateTime prevUtc;
     for (QByteArray const &raw : tailLines(m_allTxtPath)) {
         auto const m =
             txRe.match(QString::fromUtf8(raw).trimmed());
@@ -247,11 +249,26 @@ void StationMonitorWindow::runBackfill() {
         QDateTime const utc = parseUtc(m.captured(1));
         if (!utc.isValid() || utc < cutoff)
             continue;
-        if (!tx.utc.isValid() || lastFrame.secsTo(utc) > 30)
+        QString const frame = m.captured(2);
+        // ALL.TXT double-logs the FIRST frame of a directed send
+        // (measured 2026-09-01: identical text at the identical
+        // second) -- drop the twin.
+        if (utc == prevUtc && frame == prevFrame)
+            continue;
+        prevUtc = utc;
+        prevFrame = frame;
+        // A frame opening with our "CALL: " prefix IS a first
+        // frame: a retransmission of the same message starts a NEW
+        // stitched line (the 30 s gap alone merged a measured
+        // 20 s-apart repeat into one doubled line).
+        bool const firstFrame = frame.startsWith(
+            m_myCall + QStringLiteral(": "));
+        if (tx.utc.isValid() &&
+            (firstFrame || lastFrame.secsTo(utc) > 30))
             flushTx();
         if (!tx.utc.isValid())
             tx.utc = utc;
-        tx.text += m.captured(2);
+        tx.text += frame;
         lastFrame = utc;
     }
     flushTx();
