@@ -1396,6 +1396,9 @@ class UI_Constructor : public QMainWindow {
         int         fwdExpFrames = 0;
         int         ansExpFrames = 0;
         int         retExpFrames = 0;
+        // The return window actually armed (slots), so the verdict
+        // names the REAL number even if congestion moved since.
+        int         retWindowSlots = 0;
         int         fwdFrames = 0;
         int         fwdOffset = 0;
         QString     forcedVerdict;

@@ -1341,7 +1341,7 @@ void UI_Constructor::reachNextMove() {
     m_reach.retOffset = 0;
     m_reach.fwdExpFrames = m_reach.ansExpFrames =
         m_reach.retExpFrames = m_reach.fwdFrames =
-        m_reach.fwdOffset = 0;
+        m_reach.fwdOffset = m_reach.retWindowSlots = 0;
     m_reach.forcedVerdict.clear();
     m_reach.chain.clear();
     m_reach.watchers.clear();
@@ -2481,13 +2481,18 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         // [structured, operator design 2026-08-31] Single relay:
         // the window has structure -- the target's answer occupies
         // ansExpFrames slots of planned silence (nothing can happen
-        // there), then the return must START within the standard
-        // 2-slot allowance. Multi-hop chains keep the flat 6 slots
-        // per relay until that decomposition is designed.
+        // there), then the return must START within the start
+        // allowance. [operator 2026-09-01, KO4JJW run] That
+        // allowance is the THIRD busy-conditional point: 1 slot
+        // when quiet (the field REACHEDs all started there), 2
+        // when busy. Multi-hop chains keep the flat 6 slots per
+        // relay until that decomposition is designed.
         int const retWindow =
             m_reach.chain.size() <= 1
-                ? qMax(1, m_reach.ansExpFrames) + 2
+                ? qMax(1, m_reach.ansExpFrames) +
+                      (reachBandBusy() ? 2 : 1)
                 : 6 * static_cast<int>(m_reach.chain.size());
+        m_reach.retWindowSlots = retWindow;
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                   reachSlotEndMs(now, retWindow));
         reachLog(QStringLiteral("    forward complete %1 "
@@ -2654,8 +2659,8 @@ void UI_Constructor::reachTick() {
         state = QStringLiteral("forward delivered; no return started "
                                "within the %1-slot window -- target "
                                "silent")
-                    .arg(m_reach.chain.size() <= 1
-                             ? qMax(1, m_reach.ansExpFrames) + 2
+                    .arg(m_reach.retWindowSlots > 0
+                             ? m_reach.retWindowSlots
                              : 6 * static_cast<int>(
                                    m_reach.chain.size()));
     else if (m_reach.ansStartedMs != 0) {
