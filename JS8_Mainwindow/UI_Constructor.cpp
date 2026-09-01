@@ -559,11 +559,14 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // when it opens (dodges init order); sink pushes changes back
     // to the one owner, which persists them.
     m_spotMapWindow->setWaitConfigProbe([this]() {
-        return QPair<int, int>{m_reachWaitMode, m_reachBusyThreshold};
+        return SpotMapWindow::WaitConfig{m_reachWaitMode,
+                                         m_reachBusyThreshold,
+                                         m_reachBusyThresholdPskr};
     });
-    m_spotMapWindow->setWaitConfigSink([this](int mode, int thresh) {
-        setReachWaitConfig(mode, thresh);
-    });
+    m_spotMapWindow->setWaitConfigSink(
+        [this](int mode, int onAir, int pskr) {
+            setReachWaitConfig(mode, onAir, pskr);
+        });
     m_spotMapWindow->setCountryLookup([this](QString const &call) {
         QString country;
         bool workedCall = false, workedCountry = false;

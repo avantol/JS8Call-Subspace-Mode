@@ -615,7 +615,8 @@ class UI_Constructor : public QMainWindow {
     // [#207 waitopts] busy-band predicate for the two
     // busy-conditional wait points; mode + threshold rule it.
     bool reachBandBusy() const;
-    void setReachWaitConfig(int mode, int threshold); // persists
+    void setReachWaitConfig(int mode, int threshOnAir,
+                            int threshPskr); // persists
     void reachComputeExpected();   // [structured] packed counts
     // [congestion] 1-10 = ceil(10 x occupied-slot fraction, trailing
     // 20 slots). Radio-only; works with no internet.
@@ -1439,11 +1440,13 @@ class UI_Constructor : public QMainWindow {
     mutable QSet<qint64> m_congestionSlots;
     // [#207 waitopts] Response-wait mode for the auto-route
     // executor's two busy-conditional points: 0 Short (never the
-    // extra slot), 1 Adaptive (congestion index over threshold),
-    // 2 Long (always). Owner of both facts; the map's Options
-    // dialog reads/writes through the probe/sink pair. Persisted.
+    // extra slot), 1 Adaptive on-air, 2 Long (always), 3 Adaptive
+    // PSKR (falls back to on-air while MQTT data is absent). Owner
+    // of all three facts; the map's Options dialog reads/writes
+    // through the probe/sink pair. Persisted.
     int m_reachWaitMode = 1;
     int m_reachBusyThreshold = 7;
+    int m_reachBusyThresholdPskr = 7;
     static constexpr qint64 kManualAskSettleMs =
         900 * 1000; // mine.py:267 settle_relays' 15-minute window
     // [autoroute 2026-08-28] Auto-route mode: the map picked a

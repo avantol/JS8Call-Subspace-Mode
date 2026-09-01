@@ -252,11 +252,18 @@ int UI_Constructor::reachReplyFrames(QString const &from,
 // [#207 waitopts 2026-09-01] The busy-band predicate for the TWO
 // busy-conditional points (second start slot; return slide).
 // Short = never the extra wait, Long = always, Adaptive = the
-// congestion index at/over the operator threshold (default 7,
-// persisted; right-click Adaptive in the map Options dialog).
+// selected congestion metric at/over ITS operator threshold
+// (defaults 7, persisted; right-click either Adaptive row in the
+// map Options dialog). Adaptive (PSKR) falls back to the on-air
+// metric whenever MQTT data is absent from the 5-minute window,
+// and resumes by itself when spots flow again.
 bool UI_Constructor::reachBandBusy() const {
     if (m_reachWaitMode == 0) return false;
     if (m_reachWaitMode == 2) return true;
+    if (m_reachWaitMode == 3 && m_spotMapWindow &&
+        m_spotMapWindow->pskrDataAvailable())
+        return m_spotMapWindow->pskrCongestionIndex() >=
+               m_reachBusyThresholdPskr;
     return bandCongestionIndex() >= m_reachBusyThreshold;
 }
 

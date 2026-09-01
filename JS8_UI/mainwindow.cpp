@@ -581,11 +581,14 @@ void UI_Constructor::writeSettings() {
 void UI_Constructor::readSettings() {
     m_settings->beginGroup("UI_Constructor");
     ensureMessageDock();
-    // [#207 waitopts] Response-wait mode + adaptive threshold.
+    // [#207 waitopts] Response-wait mode + per-metric thresholds.
     m_reachWaitMode =
-        qBound(0, m_settings->value("ReachWaitMode", 1).toInt(), 2);
+        qBound(0, m_settings->value("ReachWaitMode", 1).toInt(), 3);
     m_reachBusyThreshold = qBound(
         1, m_settings->value("ReachBusyThreshold", 7).toInt(), 10);
+    m_reachBusyThresholdPskr = qBound(
+        1, m_settings->value("ReachBusyThresholdPskr", 7).toInt(),
+        10);
     setMinimumSize(800, 400);
     restoreGeometry(
         m_settings->value("geometry", saveGeometry()).toByteArray());
@@ -2860,12 +2863,16 @@ int UI_Constructor::bandCongestionIndex() const {
 
 // [#207 waitopts] Map Options dialog pushes changes here; persisted
 // immediately so a crash never loses the operator's choice.
-void UI_Constructor::setReachWaitConfig(int mode, int threshold) {
-    m_reachWaitMode = qBound(0, mode, 2);
-    m_reachBusyThreshold = qBound(1, threshold, 10);
+void UI_Constructor::setReachWaitConfig(int mode, int threshOnAir,
+                                        int threshPskr) {
+    m_reachWaitMode = qBound(0, mode, 3);
+    m_reachBusyThreshold = qBound(1, threshOnAir, 10);
+    m_reachBusyThresholdPskr = qBound(1, threshPskr, 10);
     m_settings->beginGroup("UI_Constructor");
     m_settings->setValue("ReachWaitMode", m_reachWaitMode);
     m_settings->setValue("ReachBusyThreshold", m_reachBusyThreshold);
+    m_settings->setValue("ReachBusyThresholdPskr",
+                         m_reachBusyThresholdPskr);
     m_settings->endGroup();
 }
 

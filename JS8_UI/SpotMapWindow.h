@@ -378,15 +378,26 @@ class SpotMapWindow final : public QWidget {
         m_congestionProbe = std::move(fn);
     }
     // [#207 waitopts] Response-wait config, owned by the main
-    // window (mode: 0 Short, 1 Adaptive, 2 Long; threshold 1-10).
-    // The Options dialog pulls current values through the probe on
-    // open and pushes every change through the sink.
-    void setWaitConfigProbe(std::function<QPair<int, int>()> fn) {
+    // window (mode: 0 Short, 1 Adaptive on-air, 2 Long, 3 Adaptive
+    // PSKR; per-metric thresholds 1-10). The Options dialog pulls
+    // current values through the probe on open and pushes every
+    // change through the sink.
+    struct WaitConfig {
+        int mode;
+        int threshOnAir;
+        int threshPskr;
+    };
+    void setWaitConfigProbe(std::function<WaitConfig()> fn) {
         m_waitProbe = std::move(fn);
     }
-    void setWaitConfigSink(std::function<void(int, int)> fn) {
+    void setWaitConfigSink(std::function<void(int, int, int)> fn) {
         m_waitSink = std::move(fn);
     }
+    // [pskrbusy] Internet congestion metric + its availability (a
+    // spot arrived within the metric window); the executor's PSKR
+    // adaptive mode asks these and falls back to on-air when false.
+    int pskrCongestionIndex() const;
+    bool pskrDataAvailable() const;
     void setCountryLookup(std::function<QString(QString const &)> fn) {
         m_countryLookup = std::move(fn);
     }
@@ -499,18 +510,21 @@ class SpotMapWindow final : public QWidget {
     class QFrame *m_optionsPanel = nullptr;
     class QRadioButton *m_waitShort = nullptr;
     class QRadioButton *m_waitLong = nullptr;
-    class QRadioButton *m_waitAdaptive = nullptr;
+    class QRadioButton *m_waitAdaptive = nullptr;      // on-air
+    class QRadioButton *m_waitAdaptivePskr = nullptr;  // PSKR
     class QSpinBox *m_threshSpin = nullptr;   // hidden right-click
     class QTimer *m_threshTimer = nullptr;    // inactivity closer
-    std::function<QPair<int, int>()> m_waitProbe;
-    std::function<void(int, int)> m_waitSink;
+    bool m_threshSpinPskr = false; // which threshold the spin edits
+    int m_curThreshOnAir = 7;      // dialog mirrors of the owner's
+    int m_curThreshPskr = 7;       // per-metric thresholds
+    std::function<WaitConfig()> m_waitProbe;
+    std::function<void(int, int, int)> m_waitSink;
     void optionsShowPanel();
     void positionOverlayPanel(QFrame *panel);
     // [pskrbusy] MQTT spot arrival stamps (ms), trailing 5 min on
     // the current band topic; pruned on arrival, cleared on
     // resubscribe.
     QVector<qint64> m_pskrArrivals;
-    int pskrCongestionIndex() const;
     int m_btnColW = 0;   // right-hand button column width (layout)
     int m_leftColW = 0;  // left-hand button column width (layout)
     // The mode's status line: its own label just above the distance

@@ -400,6 +400,10 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
     m_relayUndoBtn->setToolTip(tr("Remove the last selected station"));
     connect(m_relaySelBtn, &QToolButton::toggled, this, [this](bool on) {
         m_relaySelect = on;
+        // [operator 2026-09-01] Options is unavailable while the
+        // relay builder owns the map's click semantics.
+        if (m_optionsBtn)
+            m_optionsBtn->setEnabled(!on);
         if (on && !m_viewAll) {
             // [relaysel] Relay hops are picked from ALL heard
             // stations — selecting flips the map to the All view
@@ -613,6 +617,18 @@ int SpotMapWindow::pskrCongestionIndex() const {
     return qBound(1, (n * 10 + PSKR_BUSY_CEILING_5MIN - 1) /
                          PSKR_BUSY_CEILING_5MIN,
                   10);
+}
+
+// [pskrbusy] Available = at least one spot arrived within the
+// metric's own 5-minute window. Covers internet loss, broker loss,
+// and an up-but-dead feed alike (the 2026-08-23 outage mode) --
+// with zero data points in the window the index is meaningless
+// whatever the socket says.
+bool SpotMapWindow::pskrDataAvailable() const {
+    return !m_pskrArrivals.isEmpty() &&
+           m_pskrArrivals.last() >=
+               QDateTime::currentMSecsSinceEpoch() -
+                   PSKR_BUSY_WINDOW_MS;
 }
 
 void SpotMapWindow::setStation(QString const &callsign, QString const &grid) {
@@ -3179,19 +3195,44 @@ void SpotMapWindow::redraw() {
             // occupied-slot fraction of the trailing 20 slots.
             if (m_congestionProbe) {
                 int const ci = m_congestionProbe();
-                p.setPen(ci >= 7 ? QColor(235, 120, 110)
-                         : ci >= 4 ? QColor(230, 200, 120)
-                                   : QColor(150, 210, 150));
-                // [pskrbusy] Wider rect than the bar so the longer
-                // two-metric line never clips; still bar-centered.
-                p.drawText(
-                    QRectF{bar.center().x() - 220.0, yLine - 38.0,
-                           440.0, 16.0},
-                    Qt::AlignHCenter | Qt::AlignBottom,
-                    tr("Band congestion: %1/10 (on-air), %2/10 "
-                       "(PSKR)")
-                        .arg(ci)
-                        .arg(pskrCongestionIndex()));
+                int const pi = pskrCongestionIndex();
+                // [operator 2026-09-01] Color-code by which metric
+                // is IN EFFECT for the executor: the ruling number
+                // gets the green/amber/red scale, the other stays
+                // neutral. PSKR selected without data = on-air is
+                // ruling (the fallback).
+                int mode = -1;
+                if (m_waitProbe)
+                    mode = m_waitProbe().mode;
+                bool const pskrRules =
+                    mode == 3 && pskrDataAvailable();
+                bool const onAirRules = mode == 1 || (mode == 3 &&
+                                                      !pskrRules);
+                auto const scale = [](int v) {
+                    return v >= 7   ? QColor(235, 120, 110)
+                           : v >= 4 ? QColor(230, 200, 120)
+                                    : QColor(150, 210, 150);
+                };
+                QColor const neutral{170, 170, 185};
+                QString const head = tr("Band congestion: ");
+                QString const sOn = tr("%1/10 (on-air)").arg(ci);
+                QString const sSep = QStringLiteral(", ");
+                QString const sPk = tr("%1/10 (PSKR)").arg(pi);
+                QFontMetricsF const fm{p.font()};
+                qreal x = bar.center().x() -
+                          fm.horizontalAdvance(head + sOn + sSep +
+                                               sPk) / 2.0;
+                qreal const ty = yLine - 38.0 + 16.0 - fm.descent();
+                struct Seg { QString t; QColor c; };
+                for (Seg const &s : {
+                         Seg{head, neutral},
+                         Seg{sOn, onAirRules ? scale(ci) : neutral},
+                         Seg{sSep, neutral},
+                         Seg{sPk, pskrRules ? scale(pi) : neutral}}) {
+                    p.setPen(s.c);
+                    p.drawText(QPointF{x, ty}, s.t);
+                    x += fm.horizontalAdvance(s.t);
+                }
             }
         }
         QLinearGradient lg{bar.topLeft(), bar.topRight()};
@@ -4200,9 +4241,11 @@ void SpotMapWindow::optionsShowPanel() {
         m_waitLong =
             new QRadioButton(tr("Long / busy band"), m_optionsPanel);
         m_waitAdaptive =
-            new QRadioButton(tr("Adaptive (auto)"), m_optionsPanel);
-        for (QRadioButton *r :
-             {m_waitShort, m_waitLong, m_waitAdaptive})
+            new QRadioButton(tr("Adaptive (on-air)"), m_optionsPanel);
+        m_waitAdaptivePskr =
+            new QRadioButton(tr("Adaptive (PSKR)"), m_optionsPanel);
+        for (QRadioButton *r : {m_waitShort, m_waitLong,
+                                m_waitAdaptive, m_waitAdaptivePskr})
             lay->addWidget(r);
         auto *btnRow = new QHBoxLayout;
         btnRow->addStretch(1);
@@ -4230,45 +4273,62 @@ void SpotMapWindow::optionsShowPanel() {
                 return;
             int const mode = m_waitShort->isChecked()  ? 0
                              : m_waitLong->isChecked() ? 2
-                                                       : 1;
-            m_waitSink(mode, m_threshSpin->value());
+                             : m_waitAdaptivePskr->isChecked() ? 3
+                                                               : 1;
+            m_waitSink(mode, m_curThreshOnAir, m_curThreshPskr);
         };
-        for (QRadioButton *r :
-             {m_waitShort, m_waitLong, m_waitAdaptive})
+        for (QRadioButton *r : {m_waitShort, m_waitLong,
+                                m_waitAdaptive, m_waitAdaptivePskr})
             connect(r, &QRadioButton::toggled, this,
                     [push](bool on) {
                         if (on)
                             push();
                     });
         connect(m_threshSpin, qOverload<int>(&QSpinBox::valueChanged),
-                this, [this, push](int) {
+                this, [this, push](int v) {
+                    (m_threshSpinPskr ? m_curThreshPskr
+                                      : m_curThreshOnAir) = v;
                     push();
                     m_threshTimer->start();
                 });
-        m_waitAdaptive->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(m_waitAdaptive, &QWidget::customContextMenuRequested,
-                this, [this](QPoint const &) {
-                    // [operator 2026-09-01] Over the "Adaptive"
-                    // text (past the radio circle), not off the
-                    // panel's right edge.
-                    m_threshSpin->move(m_waitAdaptive->x() + 24,
-                                       m_waitAdaptive->y() - 1);
-                    m_threshSpin->show();
-                    m_threshSpin->raise();
-                    m_threshSpin->setFocus();
-                    m_threshTimer->start();
-                });
+        // [operator 2026-09-01] Right-click on EITHER adaptive row
+        // edits THAT metric's threshold; the spin appears over the
+        // row's text (past the radio circle).
+        for (QRadioButton *r : {m_waitAdaptive, m_waitAdaptivePskr}) {
+            r->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(r, &QWidget::customContextMenuRequested, this,
+                    [this, r](QPoint const &) {
+                        m_threshSpinPskr = (r == m_waitAdaptivePskr);
+                        QSignalBlocker const b{m_threshSpin};
+                        m_threshSpin->setValue(m_threshSpinPskr
+                                                   ? m_curThreshPskr
+                                                   : m_curThreshOnAir);
+                        m_threshSpin->move(r->x() + 24, r->y() - 1);
+                        m_threshSpin->show();
+                        m_threshSpin->raise();
+                        m_threshSpin->setFocus();
+                        m_threshTimer->start();
+                    });
+        }
     }
     // Reflect the owner's current values every time it opens.
     if (m_waitProbe) {
-        QPair<int, int> const cfg = m_waitProbe();
+        WaitConfig const cfg = m_waitProbe();
         QSignalBlocker const b1{m_waitShort}, b2{m_waitLong},
-            b3{m_waitAdaptive}, b4{m_threshSpin};
-        m_threshSpin->setValue(cfg.second);
-        (cfg.first == 0   ? m_waitShort
-         : cfg.first == 2 ? m_waitLong
-                          : m_waitAdaptive)
+            b3{m_waitAdaptive}, b4{m_threshSpin},
+            b5{m_waitAdaptivePskr};
+        m_curThreshOnAir = cfg.threshOnAir;
+        m_curThreshPskr = cfg.threshPskr;
+        (cfg.mode == 0   ? m_waitShort
+         : cfg.mode == 2 ? m_waitLong
+         : cfg.mode == 3 ? m_waitAdaptivePskr
+                         : m_waitAdaptive)
             ->setChecked(true);
+        // [operator 2026-09-01] No MQTT data -> the PSKR choice is
+        // not selectable (it stays visibly checked if it IS the
+        // stored mode -- the executor is falling back to on-air
+        // meanwhile and resumes PSKR when data returns).
+        m_waitAdaptivePskr->setEnabled(pskrDataAvailable());
     }
     m_threshSpin->hide();
     positionOverlayPanel(m_optionsPanel);
