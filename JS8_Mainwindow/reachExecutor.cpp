@@ -274,8 +274,14 @@ void UI_Constructor::reachComputeExpected() {
         (rest.size() == 1 ? QStringLiteral(">") : QString()) +
         QStringLiteral(" SNR? *DE* ") + me;
     m_reach.fwdExpFrames = reachReplyFrames(m_reach.via, fwdText);
+    // The target's real answer to a relayed ask is the RELAY-FORM
+    // reply back along the path (accounting doc slots 7-9:
+    // "K1TAR: A1VIA> WM8Q SNR +00 .XX"), checksummed -- not a
+    // simple directed answer. Field-caught on N3CHX/P1 2026-09-01:
+    // the simple shape under-counted the silence by a slot.
     m_reach.ansExpFrames = reachReplyFrames(
-        T, m_reach.chain.last() + QStringLiteral(" SNR -15"));
+        T, m_reach.chain.last() + QStringLiteral("> ") + me +
+               QStringLiteral(" SNR -15"));
     m_reach.retExpFrames = reachReplyFrames(
         m_reach.via,
         me + QStringLiteral("> SNR -15 *DE* ") + T);
@@ -2638,8 +2644,10 @@ void UI_Constructor::reachTick() {
         state = QStringLiteral("forward delivered; no return started "
                                "within the %1-slot window -- target "
                                "silent")
-                    .arg(6 * qMax(1, static_cast<int>(
-                                         m_reach.chain.size())));
+                    .arg(m_reach.chain.size() <= 1
+                             ? qMax(1, m_reach.ansExpFrames) + 2
+                             : 6 * static_cast<int>(
+                                   m_reach.chain.size()));
     else if (m_reach.ansStartedMs != 0) {
         bool allDone = !m_reach.watchers.isEmpty();
         for (auto const &w : m_reach.watchers)
