@@ -1290,9 +1290,6 @@ void UI_Constructor::reachNextMove() {
     m_reach.fwdStartedMs = m_reach.fwdDoneMs = m_reach.ansStartedMs =
         m_reach.retStartedMs = 0;
     m_reach.retOffset = 0;
-    m_reach.fwdExpFrames = m_reach.fwdFrames = m_reach.fwdOffset = 0;
-    m_reach.fwdLastMs = 0;
-    m_reach.forcedVerdict.clear();
     m_reach.chain.clear();
     m_reach.watchers.clear();
 
@@ -1303,11 +1300,6 @@ void UI_Constructor::reachNextMove() {
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = via;
         m_reach.chain = QStringList{via};
-        if (!via.contains(QLatin1Char('/')))   // [fwdclass]
-            m_reach.fwdExpFrames =
-                buildMessageFrames(
-                    T + QStringLiteral("> SNR? *DE* ") + me,
-                    false, nullptr).size();
         m_reach.triedAt.insert(QStringLiteral("relay:") + via, now);
         reachSend(QStringLiteral("%1: %2>%3 SNR?").arg(me, via, T));
         return;
@@ -1844,21 +1836,6 @@ void UI_Constructor::reachNextMove() {
         m_reach.via = x.mv.via;
         m_reach.chain = x.mv.chain.isEmpty()
                             ? QStringList{x.mv.via} : x.mv.chain;
-        // [fwdclass] The via's rewrite is deterministic, so its frame
-        // count is computable NOW; a transmission running past it
-        // cannot be our forward. Compound vias pack differently
-        // (<....> placeholder can shift the count) -- bound disabled
-        // there rather than risk misjudging our own forward.
-        if (!m_reach.via.contains(QLatin1Char('/'))) {
-            QStringList rest = m_reach.chain.mid(1);
-            rest << m_reach.target;
-            QString const fwdWire =
-                rest.join(QLatin1Char('>')) +
-                QStringLiteral("> SNR? *DE* ") +
-                m_config.my_callsign().trimmed().toUpper();
-            m_reach.fwdExpFrames =
-                buildMessageFrames(fwdWire, false, nullptr).size();
-        }
         m_reach.triedAt.insert(QStringLiteral("relay:") + relKey,
                                now);
         m_reach.pastVias.append(x.mv.via);
@@ -2153,74 +2130,13 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
         up.startsWith(QStringLiteral("<....>:"));
     if (m_reach.kind == QLatin1String("relay") &&
         m_reach.fwdStartedMs == 0 && viaKeyed) {
-        // [fwdclass, truth source relay_frame_accounting.md] Read
-        // frame 1's ADDRESSEE. Relaxes the Aug 28 who-not-what rule
-        // in the definitely-NOT-ours direction only: a readable
-        // different addressee proves this transmission is not our
-        // forward; ambiguity always falls through to watching.
-        QString const rest = up.section(QLatin1Char(':'), 1).trimmed();
-        QString const nextDest = m_reach.chain.size() > 1
-                                     ? m_reach.chain.at(1)
-                                     : T;
-        bool const ours = rest.startsWith(nextDest);
-        QString const tok = rest.section(QLatin1Char(' '), 0, 0)
-                                .remove(QLatin1Char('>'));
-        bool const foreign =
-            !ours && !tok.isEmpty() &&
-            (tok.startsWith(QLatin1Char('@')) ||
-             Radio::is_callsign(tok));
-        m_reach.fwdStartedMs = now;   // it DID key (aliveness truth;
-                                      // also keeps the false
-                                      // did-not-forward row gated)
-        if (foreign) {
-            reachLog(QStringLiteral("    %1 keyed +%2s but frame 1 "
-                                    "addresses %3 -- not our forward")
-                         .arg(m_reach.via)
-                         .arg((now - m_reach.txEndMs) / 1000)
-                         .arg(tok));
-            m_reach.forcedVerdict =
-                QStringLiteral("relay busy with other traffic");
-            m_reach.deadlineMs = now;
-            reachArmTimer();
-            return;
-        }
-        m_reach.fwdFrames = 1;
-        m_reach.fwdOffset = d.offset;
-        m_reach.fwdLastMs = now;
+        m_reach.fwdStartedMs = now;
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                   reachSlotEndMs(now, 5));
         reachLog(QStringLiteral("    %1 keyed in the first slot +%2s "
-                                "(frame 1: %3) -- waiting for the "
-                                "forward to finish")
+                                "-- waiting for the forward to finish")
                      .arg(m_reach.via)
-                     .arg((now - m_reach.txEndMs) / 1000)
-                     .arg(ours ? QStringLiteral("our destination")
-                               : QStringLiteral("unreadable")));
-        reachArmTimer();
-    } else if (m_reach.kind == QLatin1String("relay") &&
-               m_reach.fwdStartedMs != 0 && m_reach.fwdDoneMs == 0 &&
-               m_reach.forcedVerdict.isEmpty() &&
-               m_reach.fwdOffset != 0 &&
-               qAbs(d.offset - m_reach.fwdOffset) <= 5) {
-        // [fwdclass] forward continuation frame: count it against the
-        // computed length; more frames than our message can contain
-        // proves this is not our forward.
-        m_reach.fwdFrames += 1;
-        m_reach.fwdLastMs = now;
-        if (m_reach.fwdExpFrames > 0 &&
-            m_reach.fwdFrames > m_reach.fwdExpFrames) {
-            reachLog(QStringLiteral("    frame %1 exceeds our "
-                                    "forward's %2 -- not our message")
-                         .arg(m_reach.fwdFrames)
-                         .arg(m_reach.fwdExpFrames));
-            m_reach.forcedVerdict =
-                QStringLiteral("the relaying station keyed, but no "
-                               "forward of ours assembled");
-            m_reach.deadlineMs = now;
-        } else {
-            m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                      reachSlotEndMs(now, 1));
-        }
+                     .arg((now - m_reach.txEndMs) / 1000));
         reachArmTimer();
     }
     // Checkpoint 2 fires here: the via keying again after its proven
@@ -2511,13 +2427,6 @@ void UI_Constructor::reachArmTimer() {
         if (death > now)
             next = qMin(next, death);
     }
-    // [fwdclass] wake at the forward's died-check moment too
-    if (m_reach.fwdStartedMs && !m_reach.fwdDoneMs &&
-        m_reach.fwdLastMs) {
-        qint64 const fd = reachSlotEndMs(m_reach.fwdLastMs, 1);
-        if (fd > now)
-            next = qMin(next, fd);
-    }
     m_reachTimer->start(qMax<qint64>(5, next - now));
 }
 
@@ -2572,17 +2481,6 @@ void UI_Constructor::reachTick() {
                 m_reach.deadlineMs = now;
             }
         }
-        // [fwdclass] The forward died: frames stopped one silent
-        // period mid-message before assembly. Fail NOW -- nothing is
-        // claimed (delivery never happened) and no one is blamed.
-        if (m_reach.kind == QLatin1String("relay") &&
-            m_reach.fwdStartedMs != 0 && m_reach.fwdDoneMs == 0 &&
-            m_reach.forcedVerdict.isEmpty() && m_reach.fwdLastMs &&
-            now >= reachSlotEndMs(m_reach.fwdLastMs, 1)) {
-            m_reach.forcedVerdict = QStringLiteral(
-                "relayed message died mid-transmission");
-            m_reach.deadlineMs = now;
-        }
         if (now < m_reach.deadlineMs) {
             reachArmTimer();
             return;
@@ -2622,8 +2520,6 @@ void UI_Constructor::reachTick() {
                      .arg(m_reach.watchers.size() - done));
     }
     QString state;
-    if (!m_reach.forcedVerdict.isEmpty())
-        state = m_reach.forcedVerdict;
     // [operator-caught session 2026-08-27, found during the detector
     // audit] The durable write below ran on EVERY verdict -- missing
     // braces -- journaling a false did-not-forward mark for vias that
@@ -2637,9 +2533,7 @@ void UI_Constructor::reachTick() {
             {m_reach.band, m_reach.via, QStringLiteral("fwd"),
              QString{}, 0, false});
     }
-    if (!state.isEmpty())
-        ; // [fwdclass] forced verdict already named the case
-    else if (capped)
+    if (capped)
         state = QStringLiteral("move hard cap (330s) reached");
     else if (m_reach.kind == QLatin1String("relay") &&
              m_reach.fwdStartedMs == 0)
