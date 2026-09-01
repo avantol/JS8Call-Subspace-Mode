@@ -27,6 +27,7 @@
 #include <QDir>
 #include <QMenu>
 #include <QToolButton>
+#include <QLabel>
 #include <QUrl>
 
 #include "JS8_Main/FileTransfer.h"
@@ -36,6 +37,21 @@
 #include "JS8_Mode/DecodeFT2.h"
 #include "JS8_Mode/SubspacePreamble.h"
 #endif
+
+namespace {
+// [stamon] Startup balloon helper: any click closes the widget.
+class ClickToClose final : public QObject {
+  public:
+    using QObject::QObject;
+    bool eventFilter(QObject *o, QEvent *e) override {
+        if (e->type() == QEvent::MouseButtonPress) {
+            static_cast<QWidget *>(o)->close();
+            return true;
+        }
+        return QObject::eventFilter(o, e);
+    }
+};
+} // namespace
 
 int ms_minute_error() {
     auto const now = DriftingDateTime::currentDateTimeLocal();
@@ -609,12 +625,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             &UI_Constructor::stationMonitorMenu);
     connect(m_wideGraph.data(), &WideGraph::openStationMonitor,
             this, &UI_Constructor::openStationMonitor);
-    // [stamon] Env-gated Window-menu entry, right after Show Spots
-    // Map: asks for the callsign in a dialog.
+    // [stamon] Window-menu entry, right after Show Spots Map:
+    // asks for the callsign in a dialog. Standard feature since
+    // Build 465 (env gate removed, operator 2026-09-01).
     {
-        static bool const stamonOn =
-            qEnvironmentVariableIsSet("JS8_STATION_MONITOR");
-        if (stamonOn && ui->menuWindow) {
+        if (ui->menuWindow) {
             auto *act = new QAction(tr("Show Station Monitor"), this);
             connect(act, &QAction::triggered, this, [this]() {
                 bool ok = false;
@@ -636,6 +651,49 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             else
                 ui->menuWindow->addAction(act);
         }
+    }
+    // [stamon] One-time startup balloon announcing the feature,
+    // anchored under the menu holding Show Station Monitor;
+    // clicking it dismisses it for good (persisted).
+    if (!m_settings
+             ->value(QStringLiteral(
+                 "UI_Constructor/StationMonitorBalloonDismissed"))
+             .toBool()) {
+        QTimer::singleShot(2500, this, [this]() {
+            auto *balloon = new QLabel(
+                tr("View conversation(s) by call sign in a "
+                   "separate window. Select 'Show Station "
+                   "Monitor', or right-click on the Spots Map, "
+                   "waterfall, or call sign list.\n"
+                   "Click to dismiss."),
+                this, Qt::ToolTip);
+            balloon->setWordWrap(true);
+            balloon->setMargin(10);
+            balloon->setStyleSheet(QStringLiteral(
+                "QLabel { background-color: rgb(255,255,225);"
+                " color: black;"
+                " border: 1px solid rgb(120,120,90); }"));
+            balloon->setFixedWidth(380);
+            balloon->adjustSize();
+            balloon->setAttribute(Qt::WA_DeleteOnClose);
+            balloon->installEventFilter(new ClickToClose(balloon));
+            connect(balloon, &QObject::destroyed, this, [this]() {
+                m_settings->setValue(
+                    QStringLiteral("UI_Constructor/"
+                                   "StationMonitorBalloonDismissed"),
+                    true);
+            });
+            QPoint at{20, 0};
+            if (ui->menuWindow)
+                at = menuBar()
+                         ->actionGeometry(
+                             ui->menuWindow->menuAction())
+                         .bottomLeft();
+            balloon->move(menuBar()->mapToGlobal(at) +
+                          QPoint(0, 6));
+            balloon->show();
+            balloon->raise();
+        });
     }
     // [#187 intelminer] Build/refresh the intel corpus from the
     // user's own logs, in the background, once the window is up.
@@ -1899,12 +1957,10 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             // bool isGroupCall = isGroupCallIncluded(selectedCall);
             bool missingCallsign = selectedCall.isEmpty();
 
-            // [stamon, TODO #210] Env-gated debug entry: follow the
-            // RIGHT-CLICKED row's station (UserRole carries the bare
-            // call), falling back to the selection.
-            static bool const stamonOn =
-                qEnvironmentVariableIsSet("JS8_STATION_MONITOR");
-            if (stamonOn) {
+            // [stamon, TODO #210] Follow the RIGHT-CLICKED row's
+            // station (UserRole carries the bare call), falling
+            // back to the selection. Standard feature since 465.
+            {
                 QString mcall;
                 if (int const row =
                         ui->tableWidgetCalls->rowAt(point.y());

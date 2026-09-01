@@ -133,15 +133,12 @@ WideGraph::WideGraph(QSettings *settings, QWidget *parent)
             auto const f = ui->widePlot->frequencyAt(pos.x());
 
             // [stamon] The waterfall's right-click was ALWAYS this
-            // context menu (CustomContextMenu policy) -- the three
-            // mouseReleaseEvent attempts could never fire. The
-            // monitor entry belongs HERE, gated by the env var,
-            // present only when the click landed on a callsign
-            // label (the double-click's own callAt test).
+            // context menu (CustomContextMenu policy). The monitor
+            // entry lives HERE, present only when the click landed
+            // on a callsign label (the double-click's own callAt
+            // test). Standard feature since 465.
             {
-                static bool const stamonOn =
-                    qEnvironmentVariableIsSet("JS8_STATION_MONITOR");
-                if (stamonOn) {
+                {
                     QString const call = ui->widePlot->callAt(pos);
                     qWarning()
                         << "[STAMON] waterfall menu at" << f

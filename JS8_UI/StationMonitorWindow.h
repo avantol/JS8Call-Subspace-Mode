@@ -9,9 +9,9 @@
  * callsign mention, or by transmitting at/near a member's offset.
  * The member set GROWS as the conversation graph is discovered.
  *
- * Env-gated (JS8_STATION_MONITOR) right-click entry on the call
- * activity list; one window per station; no persistence -- this is
- * a debug instrument, default OFF with zero background state.
+ * Standard feature since Build 465 (env gate removed): entries on
+ * the call activity list, waterfall, Spots Map, and Window menu.
+ * One window per station; size persists, position does not.
  */
 
 #include <QDateTime>

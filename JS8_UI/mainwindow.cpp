@@ -2909,13 +2909,11 @@ void UI_Constructor::openStationMonitor(QString const &call) {
     w->show();
 }
 
-// [stamon] Shared entry for the waterfall and spots-map
-// right-clicks: a one-item menu, only when the env gate is up.
+// [stamon] Shared entry for the spots-map right-click: a one-item
+// menu. Standard feature since Build 465.
 void UI_Constructor::stationMonitorMenu(QString const &call,
                                         QPoint const &globalPos) {
-    static bool const on =
-        qEnvironmentVariableIsSet("JS8_STATION_MONITOR");
-    if (!on || call.isEmpty() || call.startsWith(QLatin1Char('@')))
+    if (call.isEmpty() || call.startsWith(QLatin1Char('@')))
         return;
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
