@@ -77,7 +77,6 @@ class StationMonitorWindow final : public QWidget {
     int m_lastSeedOffset = 0;
     int m_lastSeedSubmode = -1;
     std::function<bool()> m_showHb;
-    QLabel *m_headline;
     QPlainTextEdit *m_log;
 };
 

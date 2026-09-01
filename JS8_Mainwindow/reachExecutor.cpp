@@ -258,13 +258,38 @@ int UI_Constructor::reachReplyFrames(QString const &from,
 // metric whenever MQTT data is absent from the 5-minute window,
 // and resumes by itself when spots flow again.
 bool UI_Constructor::reachBandBusy() const {
-    if (m_reachWaitMode == 0) return false;
-    if (m_reachWaitMode == 2) return true;
-    if (m_reachWaitMode == 3 && m_spotMapWindow &&
-        m_spotMapWindow->pskrDataAvailable())
-        return m_spotMapWindow->pskrCongestionIndex() >=
-               m_reachBusyThresholdPskr;
-    return bandCongestionIndex() >= m_reachBusyThreshold;
+    // [operator 2026-09-01] Log the EFFECTIVE inputs at every
+    // decision point, so each armed wait is attributable to the
+    // metric, value, and threshold that ruled it.
+    bool busy;
+    QString basis;
+    if (m_reachWaitMode == 0) {
+        busy = false;
+        basis = QStringLiteral("mode short");
+    } else if (m_reachWaitMode == 2) {
+        busy = true;
+        basis = QStringLiteral("mode long");
+    } else if (m_reachWaitMode == 3 && m_spotMapWindow &&
+               m_spotMapWindow->pskrDataAvailable()) {
+        int const pi = m_spotMapWindow->pskrCongestionIndex();
+        busy = pi >= m_reachBusyThresholdPskr;
+        basis = QStringLiteral("pskr %1 thr %2")
+                    .arg(pi)
+                    .arg(m_reachBusyThresholdPskr);
+    } else {
+        int const ci = bandCongestionIndex();
+        busy = ci >= m_reachBusyThreshold;
+        basis = QStringLiteral("on-air %1 thr %2%3")
+                    .arg(ci)
+                    .arg(m_reachBusyThreshold)
+                    .arg(m_reachWaitMode == 3
+                             ? QStringLiteral(" (pskr fallback)")
+                             : QString());
+    }
+    qCWarning(mainwindow_js8)
+        << "[REACH] wait decision:" << basis << "->"
+        << (busy ? "busy" : "quiet");
+    return busy;
 }
 
 // [structured 2026-08-31] Expected frame counts for a relay move,

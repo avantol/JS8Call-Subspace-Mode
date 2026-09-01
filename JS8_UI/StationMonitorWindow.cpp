@@ -55,8 +55,7 @@ StationMonitorWindow::StationMonitorWindow(
     setMinimumSize(180, 100);
     resize(560, 360);
     auto *lay = new QVBoxLayout(this);
-    m_headline = new QLabel(this);
-    lay->addWidget(m_headline);
+    // [operator 2026-09-01] No headline -- the log is the window.
     m_log = new QPlainTextEdit(this);
     m_log->setReadOnly(true);
     QFont mono{QStringLiteral("monospace")};
@@ -305,8 +304,6 @@ void StationMonitorWindow::refreshTitle() {
 }
 
 void StationMonitorWindow::updateHeadline() {
-    // Count only -- the full list ran to hundreds of calls
-    // (operator 2026-09-01: "might be a good idea for later").
-    m_headline->setText(
-        tr("Following %1 station(s)").arg(m_members.size()));
+    // [operator 2026-09-01] Dropped from the UI ("drop
+    // Following..."); the member set remains the engine's state.
 }

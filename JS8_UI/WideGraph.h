@@ -77,6 +77,8 @@ class WideGraph : public QWidget {
     // [BUILD 336] Forwarded from CPlotter: double-click landed on a
     // painted callsign label.
     void callDoubleClicked(QString const &call);
+    // [stamon] Forwarded from CPlotter: right-click at an offset.
+    void rightClickFreq(int freq, QPoint const &globalPos);
     void f11f12(int n);
     void setXIT(int n);
     void qsy(int);

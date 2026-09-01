@@ -2925,6 +2925,38 @@ void UI_Constructor::stationMonitorMenu(QString const &call,
     menu->popup(globalPos);
 }
 
+// [stamon] The station a waterfall right-click means. Tolerance =
+// the station's own signal BANDWIDTH (the painted trace is exactly
+// that wide); the first attempt used rxThreshold (a few Hz) and
+// nothing was ever hit. Most recently heard candidate wins; every
+// attempt logs, so a miss is attributable.
+QString UI_Constructor::stationAtOffset(int freq) const {
+    QString best;
+    QDateTime bestSeen;
+    int bestOffset = 0;
+    for (auto it = m_callActivity.constBegin();
+         it != m_callActivity.constEnd(); ++it) {
+        auto const &d = it.value();
+        if (d.offset <= 0)
+            continue;
+        int const tol = static_cast<int>(JS8::Submode::bandwidth(
+            d.submode >= 0 ? d.submode : m_nSubMode));
+        if (qAbs(d.offset - freq) > tol)
+            continue;
+        if (best.isEmpty() || d.utcTimestamp > bestSeen) {
+            best = it.key();
+            bestSeen = d.utcTimestamp;
+            bestOffset = d.offset;
+        }
+    }
+    qCWarning(mainwindow_js8)
+        << "[STAMON] waterfall right-click" << freq << "Hz ->"
+        << (best.isEmpty() ? QStringLiteral("none") : best)
+        << (best.isEmpty() ? QString()
+                           : QStringLiteral("at %1 Hz").arg(bestOffset));
+    return best;
+}
+
 void UI_Constructor::feedStationMonitors(
     QString const &from, QString const &to, QString const &relayPath,
     QString const &text, int offset, QDateTime const &utc,

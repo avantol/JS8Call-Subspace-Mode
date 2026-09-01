@@ -19,6 +19,7 @@
 #include "JS8_UI/SpeechBalloon.h"
 #include "JS8_Main/ArqMonitor.h"
 #include "JS8_UI/ArqMonitorWindow.h"
+#include "JS8_UI/StationMonitorWindow.h" // [stamon]
 #include "JS8_Widgets/BandActivityMessageDelegate.h"
 
 #include <QAction>
@@ -531,6 +532,14 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             [this]() {
                 ui->actionShow_ARQ_Monitor->setChecked(false);
             });
+    // [stamon] Station monitors close with the app too (top-level
+    // windows would otherwise outlive it).
+    connect(this, &UI_Constructor::finished, this, [this]() {
+        for (auto const &w : m_stationMonitors)
+            if (!w.isNull())
+                w->close();
+        m_stationMonitors.clear();
+    });
     m_spotMapWindow->setStation(m_config.my_callsign(), m_config.my_grid());
     // [BUILD 336 TODO #96 first slice] Clicking a spot dot seeds the
     // outgoing text box with that callsign. Rules (Andy 2026-07-16):
@@ -593,12 +602,17 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // TX-queue guard).
     connect(m_spotMapWindow.data(), &SpotMapWindow::qsyToOffset,
             this, &UI_Constructor::changeFreq);
-    // [stamon] Station-monitor right-click: map spots. (Waterfall
-    // right-click dropped -- it could not pick up a callsign;
-    // operator ruling 2026-09-01.)
+    // [stamon] Station-monitor right-clicks: map spots directly;
+    // waterfall resolves by signal-bandwidth tolerance (take 2).
     connect(m_spotMapWindow.data(),
             &SpotMapWindow::stationRightClicked, this,
             &UI_Constructor::stationMonitorMenu);
+    connect(m_wideGraph.data(), &WideGraph::rightClickFreq, this,
+            [this](int freq, QPoint const &pos) {
+                if (QString const call = stationAtOffset(freq);
+                    !call.isEmpty())
+                    stationMonitorMenu(call, pos);
+            });
     // [stamon] Env-gated Window-menu entry, right after Show Spots
     // Map: asks for the callsign in a dialog.
     {
