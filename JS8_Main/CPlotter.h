@@ -135,6 +135,11 @@ class CPlotter final : public QWidget {
         return static_cast<int>(freqFromX(x));
     }
 
+    // [BUILD 336] Hit-test a widget-coordinate point against the
+    // painted callsign labels; empty string when nothing is close.
+    // Public since [stamon]: the waterfall's context menu asks it.
+    QString callAt(QPoint const &widgetPos) const;
+
     // Inline manipulators
 
     void setFlatten(bool const flatten) { m_flatten(flatten); }
@@ -185,11 +190,6 @@ class CPlotter final : public QWidget {
     // [BUILD 336] Double-click landed on (or very near) a painted
     // callsign label. Payload: the callsign.
     void callDoubleClicked(QString const &call);
-    // [stamon] Right-click landed on a painted callsign label --
-    // SAME proximity test as the double-click (callAt, operator
-    // ruling 2026-09-01).
-    void callRightClicked(QString const &call,
-                          QPoint const &globalPos);
 
   protected:
     // Event Handlers
@@ -269,9 +269,6 @@ class CPlotter final : public QWidget {
     };
     void paintLabelAt(QPainter &p, LabelEntry const &e,
                       qint64 yOffset);
-    // [BUILD 336] Hit-test a widget-coordinate point against the
-    // painted callsign labels; empty string when nothing is close.
-    QString callAt(QPoint const &widgetPos) const;
     std::deque<LabelEntry> m_recentLabels;
     qint64 m_waterfallRow = 0;  // monotonic 1-per-scroll counter
     // [BUILD 353 yesflag] see setArqCapableCheck.

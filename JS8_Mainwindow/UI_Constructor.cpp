@@ -607,8 +607,8 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     connect(m_spotMapWindow.data(),
             &SpotMapWindow::stationRightClicked, this,
             &UI_Constructor::stationMonitorMenu);
-    connect(m_wideGraph.data(), &WideGraph::callRightClicked, this,
-            &UI_Constructor::stationMonitorMenu);
+    connect(m_wideGraph.data(), &WideGraph::openStationMonitor,
+            this, &UI_Constructor::openStationMonitor);
     // [stamon] Env-gated Window-menu entry, right after Show Spots
     // Map: asks for the callsign in a dialog.
     {

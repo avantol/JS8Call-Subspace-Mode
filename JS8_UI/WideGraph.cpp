@@ -132,6 +132,35 @@ WideGraph::WideGraph(QSettings *settings, QWidget *parent)
 
             auto const f = ui->widePlot->frequencyAt(pos.x());
 
+            // [stamon] The waterfall's right-click was ALWAYS this
+            // context menu (CustomContextMenu policy) -- the three
+            // mouseReleaseEvent attempts could never fire. The
+            // monitor entry belongs HERE, gated by the env var,
+            // present only when the click landed on a callsign
+            // label (the double-click's own callAt test).
+            {
+                static bool const stamonOn =
+                    qEnvironmentVariableIsSet("JS8_STATION_MONITOR");
+                if (stamonOn) {
+                    QString const call = ui->widePlot->callAt(pos);
+                    qWarning()
+                        << "[STAMON] waterfall menu at" << f
+                        << "Hz, label ->"
+                        << (call.isEmpty()
+                                ? QStringLiteral("none")
+                                : call);
+                    if (!call.isEmpty()) {
+                        auto monAction = menu->addAction(
+                            tr("Open station monitor"));
+                        connect(monAction, &QAction::triggered,
+                                this, [this, call]() {
+                                    Q_EMIT openStationMonitor(call);
+                                });
+                        menu->addSeparator();
+                    }
+                }
+            }
+
             auto offsetAction =
                 menu->addAction(QString("Set &Offset to %1 Hz").arg(f));
             connect(offsetAction, &QAction::triggered, this,
@@ -173,8 +202,6 @@ WideGraph::WideGraph(QSettings *settings, QWidget *parent)
         });
 
     connect(ui->widePlot, &CPlotter::changeFreq, this, &WideGraph::changeFreq);
-    connect(ui->widePlot, &CPlotter::callRightClicked, this,
-            &WideGraph::callRightClicked); // [stamon]
     connect(ui->widePlot, &CPlotter::callDoubleClicked, this,
             &WideGraph::callDoubleClicked);
 
