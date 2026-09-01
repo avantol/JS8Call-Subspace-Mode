@@ -2889,7 +2889,10 @@ void UI_Constructor::openStationMonitor(QString const &call) {
     auto *w = new StationMonitorWindow(
         call,
         m_config.writeable_data_dir().absoluteFilePath(
-            QStringLiteral("DIRECTED.TXT")));
+            QStringLiteral("DIRECTED.TXT")),
+        m_config.writeable_data_dir().absoluteFilePath(
+            QStringLiteral("ALL.TXT")),
+        m_config.my_callsign());
     w->setAttribute(Qt::WA_DeleteOnClose);
     m_stationMonitors.insert(call, w);
     w->show();

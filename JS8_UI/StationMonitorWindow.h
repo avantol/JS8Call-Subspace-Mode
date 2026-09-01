@@ -26,9 +26,13 @@ class StationMonitorWindow final : public QWidget {
     Q_OBJECT
 
   public:
-    // directedTxtPath: DIRECTED.TXT for the open-time backfill.
+    // Backfill sources: DIRECTED.TXT (RX, assembled) and ALL.TXT
+    // (our own per-frame "Transmitting" lines, stitched into
+    // messages and credited to myCall).
     StationMonitorWindow(QString const &station,
                          QString const &directedTxtPath,
+                         QString const &allTxtPath,
+                         QString const &myCall,
                          QWidget *parent = nullptr);
 
     QString station() const { return m_station; }
@@ -42,7 +46,8 @@ class StationMonitorWindow final : public QWidget {
               bool historical = false);
 
   private:
-    void backfill(QString const &path);
+    void backfill(QString const &directedTxtPath,
+                  QString const &allTxtPath, QString const &myCall);
     void updateHeadline();
 
     QString m_station;

@@ -11,14 +11,20 @@
 #include <QFile>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QTimeZone>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace {
 // A member offset stays joinable this long after its last use; a
 // station keys the same offset across a conversation, minutes apart.
 constexpr qint64 OFFSET_TTL_MS = 10 * 60 * 1000;
-// Backfill reads at most this much of DIRECTED.TXT's tail.
+// Backfill window: trailing hours of history replayed at open
+// (operator 2026-09-01: 4.7 days of tail overgrew the member set).
+constexpr int BACKFILL_HOURS = 6;
+// And at most this much of each log's tail is even read.
 constexpr qint64 BACKFILL_TAIL_BYTES = 512 * 1024;
 
 // Real single-station callsigns only: no @groups, no empty parts.
@@ -37,6 +43,7 @@ QStringList validParties(QString const &joined) {
 
 StationMonitorWindow::StationMonitorWindow(
     QString const &station, QString const &directedTxtPath,
+    QString const &allTxtPath, QString const &myCall,
     QWidget *parent)
     : QWidget{parent}, m_station{station} {
     setWindowFlag(Qt::Window);
@@ -54,7 +61,7 @@ StationMonitorWindow::StationMonitorWindow(
 
     m_members.insert(station);
     updateHeadline();
-    backfill(directedTxtPath);
+    backfill(directedTxtPath, allTxtPath, myCall);
 }
 
 void StationMonitorWindow::feed(QString const &from, QString const &to,
@@ -79,9 +86,13 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
             admit = true;
             break;
         }
-    if (!admit && offset > 0) {
-        // Same/close offset: the band-activity row-migration rule
-        // (JS8::Submode::rxThreshold -- one authority).
+    // Same/close offset: LIVE traffic only (the band-activity
+    // row-migration rule, JS8::Submode::rxThreshold -- one
+    // authority). Historic lines neither join by offset nor record
+    // one: an offset in the log is whoever owned it THEN (operator
+    // field-caught 2026-09-01: WD4KAV's old offset pulled in its
+    // later occupants).
+    if (!admit && !historical && offset > 0) {
         int const range = JS8::Submode::rxThreshold(
             submode >= 0 ? submode : Varicode::JS8CallNormal);
         qint64 const nowMs = utc.toMSecsSinceEpoch();
@@ -98,7 +109,7 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
 
     for (QString const &c : parties)
         m_members.insert(c);
-    if (offset > 0) {
+    if (!historical && offset > 0) {
         m_memberOffsets[offset] = utc.toMSecsSinceEpoch();
         for (auto it = m_memberOffsets.begin();
              it != m_memberOffsets.end();)
@@ -115,51 +126,114 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
             .arg(historical ? QStringLiteral("?")
                             : JS8::Submode::indicator(submode))
             .arg(utc.time().toString())
-            .arg(offset)
+            .arg(offset > 0 ? QString::number(offset)
+                            : QStringLiteral("?"))
             .arg(text));
     updateHeadline();
 }
 
-// Replay the DIRECTED.TXT tail through the SAME membership engine
-// so history and live traffic obey identical rules. Columns
-// (writeMsgTxt): "yyyy-MM-dd hh:mm:ss\tMHz\toffset\tSNR\ttext",
-// text = "FROM: TO ...". No mode column -> historical lines print
-// "?" and use Normal's rx threshold for the offset rule.
-void StationMonitorWindow::backfill(QString const &path) {
+namespace {
+struct HistLine {
+    QDateTime utc;
+    QString from;
+    QString text;
+    int offset;
+};
+
+QList<QByteArray> tailLines(QString const &path) {
     QFile f{path};
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
-        return;
+        return {};
     if (f.size() > BACKFILL_TAIL_BYTES)
         f.seek(f.size() - BACKFILL_TAIL_BYTES);
-    QList<QByteArray> const lines = f.readAll().split('\n');
+    QList<QByteArray> lines = f.readAll().split('\n');
     // First line after a mid-file seek is almost surely partial.
-    for (int i = (f.size() > BACKFILL_TAIL_BYTES ? 1 : 0);
-         i < lines.size(); ++i) {
-        QString const line = QString::fromUtf8(lines[i]).trimmed();
+    if (f.size() > BACKFILL_TAIL_BYTES && !lines.isEmpty())
+        lines.removeFirst();
+    return lines;
+}
+
+QDateTime parseUtc(QString const &s) {
+    QDateTime utc = QDateTime::fromString(
+        s, QStringLiteral("yyyy-MM-dd hh:mm:ss"));
+    utc.setTimeZone(QTimeZone::utc());
+    return utc;
+}
+} // namespace
+
+// Replay history through the SAME membership engine so history and
+// live traffic obey identical rules -- except the offset rule,
+// which is live-only (see feed). Sources, merged chronologically,
+// bounded to the trailing BACKFILL_HOURS:
+//  - DIRECTED.TXT (writeMsgTxt): "utc\tMHz\toffset\tSNR\ttext",
+//    text = "FROM: TO ...". No mode column -> "?" indicator.
+//  - ALL.TXT "Transmitting" lines: OUR side, per-frame with no
+//    offset; consecutive frames <=30 s apart stitch into one
+//    assembled message credited to myCall.
+void StationMonitorWindow::backfill(QString const &directedTxtPath,
+                                    QString const &allTxtPath,
+                                    QString const &myCall) {
+    QDateTime const cutoff = QDateTime::currentDateTimeUtc().addSecs(
+        -BACKFILL_HOURS * 3600);
+    QList<HistLine> hist;
+
+    for (QByteArray const &raw : tailLines(directedTxtPath)) {
+        QString const line = QString::fromUtf8(raw).trimmed();
         QStringList const cols = line.split(QLatin1Char('\t'));
         if (cols.size() < 5)
             continue;
-        QDateTime utc = QDateTime::fromString(
-            cols[0], QStringLiteral("yyyy-MM-dd hh:mm:ss"));
-        utc.setTimeZone(QTimeZone::utc());
+        QDateTime const utc = parseUtc(cols[0]);
+        if (!utc.isValid() || utc < cutoff)
+            continue;
         QString const text = cols.mid(4).join(QLatin1Char('\t'));
         // FROM is the text's own "CALL: " prefix; membership also
-        // sees every mention, so from/to extraction can stay lax.
+        // sees every mention, so extraction can stay lax.
         QString from;
-        int const colon = text.indexOf(QStringLiteral(": "));
-        if (colon > 0)
+        if (int const colon = text.indexOf(QStringLiteral(": "));
+            colon > 0)
             from = text.left(colon);
-        feed(from, QString(), QString(), text, cols[2].toInt(), utc,
-             -1, true);
+        hist.append({utc, from, text, cols[2].toInt()});
     }
+
+    // Our transmissions: stitch consecutive per-frame lines.
+    HistLine tx{QDateTime(), myCall, QString(), 0};
+    QDateTime lastFrame;
+    auto const flushTx = [&]() {
+        if (tx.utc.isValid() && !tx.text.trimmed().isEmpty())
+            hist.append(tx);
+        tx = {QDateTime(), myCall, QString(), 0};
+    };
+    static QRegularExpression const txRe{QStringLiteral(
+        R"(^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+Transmitting .*JS8:\s(.*)$)")};
+    for (QByteArray const &raw : tailLines(allTxtPath)) {
+        auto const m =
+            txRe.match(QString::fromUtf8(raw).trimmed());
+        if (!m.hasMatch())
+            continue;
+        QDateTime const utc = parseUtc(m.captured(1));
+        if (!utc.isValid() || utc < cutoff)
+            continue;
+        if (!tx.utc.isValid() || lastFrame.secsTo(utc) > 30)
+            flushTx();
+        if (!tx.utc.isValid())
+            tx.utc = utc;
+        tx.text += m.captured(2);
+        lastFrame = utc;
+    }
+    flushTx();
+
+    std::stable_sort(hist.begin(), hist.end(),
+                     [](HistLine const &a, HistLine const &b) {
+                         return a.utc < b.utc;
+                     });
+    for (HistLine const &h : hist)
+        feed(h.from, QString(), QString(), h.text, h.offset, h.utc,
+             -1, true);
 }
 
 void StationMonitorWindow::updateHeadline() {
-    QStringList calls{m_members.begin(), m_members.end()};
-    calls.sort();
+    // Count only -- the full list ran to hundreds of calls
+    // (operator 2026-09-01: "might be a good idea for later").
     m_headline->setText(
-        tr("Following %1 station(s): %2")
-            .arg(m_members.size())
-            .arg(calls.join(QStringLiteral("  "))));
-    m_headline->setWordWrap(true);
+        tr("Following %1 station(s)").arg(m_members.size()));
 }
