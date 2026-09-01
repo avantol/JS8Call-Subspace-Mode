@@ -8951,6 +8951,12 @@ void UI_Constructor::on_stopTxButton_clicked() // Stop Tx — OPERATOR halt
     // cancels the whole mode, not just the in-flight transmission.
     if (m_autoRouteActive)
         autoRouteCancel();
+    // [apihalt, field 2026-09-01] ...and a bare API-driven attempt
+    // (TX.REACH) equally: the WD4KAV run survived SIX operator
+    // Halts, relaunching a move after each one ("something keeps
+    // transmitting here") because only the mode flag was checked.
+    else if (m_reach.active)
+        reachStop(QStringLiteral("stopped by operator"));
 
     // Operator-initiated halt aborts any in-flight chunked-ARQ
     // session and clears all per-peer state (incl. MSG-cmd flags).
