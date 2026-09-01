@@ -612,6 +612,11 @@ class UI_Constructor : public QMainWindow {
     bool txIdleNow() const;
     // Busy-wait toast wording, empty when idle — the ONE authority.
     QString txBusyToastText() const;
+    // [busystub] busy-band predicate for the two busy-conditional
+    // wait points; stubbed true until the congestion threshold is
+    // calibrated.
+    bool reachBandBusy() const;
+    void reachComputeExpected();   // [structured] packed counts
     // [congestion] 1-10 = ceil(10 x occupied-slot fraction, trailing
     // 20 slots). Radio-only; works with no internet.
     int bandCongestionIndex() const;
@@ -1367,6 +1372,15 @@ class UI_Constructor : public QMainWindow {
         // dialog's will/can line (append-time truth; edge whenMs can
         // be backdated by QUERY CALL ages, so it cannot serve).
         int         learnedAt0 = 0;
+        // [structured 2026-08-31] computed expected frame counts
+        // (reachReplyFrames = the packer, one owner; compound calls
+        // native) + the flag-check state for the forward watch.
+        int         fwdExpFrames = 0;
+        int         ansExpFrames = 0;
+        int         retExpFrames = 0;
+        int         fwdFrames = 0;
+        int         fwdOffset = 0;
+        QString     forcedVerdict;
         QString     kind;           // "snr" | "shout" | "relay"
         QString     via;            // relay move only: chain[0]
         QStringList chain;          // full relay chain (excl. target)

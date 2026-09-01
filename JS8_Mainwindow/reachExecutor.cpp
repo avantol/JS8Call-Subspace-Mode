@@ -249,6 +249,38 @@ int UI_Constructor::reachReplyFrames(QString const &from,
     return qMax(1, int(frames.size()));
 }
 
+// [busystub 2026-08-31] The busy-band predicate for the TWO
+// busy-conditional points (second start slot; return slide).
+// Stubbed TRUE -- "assume busy" -- until the congestion index
+// threshold is calibrated by the three-point scale (#206/#207);
+// this preserves the operator's 2-slot measurement behavior.
+bool UI_Constructor::reachBandBusy() const { return true; }
+
+// [structured 2026-08-31] Expected frame counts for a relay move,
+// all from the packer (one owner; compound calls native; SNR is a
+// fixed-width literal so any value packs the same). Standard calls
+// give fwd=3, ans=3, ret=3 -- the accounting doc's numbers.
+void UI_Constructor::reachComputeExpected() {
+    QString const me = m_config.my_callsign().trimmed().toUpper();
+    QString const T = m_reach.target;
+    // The relay's rewrite, exactly (field-verified 1-hop form
+    // "AC7WY> SNR? + *DE* WM8Q"; code: remainder with the FIRST
+    // token '>'-ified): 1-hop -> "T> SNR? *DE* ME"; 2-relay ->
+    // "B>T SNR? *DE* ME" (intermediate keeps '>', final dest bare).
+    QStringList rest = m_reach.chain.mid(1);
+    rest << T;
+    QString const fwdText =
+        rest.join(QLatin1Char('>')) +
+        (rest.size() == 1 ? QStringLiteral(">") : QString()) +
+        QStringLiteral(" SNR? *DE* ") + me;
+    m_reach.fwdExpFrames = reachReplyFrames(m_reach.via, fwdText);
+    m_reach.ansExpFrames = reachReplyFrames(
+        T, m_reach.chain.last() + QStringLiteral(" SNR -15"));
+    m_reach.retExpFrames = reachReplyFrames(
+        m_reach.via,
+        me + QStringLiteral("> SNR -15 *DE* ") + T);
+}
+
 // attempt.py:291-294
 qint64 UI_Constructor::reachSlotEndMs(qint64 tMs, int n) const {
     qint64 const p = qMax(1u, JS8::Submode::periodMS(m_nSubMode));
@@ -1290,6 +1322,10 @@ void UI_Constructor::reachNextMove() {
     m_reach.fwdStartedMs = m_reach.fwdDoneMs = m_reach.ansStartedMs =
         m_reach.retStartedMs = 0;
     m_reach.retOffset = 0;
+    m_reach.fwdExpFrames = m_reach.ansExpFrames =
+        m_reach.retExpFrames = m_reach.fwdFrames =
+        m_reach.fwdOffset = 0;
+    m_reach.forcedVerdict.clear();
     m_reach.chain.clear();
     m_reach.watchers.clear();
 
@@ -1300,6 +1336,7 @@ void UI_Constructor::reachNextMove() {
         m_reach.kind = QStringLiteral("relay");
         m_reach.via = via;
         m_reach.chain = QStringList{via};
+        reachComputeExpected();   // [structured]
         m_reach.triedAt.insert(QStringLiteral("relay:") + via, now);
         reachSend(QStringLiteral("%1: %2>%3 SNR?").arg(me, via, T));
         return;
@@ -1836,6 +1873,7 @@ void UI_Constructor::reachNextMove() {
         m_reach.via = x.mv.via;
         m_reach.chain = x.mv.chain.isEmpty()
                             ? QStringList{x.mv.via} : x.mv.chain;
+        reachComputeExpected();   // [structured]
         m_reach.triedAt.insert(QStringLiteral("relay:") + relKey,
                                now);
         m_reach.pastVias.append(x.mv.via);
@@ -2077,13 +2115,13 @@ void UI_Constructor::reachOnTxComplete() {
     // boundary a station keys when its decode+enqueue missed the
     // first one. Half-duplex ate the answer AND journaled a false
     // ans=false (self-inflicted habit contamination). Direct pings
-    // now listen through the second boundary, UNCONDITIONALLY.
-    // [twoslots, operator ruling 2026-08-31: "simply allow two slots
-    // for the first relay reply to start"] No band assessment -- the
-    // point is to MEASURE what the second slot gains on busy bands,
-    // and a conditional gate would confound that measurement. The
-    // earlier adaptive hold (band-activity boolean) is deleted.
-    m_reach.deadlineMs = reachSlotEndMs(m_reach.txEndMs, 2);
+    // [structured] Start wait: 2 slots when the band is busy, 1
+    // when quiet -- one of the TWO busy-conditional points (operator
+    // design 2026-08-31). reachBandBusy() is stubbed TRUE until the
+    // congestion threshold is calibrated, so today this is the
+    // operator's unconditional 2 (twoslots), measurement preserved.
+    m_reach.deadlineMs =
+        reachSlotEndMs(m_reach.txEndMs, reachBandBusy() ? 2 : 1);
     reachLog(QStringLiteral("    TX-END; deadline %1")
                  .arg(fmtClock(m_reach.deadlineMs)));
     reachArmTimer();
@@ -2124,18 +2162,53 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
     if (m_reach.kind == QLatin1String("relay") &&
         m_reach.fwdStartedMs == 0 && viaKeyed) {
         m_reach.fwdStartedMs = now;
-        // [fwdspan, operator rule 2026-08-31: "once we have a frame
-        // 1 from our relay, we wait the amount of time it takes for
-        // the reply to complete based on the expected length"]
-        // Expected forward = 3 frames for now; frame 1 is in hand at
-        // detection, so 2 more slots. No pad: frame 3 decodes ~+43 s
-        // (field-measured), this deadline lands at +46.
+        m_reach.fwdFrames = 1;
+        m_reach.fwdOffset = d.offset;
+        // [structured, operator rule: expected length, no pad]
+        // Frame 1 in hand; the packed count says how many more.
+        int const more = qMax(1, m_reach.fwdExpFrames - 1);
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 2));
+                                  reachSlotEndMs(now, more));
         reachLog(QStringLiteral("    %1 keyed in the first slot +%2s "
-                                "-- waiting for the forward to finish")
+                                "-- waiting for the forward to finish"
+                                " (%3 frames expected)")
                      .arg(m_reach.via)
-                     .arg((now - m_reach.txEndMs) / 1000));
+                     .arg((now - m_reach.txEndMs) / 1000)
+                     .arg(m_reach.fwdExpFrames));
+        reachArmTimer();
+    } else if (m_reach.kind == QLatin1String("relay") &&
+               m_reach.fwdStartedMs != 0 && m_reach.fwdDoneMs == 0 &&
+               m_reach.forcedVerdict.isEmpty() &&
+               m_reach.fwdOffset != 0 &&
+               qAbs(d.offset - m_reach.fwdOffset) <= 5) {
+        // [flagcheck, operator-ruled item 1, 2026-08-31] Message
+        // endings are announced in-band (bit 73). Our forward's
+        // final frame MUST carry the Last flag; a Last flag early,
+        // or missing at the expected final frame, or a frame past
+        // the count, proves this is not our message -- at that
+        // frame's decode. Reads one protocol bit, never content.
+        m_reach.fwdFrames += 1;
+        bool const lastFlag =
+            (d.bits & Varicode::JS8CallLast) != 0;
+        int const expN = m_reach.fwdExpFrames;
+        if (expN > 0 &&
+            (m_reach.fwdFrames > expN ||
+             (m_reach.fwdFrames == expN && !lastFlag) ||
+             (m_reach.fwdFrames < expN && lastFlag))) {
+            reachLog(QStringLiteral("    frame %1 of expected %2 "
+                                    "%3 -- not our forward")
+                         .arg(m_reach.fwdFrames).arg(expN)
+                         .arg(m_reach.fwdFrames > expN
+                                  ? QStringLiteral("exceeds it")
+                              : lastFlag
+                                  ? QStringLiteral("ends early")
+                                  : QStringLiteral("lacks the "
+                                        "last-frame flag")));
+            m_reach.forcedVerdict =
+                QStringLiteral("the relaying station keyed, but no "
+                               "forward of ours assembled");
+            m_reach.deadlineMs = now;
+        }
         reachArmTimer();
     }
     // Checkpoint 2 fires here: the via keying again after its proven
@@ -2145,22 +2218,49 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
     if (m_reach.kind == QLatin1String("relay") &&
         m_reach.fwdDoneMs != 0 && m_reach.retStartedMs == 0 &&
         viaKeyed) {
+        // [structured] During the answer silence the return cannot
+        // physically start (the target is still transmitting to the
+        // via, two hops away) -- a via keying there is doing
+        // something else; note it and keep waiting. Single-relay
+        // only; multi-hop keeps the old accept-any-time behavior.
+        if (m_reach.chain.size() <= 1 && m_reach.ansExpFrames > 0 &&
+            now < reachSlotEndMs(m_reach.fwdDoneMs,
+                                 m_reach.ansExpFrames) -
+                      qMax(1u, JS8::Submode::periodMS(m_nSubMode)) / 2) {
+            reachLog(QStringLiteral("    %1 keyed during the answer "
+                                    "silence -- not the return, "
+                                    "still waiting")
+                         .arg(m_reach.via));
+            return;
+        }
         m_reach.retStartedMs = now;
         m_reach.retOffset = d.offset;
-        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 1));
+        // [structured] completion: computed length when quiet; the
+        // per-frame slide is the busy accommodation (one of the two
+        // busy-conditional points). Stub is TRUE today.
+        m_reach.deadlineMs = qMax(
+            m_reach.deadlineMs,
+            reachSlotEndMs(now,
+                           reachBandBusy()
+                               ? 1
+                               : qMax(1, m_reach.retExpFrames - 1)));
         reachLog(QStringLiteral("    return started +%1s at %2 Hz -- "
-                                "waiting for end of message")
+                                "waiting for end of message "
+                                "(%3 frames expected)")
                      .arg((now - m_reach.txEndMs) / 1000)
-                     .arg(d.offset));
+                     .arg(d.offset)
+                     .arg(m_reach.retExpFrames));
         reachArmTimer();
     } else if (m_reach.kind == QLatin1String("relay") &&
                m_reach.retStartedMs != 0 &&
                qAbs(d.offset - m_reach.retOffset) <= 5) {
         // continuation frames of the return carry no callsign prefix;
-        // ride the offset, one slot per frame, cap-bounded.
-        m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 1));
+        // ride the offset. [structured] The per-frame SLIDE is the
+        // busy-band accommodation only; quiet bands run on the
+        // computed deadline set at return-start. Stub is TRUE today.
+        if (reachBandBusy())
+            m_reach.deadlineMs = qMax(m_reach.deadlineMs,
+                                      reachSlotEndMs(now, 1));
         reachArmTimer();
     }
 
@@ -2362,14 +2462,25 @@ void UI_Constructor::reachOnDirected(CommandDetail const &d,
         // audible). Constants, not packed counts -- the SNR ask's
         // reply shape is fixed. Nothing by then = abandon there, not
         // at the cap; the cap is only the outer bound.
+        // [structured, operator design 2026-08-31] Single relay:
+        // the window has structure -- the target's answer occupies
+        // ansExpFrames slots of planned silence (nothing can happen
+        // there), then the return must START within the standard
+        // 2-slot allowance. Multi-hop chains keep the flat 6 slots
+        // per relay until that decomposition is designed.
         int const retWindow =
-            6 * qMax(1, static_cast<int>(m_reach.chain.size()));
+            m_reach.chain.size() <= 1
+                ? qMax(1, m_reach.ansExpFrames) + 2
+                : 6 * static_cast<int>(m_reach.chain.size());
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                   reachSlotEndMs(now, retWindow));
         reachLog(QStringLiteral("    forward complete %1 "
-                                "(checksum-proven); return must start "
-                                "within %2 slots")
+                                "(checksum-proven); %2 slots of "
+                                "answer silence, return must start "
+                                "within %3 slots total")
                      .arg(off)
+                     .arg(m_reach.chain.size() <= 1
+                              ? m_reach.ansExpFrames : -1)
                      .arg(retWindow));
         reachArmTimer();
         return;
@@ -2498,6 +2609,8 @@ void UI_Constructor::reachTick() {
                      .arg(m_reach.watchers.size() - done));
     }
     QString state;
+    if (!m_reach.forcedVerdict.isEmpty())
+        state = m_reach.forcedVerdict;
     // [operator-caught session 2026-08-27, found during the detector
     // audit] The durable write below ran on EVERY verdict -- missing
     // braces -- journaling a false did-not-forward mark for vias that
@@ -2511,7 +2624,9 @@ void UI_Constructor::reachTick() {
             {m_reach.band, m_reach.via, QStringLiteral("fwd"),
              QString{}, 0, false});
     }
-    if (capped)
+    if (!state.isEmpty())
+        ;   // forced verdict already named the case
+    else if (capped)
         state = QStringLiteral("move hard cap (330s) reached");
     else if (m_reach.kind == QLatin1String("relay") &&
              m_reach.fwdStartedMs == 0)
