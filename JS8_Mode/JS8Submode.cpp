@@ -252,6 +252,17 @@ namespace JS8::Submode {
  */
 QString name(int const submode) { return QObject::tr(data(submode).name()); }
 
+QString indicator(int const submode) {
+    switch (submode) {
+    case Varicode::JS8CallFT2:    return QString::fromUtf8("\xe2\x9a\xa1");
+    case Varicode::JS8CallNormal: return QStringLiteral("N");
+    case Varicode::JS8CallFast:   return QStringLiteral("F");
+    case Varicode::JS8CallTurbo:  return QStringLiteral("T");
+    case Varicode::JS8CallSlow:   return QStringLiteral("S");
+    default:                      return QStringLiteral("?");
+    }
+}
+
 // Basic submode numeric inquiry functions, i.e., parameterized only by
 // the submode, returning constant data.
 

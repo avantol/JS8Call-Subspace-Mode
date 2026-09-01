@@ -32,6 +32,10 @@ struct error : public std::runtime_error {
 
 /** Name of the submode, in all uppercase letters. */
 QString name(int);
+/** One-character display indicator: lightning glyph for FT2/Subspace,
+ *  N/F/T/S for the standard modes, "?" otherwise. One authority for
+ *  the conversation-panel and station-monitor preambles. */
+QString indicator(int);
 unsigned int bandwidth(int);
 Costas::Type costas(int);
 

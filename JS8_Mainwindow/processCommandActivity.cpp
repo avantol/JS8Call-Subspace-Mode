@@ -497,6 +497,13 @@ void UI_Constructor::processCommandActivity() {
         // Log to DIRECTED.txt (includes FROM prefix)
         writeMsgTxt(text, d.snr, d.offset);
 
+        // [stamon] Station-monitor tee: the same fully-assembled
+        // line, with the parties still separable. No-op when no
+        // monitor window is open.
+        if (!m_stationMonitors.isEmpty())
+            feedStationMonitors(d.from, d.to, d.relayPath, text,
+                                d.offset, d.utcTimestamp, d.submode);
+
         // [reachport] The executor's assembled-message feed -- the
         // canonical text, before every reply gate. YES answers reach
         // the hearing store via bindCallQueryReply on this same pass;

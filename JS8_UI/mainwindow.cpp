@@ -15,6 +15,7 @@
 #include "JS8_UI/ICS213Dialog.h"
 #include "JS8_Main/ArqMonitor.h"
 #include "JS8_UI/ArqMonitorWindow.h"
+#include "JS8_UI/StationMonitorWindow.h" // [stamon]
 #include "JS8_Main/NativeBinary.h"
 #include "JS8_Include/SettingsGroup.h"
 
@@ -2876,6 +2877,39 @@ void UI_Constructor::setReachWaitConfig(int mode, int threshOnAir,
     m_settings->endGroup();
 }
 
+// [stamon, TODO #210] Debug follow window: one per station,
+// reachable only through the env-gated right-click entry.
+void UI_Constructor::openStationMonitor(QString const &call) {
+    if (auto w = m_stationMonitors.value(call)) {
+        w->show();
+        w->raise();
+        w->activateWindow();
+        return;
+    }
+    auto *w = new StationMonitorWindow(
+        call,
+        m_config.writeable_data_dir().absoluteFilePath(
+            QStringLiteral("DIRECTED.TXT")));
+    w->setAttribute(Qt::WA_DeleteOnClose);
+    m_stationMonitors.insert(call, w);
+    w->show();
+}
+
+void UI_Constructor::feedStationMonitors(
+    QString const &from, QString const &to, QString const &relayPath,
+    QString const &text, int offset, QDateTime const &utc,
+    int submode) {
+    for (auto it = m_stationMonitors.begin();
+         it != m_stationMonitors.end();)
+        if (it.value().isNull()) {
+            it = m_stationMonitors.erase(it); // closed (DeleteOnClose)
+        } else {
+            it.value()->feed(from, to, relayPath, text, offset, utc,
+                             submode);
+            ++it;
+        }
+}
+
 bool UI_Constructor::canChangeSpeedNow() const {
     bool const arqRxBusy =
         m_chunkedArq && m_chunkedArq->hasActiveRxWindow();
@@ -5094,22 +5128,10 @@ int UI_Constructor::writeMessageTextToUI(QDateTime date, QString text, int freq,
         text = text.replace("\n", "<br/>");
         text = text.replace("  ", "&nbsp;&nbsp;");
         c.insertBlock();
-        // Mode indicator: ⚡ for FT2/Subspace, first letter for standard modes
-        QString modeInd;
-        if (submode == Varicode::JS8CallFT2)
-            modeInd = QString::fromUtf8("\xe2\x9a\xa1");
-        else if (submode == Varicode::JS8CallNormal)
-            modeInd = "N";
-        else if (submode == Varicode::JS8CallFast)
-            modeInd = "F";
-        else if (submode == Varicode::JS8CallTurbo)
-            modeInd = "T";
-        else if (submode == Varicode::JS8CallSlow)
-            modeInd = "S";
-        else
-            modeInd = "?";
+        // Mode indicator: ⚡ for FT2/Subspace, first letter for
+        // standard modes ([stamon] one authority: Submode::indicator)
         c.insertHtml(QString("%1 - %2 - (%3) - %4")
-                         .arg(modeInd)
+                         .arg(JS8::Submode::indicator(submode))
                          .arg(date.time().toString())
                          .arg(freq)
                          .arg(text));
@@ -5960,6 +5982,14 @@ bool UI_Constructor::prepareNextMessageFrame() {
         displayTextForFreq(
             QString("%1 %2 ").arg(dt.message()).arg(m_config.eot()), freq(),
             DriftingDateTime::currentDateTimeUtc(), true, false, true, m_nSubMode);
+        // [stamon] Our own side of the conversation: the message is
+        // fully on the air at its last frame; the wire text carries
+        // our "CALL: " prefix, so membership sees every party.
+        if (!m_stationMonitors.isEmpty())
+            feedStationMonitors(
+                m_config.my_callsign(), QString(), QString(),
+                m_totalTxMessage, freq(),
+                DriftingDateTime::currentDateTimeUtc(), m_nSubMode);
     } else {
         displayTextForFreq(dt.message(), freq(),
                            DriftingDateTime::currentDateTimeUtc(), true,

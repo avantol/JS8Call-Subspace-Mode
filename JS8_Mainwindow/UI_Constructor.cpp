@@ -1593,6 +1593,32 @@ UI_Constructor::UI_Constructor(QString const &program_info,
 
             QString selectedCall = callsignSelected();
             bool missingCallsign = selectedCall.isEmpty();
+
+            // [stamon, TODO #210] Env-gated debug entry: follow the
+            // RIGHT-CLICKED row's station (UserRole carries the bare
+            // call), falling back to the selection.
+            static bool const stamonOn =
+                qEnvironmentVariableIsSet("JS8_STATION_MONITOR");
+            if (stamonOn) {
+                QString mcall;
+                if (int const row =
+                        ui->tableWidgetCalls->rowAt(point.y());
+                    row != -1)
+                    if (auto *it = ui->tableWidgetCalls->item(row, 0))
+                        mcall = it->data(Qt::UserRole).toString();
+                if (mcall.isEmpty())
+                    mcall = selectedCall;
+                if (!mcall.isEmpty() &&
+                    !mcall.startsWith(QLatin1Char('@'))) {
+                    auto *monAction = menu->addAction(
+                        tr("Station monitor: %1").arg(mcall));
+                    connect(monAction, &QAction::triggered, this,
+                            [this, mcall]() {
+                                openStationMonitor(mcall);
+                            });
+                    menu->addSeparator();
+                }
+            }
             bool isAllCall = isAllCallIncluded(selectedCall);
 
             int selectedOffset = -1;

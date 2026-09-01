@@ -617,6 +617,13 @@ class UI_Constructor : public QMainWindow {
     bool reachBandBusy() const;
     void setReachWaitConfig(int mode, int threshOnAir,
                             int threshPskr); // persists
+    // [stamon] create-or-raise a per-station follow window; feed all
+    // open windows one assembled directed line.
+    void openStationMonitor(QString const &call);
+    void feedStationMonitors(QString const &from, QString const &to,
+                             QString const &relayPath,
+                             QString const &text, int offset,
+                             QDateTime const &utc, int submode);
     void reachComputeExpected();   // [structured] packed counts
     // [congestion] 1-10 = ceil(10 x occupied-slot fraction, trailing
     // 20 slots). Radio-only; works with no internet.
@@ -1013,6 +1020,10 @@ class UI_Constructor : public QMainWindow {
     QScopedPointer<WideGraph> m_wideGraph;
     QScopedPointer<LogQSO> m_logDlg;
     QScopedPointer<SpotMapWindow> m_spotMapWindow; // "Spots Map" view
+    // [stamon, TODO #210] Per-station debug follow windows, keyed by
+    // callsign; entries appear only via the env-gated right-click.
+    QMap<QString, QPointer<class StationMonitorWindow>>
+        m_stationMonitors;
     QScopedPointer<class ArqMonitor> m_arqMonitor; // [#153] passive
     QScopedPointer<class ArqMonitorWindow> m_arqMonitorWindow;
     QScopedPointer<HelpTextWindow> m_shortcuts;

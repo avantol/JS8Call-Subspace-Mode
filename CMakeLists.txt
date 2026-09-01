@@ -316,6 +316,7 @@ target_sources(
   JS8_UI/SpotMapGeoData.cpp
   JS8_UI/SpotMapWindow.cpp
   JS8_UI/ArqMonitorWindow.cpp
+  JS8_UI/StationMonitorWindow.cpp
   JS8_Main/ArqMonitor.cpp
   JS8_Main/GridDb.cpp
   JS8_Main/IntelMiner.cpp
