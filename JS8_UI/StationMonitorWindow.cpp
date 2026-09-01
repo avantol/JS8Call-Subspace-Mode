@@ -159,14 +159,23 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
          text.contains(QStringLiteral(" @HB "))))
         return;
 
-    m_log->appendPlainText(
+    // [operator 2026-09-01] Bold the MONITORED station's call when
+    // the line opens with it (its own transmissions) -- nowhere
+    // else in the line.
+    QString shown = text.toHtmlEscaped();
+    if (QString const lead = m_station + QStringLiteral(":");
+        text.startsWith(lead))
+        shown = QStringLiteral("<b>%1</b>%2")
+                    .arg(m_station.toHtmlEscaped(),
+                         text.mid(m_station.size()).toHtmlEscaped());
+    m_log->appendHtml(
         QStringLiteral("%1 - %2 - (%3) - %4")
             .arg(historical ? QStringLiteral("?")
                             : JS8::Submode::indicator(submode))
             .arg(utc.time().toString())
             .arg(offset > 0 ? QString::number(offset)
                             : QStringLiteral("?"))
-            .arg(text));
+            .arg(shown));
     updateHeadline();
 }
 

@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"stamon9\" (v4.1.0.463) by WM8Q"}
+    return QString{"%1 \"stamon10\" (v4.1.0.463) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 
