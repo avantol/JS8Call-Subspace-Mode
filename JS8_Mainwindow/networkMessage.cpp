@@ -635,6 +635,22 @@ if(type == "STATION.SET_SPOT") {
     }
 
     if (type == "TX.SEND_MESSAGE") {
+        // [apiquiet, operator 2026-09-01] The mode owns the radio: an
+        // API-injected send mid-auto-route would drain into a
+        // listening window between moves (JS8Assistant-style
+        // companions inject sends routinely). Refused loudly, same
+        // pattern as the MODE.SET_SPEED lock.
+        if (m_autoRouteActive) {
+            qWarning() << "[API] TX.SEND_MESSAGE refused:"
+                       << "auto-route active";
+            sendNetworkMessage("TX.SEND_MESSAGE", "",
+                               {{"_ID", message.params().value(
+                                            "_ID", QVariant(-1))},
+                                {"REFUSED", true},
+                                {"REASON",
+                                 QStringLiteral("auto_route_active")}});
+            return;
+        }
         auto text = message.value();
         if (!text.isEmpty()) {
             auto priStr = message.params().value("PRIORITY", "HIGH")
