@@ -377,6 +377,16 @@ class SpotMapWindow final : public QWidget {
     void setCongestionProbe(std::function<int()> fn) {
         m_congestionProbe = std::move(fn);
     }
+    // [#207 waitopts] Response-wait config, owned by the main
+    // window (mode: 0 Short, 1 Adaptive, 2 Long; threshold 1-10).
+    // The Options dialog pulls current values through the probe on
+    // open and pushes every change through the sink.
+    void setWaitConfigProbe(std::function<QPair<int, int>()> fn) {
+        m_waitProbe = std::move(fn);
+    }
+    void setWaitConfigSink(std::function<void(int, int)> fn) {
+        m_waitSink = std::move(fn);
+    }
     void setCountryLookup(std::function<QString(QString const &)> fn) {
         m_countryLookup = std::move(fn);
     }
@@ -483,6 +493,19 @@ class SpotMapWindow final : public QWidget {
     class QLineEdit *m_autoRouteEdit = nullptr;
     class QToolButton *m_autoRouteStartBtn = nullptr;
     class QToolButton *m_autoRouteCancelBtn = nullptr;
+    // [#207 waitopts] Options button + response-wait dialog.
+    class QToolButton *m_optionsBtn = nullptr;
+    class QToolButton *m_optionsCloseBtn = nullptr;
+    class QFrame *m_optionsPanel = nullptr;
+    class QRadioButton *m_waitShort = nullptr;
+    class QRadioButton *m_waitLong = nullptr;
+    class QRadioButton *m_waitAdaptive = nullptr;
+    class QSpinBox *m_threshSpin = nullptr;   // hidden right-click
+    class QTimer *m_threshTimer = nullptr;    // inactivity closer
+    std::function<QPair<int, int>()> m_waitProbe;
+    std::function<void(int, int)> m_waitSink;
+    void optionsShowPanel();
+    void positionOverlayPanel(QFrame *panel);
     int m_btnColW = 0;   // right-hand button column width (layout)
     int m_leftColW = 0;  // left-hand button column width (layout)
     // The mode's status line: its own label just above the distance

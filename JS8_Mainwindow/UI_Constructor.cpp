@@ -555,6 +555,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         [this]() { return txBusyToastText(); });
     m_spotMapWindow->setCongestionProbe(
         [this]() { return bandCongestionIndex(); });
+    // [#207 waitopts] Options dialog: probe pulls the live values
+    // when it opens (dodges init order); sink pushes changes back
+    // to the one owner, which persists them.
+    m_spotMapWindow->setWaitConfigProbe([this]() {
+        return QPair<int, int>{m_reachWaitMode, m_reachBusyThreshold};
+    });
+    m_spotMapWindow->setWaitConfigSink([this](int mode, int thresh) {
+        setReachWaitConfig(mode, thresh);
+    });
     m_spotMapWindow->setCountryLookup([this](QString const &call) {
         QString country;
         bool workedCall = false, workedCountry = false;

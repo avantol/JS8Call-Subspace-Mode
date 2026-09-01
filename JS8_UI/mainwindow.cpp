@@ -581,6 +581,11 @@ void UI_Constructor::writeSettings() {
 void UI_Constructor::readSettings() {
     m_settings->beginGroup("UI_Constructor");
     ensureMessageDock();
+    // [#207 waitopts] Response-wait mode + adaptive threshold.
+    m_reachWaitMode =
+        qBound(0, m_settings->value("ReachWaitMode", 1).toInt(), 2);
+    m_reachBusyThreshold = qBound(
+        1, m_settings->value("ReachBusyThreshold", 7).toInt(), 10);
     setMinimumSize(800, 400);
     restoreGeometry(
         m_settings->value("geometry", saveGeometry()).toByteArray());
@@ -2851,6 +2856,17 @@ int UI_Constructor::bandCongestionIndex() const {
         if (m_congestionSlots.contains(s))
             ++occ;
     return qMax(1, (occ * 10 + 19) / 20);   // ceil(10*occ/20), min 1
+}
+
+// [#207 waitopts] Map Options dialog pushes changes here; persisted
+// immediately so a crash never loses the operator's choice.
+void UI_Constructor::setReachWaitConfig(int mode, int threshold) {
+    m_reachWaitMode = qBound(0, mode, 2);
+    m_reachBusyThreshold = qBound(1, threshold, 10);
+    m_settings->beginGroup("UI_Constructor");
+    m_settings->setValue("ReachWaitMode", m_reachWaitMode);
+    m_settings->setValue("ReachBusyThreshold", m_reachBusyThreshold);
+    m_settings->endGroup();
 }
 
 bool UI_Constructor::canChangeSpeedNow() const {

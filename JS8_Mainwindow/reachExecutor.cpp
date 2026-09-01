@@ -249,12 +249,16 @@ int UI_Constructor::reachReplyFrames(QString const &from,
     return qMax(1, int(frames.size()));
 }
 
-// [busystub 2026-08-31] The busy-band predicate for the TWO
+// [#207 waitopts 2026-09-01] The busy-band predicate for the TWO
 // busy-conditional points (second start slot; return slide).
-// Stubbed TRUE -- "assume busy" -- until the congestion index
-// threshold is calibrated by the three-point scale (#206/#207);
-// this preserves the operator's 2-slot measurement behavior.
-bool UI_Constructor::reachBandBusy() const { return true; }
+// Short = never the extra wait, Long = always, Adaptive = the
+// congestion index at/over the operator threshold (default 7,
+// persisted; right-click Adaptive in the map Options dialog).
+bool UI_Constructor::reachBandBusy() const {
+    if (m_reachWaitMode == 0) return false;
+    if (m_reachWaitMode == 2) return true;
+    return bandCongestionIndex() >= m_reachBusyThreshold;
+}
 
 // [structured 2026-08-31] Expected frame counts for a relay move,
 // all from the packer (one owner; compound calls native; SNR is a
@@ -2123,9 +2127,8 @@ void UI_Constructor::reachOnTxComplete() {
     // ans=false (self-inflicted habit contamination). Direct pings
     // [structured] Start wait: 2 slots when the band is busy, 1
     // when quiet -- one of the TWO busy-conditional points (operator
-    // design 2026-08-31). reachBandBusy() is stubbed TRUE until the
-    // congestion threshold is calibrated, so today this is the
-    // operator's unconditional 2 (twoslots), measurement preserved.
+    // design 2026-08-31). [#207 waitopts] reachBandBusy() now rules
+    // by the operator's Short/Adaptive/Long setting.
     m_reach.deadlineMs =
         reachSlotEndMs(m_reach.txEndMs, reachBandBusy() ? 2 : 1);
     reachLog(QStringLiteral("    TX-END; deadline %1")

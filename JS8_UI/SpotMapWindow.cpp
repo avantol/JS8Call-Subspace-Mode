@@ -37,6 +37,8 @@
 #include <QHBoxLayout>
 #include <QButtonGroup>
 #include <QMessageBox>
+#include <QRadioButton>
+#include <QSpinBox>
 #include <QToolTip>
 
 #include "JS8_Include/Maidenhead.h"
@@ -483,6 +485,20 @@ SpotMapWindow::SpotMapWindow(QSettings *settings,
                 m_autoRoutePanel->hide();
             m_relaySelBtn->setEnabled(true);
         }
+    });
+
+    // [#207 waitopts] Options button, below Auto-route: opens the
+    // response-wait dialog. Close button created here because the
+    // style lambda is constructor-local (same as Start/Cancel).
+    m_optionsBtn = makeZoomButton(tr("Options"));
+    m_optionsBtn->setToolTip(tr("Auto-route response wait settings"));
+    m_optionsCloseBtn = makeZoomButton(tr("Close"));
+    m_optionsCloseBtn->hide();
+    connect(m_optionsBtn, &QToolButton::clicked, this, [this]() {
+        if (m_optionsPanel && m_optionsPanel->isVisible())
+            m_optionsPanel->hide();
+        else
+            optionsShowPanel();
     });
 
     positionWindowButtons();
@@ -3477,12 +3493,15 @@ void SpotMapWindow::positionWindowButtons() {
         m_viewMineBtn->setFixedSize(wBtn, 20);
         m_viewAllBtn->setFixedSize(wBtn, 20);
         m_leftColW = wBtn; // [autoroute] panel centering reference
-        // One font height (~16 px) above the old position so the
-        // bottom-center toast can't overlap the stack (operator,
-        // 2026-08-14).
         // [pskrtoggle] Third row: one button height (20 px) of air
         // below the view pair — separate function group.
-        int vy = height() - LEGEND_STRIP_PX - 24 - 42 - 42;
+        // [operator 2026-09-01] Whole group dropped so its lowest
+        // button sits a little above the WINDOW bottom edge (the
+        // legend strip's left corner is empty; the SNR bar and its
+        // labels are centered). Group height = 84 px (see offsets
+        // below). Auto-fit's lower bound follows m_viewMineBtn->y()
+        // and so enlarges with this move automatically.
+        int vy = height() - 6 - 84;
         for (QToolButton *b : {m_viewMineBtn, m_viewAllBtn}) {
             b->move(6, vy);
             vy += 22;
@@ -3505,8 +3524,21 @@ void SpotMapWindow::positionWindowButtons() {
             wConn = std::max(wConn, m_relaySelBtn->sizeHint().width());
         if (m_autoRouteBtn)
             wConn = std::max(wConn, m_autoRouteBtn->sizeHint().width());
+        if (m_optionsBtn)
+            wConn = std::max(wConn, m_optionsBtn->sizeHint().width());
         m_btnColW = wConn; // [autoroute] panel centering reference
-        int const yConn = height() - LEGEND_STRIP_PX - 24 - 20;
+        // [operator 2026-09-01] The right group's floor is the TOP
+        // of the ring/PSKR legend rows painted above the legend
+        // strip (rowH 11, box pads 2+2, top row lifted fm/3) --
+        // the column comes down only as far as those lines allow.
+        int legendRowsTop;
+        {
+            QFont lf = font();
+            lf.setPointSize(8);
+            legendRowsTop = height() - LEGEND_STRIP_PX - 11 - 4 -
+                            QFontMetrics{lf}.height() / 3;
+        }
+        int const yConn = legendRowsTop - 4 - 20;
         m_connBtn->setFixedSize(wConn, 20);
         m_connBtn->move(width() - wConn - 6, yConn);
         // [callsbtn] Directly above Show connections.
@@ -3528,12 +3560,20 @@ void SpotMapWindow::positionWindowButtons() {
             m_relaySelBtn->move(width() - wConn - 6, yRow2 - 22);
             // [autoroute] One button height of AIR above the Select
             // button (rows are 22 apart; skip one row), per the
-            // operator's layout spec.
+            // operator's layout spec. [#207 waitopts, operator
+            // 2026-09-01] Auto-route lifted one further button
+            // height; Options takes its old slot directly below.
             if (m_autoRouteBtn) {
                 m_autoRouteBtn->setFixedSize(wConn, 20);
-                m_autoRouteBtn->move(width() - wConn - 6, yRow2 - 66);
+                m_autoRouteBtn->move(width() - wConn - 6, yRow2 - 88);
+            }
+            if (m_optionsBtn) {
+                m_optionsBtn->setFixedSize(wConn, 20);
+                m_optionsBtn->move(width() - wConn - 6, yRow2 - 66);
             }
             positionAutoRoutePanel();
+            if (m_optionsPanel && m_optionsPanel->isVisible())
+                positionOverlayPanel(m_optionsPanel);
             // Status line follows the legend on resize.
             if (m_statusLine && m_statusLine->isVisible())
                 setStickyToast(m_stickyToast);
@@ -4061,18 +4101,127 @@ void SpotMapWindow::autoRouteShowPanel() {
 void SpotMapWindow::positionAutoRoutePanel() {
     if (!m_autoRoutePanel)
         return;
-    m_autoRoutePanel->adjustSize();
+    positionOverlayPanel(m_autoRoutePanel);
+}
+
+// [#207 waitopts] The response-wait dialog: three radio choices,
+// styled and placed like the auto-route prompt. A change applies
+// and persists immediately (sink -> mainwindow -> .ini); Close just
+// dismisses. Right-clicking "Adaptive" reveals a small threshold
+// spin box (hidden test feature) that hides itself after 3 s
+// without a change.
+void SpotMapWindow::optionsShowPanel() {
+    if (!m_optionsPanel) {
+        m_optionsPanel = new QFrame(this);
+        m_optionsPanel->setStyleSheet(QStringLiteral(
+            "QFrame { background-color: rgba(40,40,55,200);"
+            " border-radius: 6px; }"
+            "QLabel { color: rgb(210,210,225);"
+            " background: transparent; }"
+            "QRadioButton { color: rgb(210,210,225);"
+            " background: transparent; }"
+            "QSpinBox { background-color: rgba(40,40,55,230);"
+            " color: rgb(210,210,225);"
+            " border: 1px solid rgb(120,140,190); }"));
+        m_optionsPanel->setFont(m_optionsBtn->font());
+        auto *lay = new QVBoxLayout(m_optionsPanel);
+        lay->setContentsMargins(14, 10, 14, 10);
+        lay->addWidget(
+            new QLabel(tr("Response wait time:"), m_optionsPanel));
+        m_waitShort =
+            new QRadioButton(tr("Short / quiet band"), m_optionsPanel);
+        m_waitLong =
+            new QRadioButton(tr("Long / busy band"), m_optionsPanel);
+        m_waitAdaptive =
+            new QRadioButton(tr("Adaptive (auto)"), m_optionsPanel);
+        for (QRadioButton *r :
+             {m_waitShort, m_waitLong, m_waitAdaptive})
+            lay->addWidget(r);
+        auto *btnRow = new QHBoxLayout;
+        btnRow->addStretch(1);
+        m_optionsCloseBtn->setFixedSize(
+            std::max(56, m_optionsCloseBtn->sizeHint().width() + 10),
+            20);
+        m_optionsCloseBtn->show();
+        btnRow->addWidget(m_optionsCloseBtn);
+        lay->addLayout(btnRow);
+        connect(m_optionsCloseBtn, &QToolButton::clicked,
+                m_optionsPanel, &QFrame::hide);
+        // Threshold spin: parented to the panel, shown on demand
+        // beside the Adaptive radio.
+        m_threshSpin = new QSpinBox(m_optionsPanel);
+        m_threshSpin->setRange(1, 10);
+        m_threshSpin->setFixedSize(48, 22);
+        m_threshSpin->hide();
+        m_threshTimer = new QTimer(this);
+        m_threshTimer->setSingleShot(true);
+        m_threshTimer->setInterval(3000);
+        connect(m_threshTimer, &QTimer::timeout, m_threshSpin,
+                &QWidget::hide);
+        auto const push = [this]() {
+            if (!m_waitSink)
+                return;
+            int const mode = m_waitShort->isChecked()  ? 0
+                             : m_waitLong->isChecked() ? 2
+                                                       : 1;
+            m_waitSink(mode, m_threshSpin->value());
+        };
+        for (QRadioButton *r :
+             {m_waitShort, m_waitLong, m_waitAdaptive})
+            connect(r, &QRadioButton::toggled, this,
+                    [push](bool on) {
+                        if (on)
+                            push();
+                    });
+        connect(m_threshSpin, qOverload<int>(&QSpinBox::valueChanged),
+                this, [this, push](int) {
+                    push();
+                    m_threshTimer->start();
+                });
+        m_waitAdaptive->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_waitAdaptive, &QWidget::customContextMenuRequested,
+                this, [this](QPoint const &) {
+                    m_threshSpin->move(
+                        m_waitAdaptive->x() + m_waitAdaptive->width()
+                            + 8,
+                        m_waitAdaptive->y() - 1);
+                    m_threshSpin->show();
+                    m_threshSpin->raise();
+                    m_threshSpin->setFocus();
+                    m_threshTimer->start();
+                });
+    }
+    // Reflect the owner's current values every time it opens.
+    if (m_waitProbe) {
+        QPair<int, int> const cfg = m_waitProbe();
+        QSignalBlocker const b1{m_waitShort}, b2{m_waitLong},
+            b3{m_waitAdaptive}, b4{m_threshSpin};
+        m_threshSpin->setValue(cfg.second);
+        (cfg.first == 0   ? m_waitShort
+         : cfg.first == 2 ? m_waitLong
+                          : m_waitAdaptive)
+            ->setChecked(true);
+    }
+    m_threshSpin->hide();
+    positionOverlayPanel(m_optionsPanel);
+    m_optionsPanel->show();
+    m_optionsPanel->raise();
+}
+
+// [#207 waitopts] Shared placement for the low centered overlay
+// panels (auto-route prompt, Options dialog).
+void SpotMapWindow::positionOverlayPanel(QFrame *panel) {
+    panel->adjustSize();
     // [operator 2026-08-28, corrected] Equal air on BOTH sides:
     // (right edge of the LEFT button stack) .. panel .. (left edge
     // of the RIGHT button stack).
     int const leftEdge = 6 + m_leftColW;
     int const rightEdge = width() - m_btnColW - 6;
     int const avail = rightEdge - leftEdge;
-    int const w = qMin(m_autoRoutePanel->sizeHint().width() + 20,
-                       avail - 12);
-    m_autoRoutePanel->resize(w, m_autoRoutePanel->sizeHint().height());
-    m_autoRoutePanel->move(leftEdge + qMax(6, (avail - w) / 2),
-                           height() - m_autoRoutePanel->height() - 70);
+    int const w = qMin(panel->sizeHint().width() + 20, avail - 12);
+    panel->resize(w, panel->sizeHint().height());
+    panel->move(leftEdge + qMax(6, (avail - w) / 2),
+                height() - panel->height() - 70);
 }
 
 // [modeowner 2026-08-30] A validated target is a REQUEST, nothing
