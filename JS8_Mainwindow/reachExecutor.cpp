@@ -2604,8 +2604,15 @@ void UI_Constructor::reachTick() {
         // started, but the band showed traffic during the wait:
         // queueing is plausible, so hold ONE more slot. Boolean
         // trigger, applied once per move, all move kinds.
+        // [holdguard, operator field-caught 2026-08-31: "holding"
+        // lines fired at the forward-watch and return-window
+        // expiries too -- no-ops that set the deadline into the
+        // past and polluted the ledger. The hold belongs to the
+        // START wait only: nothing has begun yet.
         if (!m_reach.heldSecondSlot && m_reach.sawBandActivity &&
-            m_reach.watchers.isEmpty()) {
+            m_reach.watchers.isEmpty() &&
+            m_reach.fwdStartedMs == 0 && m_reach.ansStartedMs == 0 &&
+            m_reach.retStartedMs == 0) {
             m_reach.heldSecondSlot = true;
             m_reach.deadlineMs =
                 reachSlotEndMs(m_reach.txEndMs, 2);
