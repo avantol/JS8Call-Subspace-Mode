@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"waitopts3\" (v4.1.0.462) by WM8Q"}
+    return QString{"%1 \"waitopts4\" (v4.1.0.462) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

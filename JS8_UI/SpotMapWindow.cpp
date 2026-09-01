@@ -3217,7 +3217,10 @@ void SpotMapWindow::redraw() {
         // [operator 2026-08-29] top row lifted 1/3 font height, same
         // as the relay legend's top row.
         qreal const extra = p.fontMetrics().height() / 3.0;
-        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2;
+        // [operator 2026-09-01, rev4] Rows dropped so the box
+        // bottom is 6 px above the WINDOW edge (was ~a button
+        // height higher); the button column's floor tracks this.
+        qreal const y0 = h - 6.0 - 2.0 * rowH - 2.0;
         p.fillRect(QRectF{xRight - maxW - 28, y0 - 2 - extra,
                           maxW + 28 + 4, 2.0 * rowH + 4 + extra},
                    QColor(16, 16, 24, 170));
@@ -3265,7 +3268,10 @@ void SpotMapWindow::redraw() {
         // pitch; the bottom row stays aligned with the PSKR legend's
         // position.
         qreal const extra = p.fontMetrics().height() / 3.0;
-        qreal const y0 = h - LEGEND_STRIP_PX - rowH - 2;
+        // [operator 2026-09-01, rev4] Rows dropped so the box
+        // bottom is 6 px above the WINDOW edge (was ~a button
+        // height higher); the button column's floor tracks this.
+        qreal const y0 = h - 6.0 - 2.0 * rowH - 2.0;
         p.fillRect(QRectF{xRight - maxW - 28, y0 - 2 - extra,
                           maxW + 28 + 4, 2.0 * rowH + 4 + extra},
                    QColor(16, 16, 24, 170));
@@ -3550,11 +3556,13 @@ void SpotMapWindow::positionWindowButtons() {
         // keep the bottom-right corner, UNDER the Show connections
         // button; the column's floor is the top of that legend box
         // (rowH 11, box pads 2+2, top row lifted fm/3).
+        // rev4: mirrors the paint side -- box bottom 6 px above the
+        // window edge, y0 = h - 6 - 2*rowH - 2, top = y0 - 2 - fm/3.
         int legendRowsTop;
         {
             QFont lf = font();
             lf.setPointSize(8);
-            legendRowsTop = height() - LEGEND_STRIP_PX - 11 - 4 -
+            legendRowsTop = height() - 6 - 2 * 11 - 4 -
                             QFontMetrics{lf}.height() / 3;
         }
         int const yConn = legendRowsTop - 4 - 20;
