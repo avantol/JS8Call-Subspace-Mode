@@ -185,9 +185,6 @@ class CPlotter final : public QWidget {
     // [BUILD 336] Double-click landed on (or very near) a painted
     // callsign label. Payload: the callsign.
     void callDoubleClicked(QString const &call);
-    // [stamon] Right-click on the waterfall: audio offset under the
-    // cursor + where to pop a menu.
-    void rightClickFreq(int freq, QPoint const &globalPos);
 
   protected:
     // Event Handlers

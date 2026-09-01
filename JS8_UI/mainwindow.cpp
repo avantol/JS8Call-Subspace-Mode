@@ -2925,29 +2925,6 @@ void UI_Constructor::stationMonitorMenu(QString const &call,
     menu->popup(globalPos);
 }
 
-// [stamon] The station a waterfall right-click means: the call
-// whose recorded offset is within the band-activity closeness rule
-// (rxThreshold, one authority) of the clicked offset -- most
-// recently heard wins.
-QString UI_Constructor::stationAtOffset(int freq) const {
-    QString best;
-    QDateTime bestSeen;
-    for (auto it = m_callActivity.constBegin();
-         it != m_callActivity.constEnd(); ++it) {
-        auto const &d = it.value();
-        if (d.offset <= 0 ||
-            qAbs(d.offset - freq) >
-                JS8::Submode::rxThreshold(
-                    d.submode >= 0 ? d.submode : m_nSubMode))
-            continue;
-        if (best.isEmpty() || d.utcTimestamp > bestSeen) {
-            best = it.key();
-            bestSeen = d.utcTimestamp;
-        }
-    }
-    return best;
-}
-
 void UI_Constructor::feedStationMonitors(
     QString const &from, QString const &to, QString const &relayPath,
     QString const &text, int offset, QDateTime const &utc,

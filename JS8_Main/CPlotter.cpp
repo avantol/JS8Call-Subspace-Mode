@@ -1032,11 +1032,6 @@ void CPlotter::mouseReleaseEvent(QMouseEvent *event) {
             return;
         }
         Q_EMIT changeFreq(static_cast<int>(freqFromX(m_lastMouseX)));
-    } else if (Qt::RightButton == event->button()) {
-        // [stamon] Station-monitor entry point.
-        Q_EMIT rightClickFreq(
-            static_cast<int>(freqFromX(event->pos().x())),
-            event->globalPosition().toPoint());
     } else {
         event->ignore();
     }

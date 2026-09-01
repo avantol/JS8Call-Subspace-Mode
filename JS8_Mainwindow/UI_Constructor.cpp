@@ -593,17 +593,40 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // TX-queue guard).
     connect(m_spotMapWindow.data(), &SpotMapWindow::qsyToOffset,
             this, &UI_Constructor::changeFreq);
-    // [stamon] Station-monitor right-clicks: map spots directly;
-    // waterfall resolves the station from the clicked offset.
+    // [stamon] Station-monitor right-click: map spots. (Waterfall
+    // right-click dropped -- it could not pick up a callsign;
+    // operator ruling 2026-09-01.)
     connect(m_spotMapWindow.data(),
             &SpotMapWindow::stationRightClicked, this,
             &UI_Constructor::stationMonitorMenu);
-    connect(m_wideGraph.data(), &WideGraph::rightClickFreq, this,
-            [this](int freq, QPoint const &pos) {
-                if (QString const call = stationAtOffset(freq);
-                    !call.isEmpty())
-                    stationMonitorMenu(call, pos);
+    // [stamon] Env-gated Window-menu entry, right after Show Spots
+    // Map: asks for the callsign in a dialog.
+    {
+        static bool const stamonOn =
+            qEnvironmentVariableIsSet("JS8_STATION_MONITOR");
+        if (stamonOn && ui->menuWindow) {
+            auto *act = new QAction(tr("Show Station Monitor"), this);
+            connect(act, &QAction::triggered, this, [this]() {
+                bool ok = false;
+                QString const call =
+                    QInputDialog::getText(
+                        this, tr("Station monitor"),
+                        tr("Callsign to monitor:"),
+                        QLineEdit::Normal, QString(), &ok)
+                        .trimmed()
+                        .toUpper();
+                if (ok && Radio::is_callsign(call))
+                    openStationMonitor(call);
             });
+            QList<QAction *> const acts = ui->menuWindow->actions();
+            if (int const i =
+                    acts.indexOf(ui->actionShow_Spots_Map);
+                i >= 0 && i + 1 < acts.size())
+                ui->menuWindow->insertAction(acts[i + 1], act);
+            else
+                ui->menuWindow->addAction(act);
+        }
+    }
     // [#187 intelminer] Build/refresh the intel corpus from the
     // user's own logs, in the background, once the window is up.
     // Full re-mine (mine.py semantics); skipped when logs unchanged.

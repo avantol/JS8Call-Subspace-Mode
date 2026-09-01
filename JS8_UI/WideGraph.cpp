@@ -173,8 +173,6 @@ WideGraph::WideGraph(QSettings *settings, QWidget *parent)
         });
 
     connect(ui->widePlot, &CPlotter::changeFreq, this, &WideGraph::changeFreq);
-    connect(ui->widePlot, &CPlotter::rightClickFreq, this,
-            &WideGraph::rightClickFreq); // [stamon]
     connect(ui->widePlot, &CPlotter::callDoubleClicked, this,
             &WideGraph::callDoubleClicked);
 

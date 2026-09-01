@@ -50,7 +50,10 @@ StationMonitorWindow::StationMonitorWindow(
       m_directedTxtPath{directedTxtPath}, m_allTxtPath{allTxtPath} {
     setWindowFlag(Qt::Window);
     setWindowTitle(tr("Station monitor: %1").arg(station));
-    setMinimumSize(560, 360);
+    // Resizable down to a sliver (operator 2026-09-01) -- a corner
+    // strip showing just the latest lines is a valid use.
+    setMinimumSize(180, 100);
+    resize(560, 360);
     auto *lay = new QVBoxLayout(this);
     m_headline = new QLabel(this);
     lay->addWidget(m_headline);
