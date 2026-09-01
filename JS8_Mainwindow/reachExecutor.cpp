@@ -2124,8 +2124,14 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
     if (m_reach.kind == QLatin1String("relay") &&
         m_reach.fwdStartedMs == 0 && viaKeyed) {
         m_reach.fwdStartedMs = now;
+        // [fwdspan, operator rule 2026-08-31: "once we have a frame
+        // 1 from our relay, we wait the amount of time it takes for
+        // the reply to complete based on the expected length"]
+        // Expected forward = 3 frames for now; frame 1 is in hand at
+        // detection, so 2 more slots. No pad: frame 3 decodes ~+43 s
+        // (field-measured), this deadline lands at +46.
         m_reach.deadlineMs = qMax(m_reach.deadlineMs,
-                                  reachSlotEndMs(now, 5));
+                                  reachSlotEndMs(now, 2));
         reachLog(QStringLiteral("    %1 keyed in the first slot +%2s "
                                 "-- waiting for the forward to finish")
                      .arg(m_reach.via)
