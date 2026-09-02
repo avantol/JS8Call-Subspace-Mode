@@ -38,21 +38,6 @@
 #include "JS8_Mode/SubspacePreamble.h"
 #endif
 
-namespace {
-// [stamon] Startup balloon helper: any click closes the widget.
-class ClickToClose final : public QObject {
-  public:
-    using QObject::QObject;
-    bool eventFilter(QObject *o, QEvent *e) override {
-        if (e->type() == QEvent::MouseButtonPress) {
-            static_cast<QWidget *>(o)->close();
-            return true;
-        }
-        return QObject::eventFilter(o, e);
-    }
-};
-} // namespace
-
 int ms_minute_error() {
     auto const now = DriftingDateTime::currentDateTimeLocal();
     auto const time = now.time();
@@ -651,49 +636,6 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             else
                 ui->menuWindow->addAction(act);
         }
-    }
-    // [stamon] One-time startup balloon announcing the feature,
-    // anchored under the menu holding Show Station Monitor;
-    // clicking it dismisses it for good (persisted).
-    if (!m_settings
-             ->value(QStringLiteral(
-                 "UI_Constructor/StationMonitorBalloonDismissed"))
-             .toBool()) {
-        QTimer::singleShot(2500, this, [this]() {
-            auto *balloon = new QLabel(
-                tr("View conversation(s) by call sign in a "
-                   "separate window. Select 'Show Station "
-                   "Monitor', or right-click on the Spots Map, "
-                   "waterfall, or call sign list.\n"
-                   "Click to dismiss."),
-                this, Qt::ToolTip);
-            balloon->setWordWrap(true);
-            balloon->setMargin(10);
-            balloon->setStyleSheet(QStringLiteral(
-                "QLabel { background-color: rgb(255,255,225);"
-                " color: black;"
-                " border: 1px solid rgb(120,120,90); }"));
-            balloon->setFixedWidth(380);
-            balloon->adjustSize();
-            balloon->setAttribute(Qt::WA_DeleteOnClose);
-            balloon->installEventFilter(new ClickToClose(balloon));
-            connect(balloon, &QObject::destroyed, this, [this]() {
-                m_settings->setValue(
-                    QStringLiteral("UI_Constructor/"
-                                   "StationMonitorBalloonDismissed"),
-                    true);
-            });
-            QPoint at{20, 0};
-            if (ui->menuWindow)
-                at = menuBar()
-                         ->actionGeometry(
-                             ui->menuWindow->menuAction())
-                         .bottomLeft();
-            balloon->move(menuBar()->mapToGlobal(at) +
-                          QPoint(0, 6));
-            balloon->show();
-            balloon->raise();
-        });
     }
     // [#187 intelminer] Build/refresh the intel corpus from the
     // user's own logs, in the background, once the window is up.
@@ -2515,6 +2457,30 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 balloon->setAutoDismissMs(45000);
                 balloon->showAtTarget();
                 self->m_settings->setValue("HintGuideShown", true);
+                return; // one balloon per startup
+            }
+
+            // (e) Station monitor -- View menu (Build 465; joined
+            // the one-per-startup chain in 465 after the first cut
+            // jumped the line with an ad-hoc QLabel).
+            if (!self->m_settings
+                     ->value("HintStationMonitorShown", false)
+                     .toBool()) {
+                auto *bar = self->menuBar();
+                auto *balloon = new SpeechBalloon(
+                    tr("View conversation(s) by call sign in a "
+                       "separate window. Select 'Show Station "
+                       "Monitor', or right-click on the Spots Map, "
+                       "waterfall, or call sign list.\n"
+                       "Click to dismiss."),
+                    bar);
+                balloon->setTargetRectOverride(bar->actionGeometry(
+                    self->ui->menuWindow->menuAction()));
+                balloon->setTailSide(SpeechBalloon::TailSide::Top);
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("HintStationMonitorShown",
+                                           true);
                 return; // one balloon per startup
             }
         });
