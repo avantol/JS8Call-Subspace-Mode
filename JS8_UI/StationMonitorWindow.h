@@ -14,6 +14,7 @@
  * One window per station; size persists, position does not.
  */
 
+#include <QColor>
 #include <QDateTime>
 #include <QHash>
 #include <QSet>
@@ -70,6 +71,7 @@ class StationMonitorWindow final : public QWidget {
     class QSettings *m_settings;
 
     QString m_station;
+    QColor m_tint; // per-window pastel for the station's own lines
     QString m_myCall; // our TX lines always display
     QString m_directedTxtPath; // backfill sources, held until
     QString m_allTxtPath;      // runBackfill()

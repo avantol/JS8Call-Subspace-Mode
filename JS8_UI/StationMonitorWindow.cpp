@@ -77,6 +77,12 @@ StationMonitorWindow::StationMonitorWindow(
     m_log->setFont(mono);
     lay->addWidget(m_log);
 
+    // Pastel tint for the station's own lines: hue from the
+    // callsign hash (stable across sessions, distinct per window),
+    // barely-there saturation so black text stays fully readable.
+    m_tint = QColor::fromHsv(
+        static_cast<int>(qHash(station) % 360u), 45, 255);
+
     m_members.insert(station);
     updateHeadline();
     refreshTitle();
@@ -173,12 +179,14 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
          text.contains(QStringLiteral(" @HB "))))
         return;
 
-    // [operator 2026-09-01] Bold the MONITORED station's call when
-    // the line opens with it (its own transmissions) -- nowhere
-    // else in the line.
+    // [operator 2026-09-01] The MONITORED station's own lines get
+    // the bold leading call AND a very light background tint --
+    // per-window color, derived from the callsign hash (stable
+    // across sessions), applied to the whole line.
+    bool const seedOwn =
+        text.startsWith(m_station + QStringLiteral(":"));
     QString shown = text.toHtmlEscaped();
-    if (QString const lead = m_station + QStringLiteral(":");
-        text.startsWith(lead))
+    if (seedOwn)
         shown = QStringLiteral("<b>%1</b>%2")
                     .arg(m_station.toHtmlEscaped(),
                          text.mid(m_station.size()).toHtmlEscaped());
@@ -187,14 +195,19 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
     // scrolled-back review position stays put.
     auto *sb = m_log->verticalScrollBar();
     bool const wasAtBottom = sb->value() == sb->maximum();
-    m_log->appendHtml(
+    QString line =
         QStringLiteral("%1 - %2 - (%3) - %4")
             .arg(historical ? QStringLiteral("?")
                             : JS8::Submode::indicator(submode))
             .arg(utc.time().toString())
             .arg(offset > 0 ? QString::number(offset)
                             : QStringLiteral("?"))
-            .arg(shown));
+            .arg(shown);
+    if (seedOwn)
+        line = QStringLiteral("<span style=\"background-color:%1;"
+                              "color:black\">%2</span>")
+                   .arg(m_tint.name(), line);
+    m_log->appendHtml(line);
     if (wasAtBottom)
         sb->setValue(sb->maximum());
     // [operator 2026-09-01] Visual ping on LIVE lines only: a brief
