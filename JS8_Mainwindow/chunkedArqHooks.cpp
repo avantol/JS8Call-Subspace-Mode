@@ -261,6 +261,25 @@ void UI_Constructor::onChunkedSendComplete(QString const &peer, int msgId,
         ui->extFreeTextMsgEdit->blockSignals(false);
     }
 
+    // [stamon 2026-09-03, operator] COMPLETED outgoing ARQ text
+    // messages feed the monitors as one assembled line (sub-msgs
+    // already flow the normal directed path). File and web-link
+    // transfers are skipped by ruling: the file-send msgId and the
+    // F/V1 / L/V1 wire prefixes identify them.
+    if (!m_stationMonitors.isEmpty() &&
+        msgId != m_fileSendMsgId && !m_lastTxMessage.isEmpty() &&
+        !m_lastTxMessage.startsWith(QStringLiteral("F/V1 ")) &&
+        !m_lastTxMessage.startsWith(QStringLiteral("L/V1 "))) {
+        QString const myC = m_config.my_callsign().trimmed();
+        feedStationMonitors(
+            myC, peer, QString(),
+            QStringLiteral("%1: %2 %3 %4")
+                .arg(myC, peer, m_lastTxMessage,
+                     QString(kJs8DiamondMarker)),
+            freq(), DriftingDateTime::currentDateTimeUtc(),
+            m_nSubMode);
+    }
+
     // [FILE-XFER build 282] If this msgId matches the file-send we
     // auto-enabled ARQ for, restore ARQ to its prior state.
     if (m_fileSendMsgId != 0 && msgId == m_fileSendMsgId) {
