@@ -11133,12 +11133,17 @@ void UI_Constructor::processTxQueue() {
     // [arqhold, operator 2026-08-31: "hold-while-session-active"]
     // A queued message draining between ARQ chunks keys into the
     // ACK-listening window and stomps the session. Hold the WHOLE
-    // drain while a session owns the radio (either direction);
-    // protocol ACK/NACKs bypass this queue entirely, so the session
-    // cannot starve itself. The backlog drains after the session --
-    // deliberately hold-not-clear (the operator can type during ARQ,
-    // so queued items have legitimacy auto-route's do not).
-    if (m_chunkedArq && (m_chunkedArq->hasActiveTxSession() ||
+    // drain while chunks are in flight (either direction). The
+    // backlog drains after the session -- deliberately
+    // hold-not-clear (the operator can type during ARQ, so queued
+    // items have legitimacy auto-route's do not).
+    // [negodrain 2026-09-03] Gate on CHUNK SENDS, not the full
+    // hasActiveTxSession(): the negotiation phase's own capability
+    // QUERY rides this queue, and the broader predicate starved it
+    // (WM8Q/P file-send deadlock -- "the session cannot starve
+    // itself" was wrong, the preflight query was the missed queue
+    // user).
+    if (m_chunkedArq && (m_chunkedArq->hasActiveChunkSends() ||
                          m_chunkedArq->hasActiveRxWindow())) {
         return;
     }

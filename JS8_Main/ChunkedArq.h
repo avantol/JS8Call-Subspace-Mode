@@ -825,6 +825,19 @@ class Manager : public QObject {
     }
 
     /**
+     * @brief [negodrain 2026-09-03] Chunk sends in flight ONLY --
+     * excludes the negotiation phase. The processTxQueue arqhold
+     * gate must use THIS, not hasActiveTxSession(): the capability
+     * preflight QUERY rides the standard message queue, so gating
+     * the drain on the full session predicate starved the session's
+     * own opening move (field deadlock: WM8Q/P file send 2026-09-03,
+     * 210 s idle-cap loop, nothing ever transmitted). During
+     * negotiation the radio is idle BY DESIGN -- the ACK-listening
+     * gaps the gate protects do not exist yet.
+     */
+    bool hasActiveChunkSends() const { return !m_sends.isEmpty(); }
+
+    /**
      * @brief [2026-07-23 negophase] Capability negotiation is the
      *        OPENING PHASE OF A TX SESSION, not something that happens
      *        before one.
