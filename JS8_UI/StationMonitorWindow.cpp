@@ -238,7 +238,7 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
     // attention flash when the window is not the active one.
     if (!historical) {
         m_log->setStyleSheet(QStringLiteral(
-            "QPlainTextEdit { border: 2px solid rgb(80,170,80); }"));
+            "QPlainTextEdit { border: 4px solid rgb(200,60,60); }"));
         QTimer::singleShot(2000, m_log, [log = m_log]() {
             log->setStyleSheet(QString());
         });
