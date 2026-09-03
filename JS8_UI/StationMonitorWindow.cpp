@@ -237,8 +237,11 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
     // single-pass left-to-right rebuild so an inserted href can
     // never itself be re-matched; lookarounds keep "WM8Q" from
     // matching inside "WM8Q/P".
-    if (!parties.isEmpty()) {
-        QStringList pats = parties;
+    // [operator 2026-09-03] Our OWN callsign is never a link --
+    // selecting or QSYing to ourselves is meaningless.
+    QStringList pats = parties;
+    pats.removeAll(m_myCall);
+    if (!pats.isEmpty()) {
         std::sort(pats.begin(), pats.end(),
                   [](QString const &a, QString const &b) {
                       return a.size() > b.size();
