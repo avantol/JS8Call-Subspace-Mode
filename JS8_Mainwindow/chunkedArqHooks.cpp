@@ -197,6 +197,13 @@ void UI_Constructor::onChunkedMessageDelivered(QString const &fromCall,
                        /*isNewLine=*/true,
                        /*isLast=*/true,
                        m_nSubMode);
+    // [stamon 2026-09-03] ARQ-delivered messages never pass the
+    // processCommandActivity tee (field-caught: WD4KAV's ARQ MSG
+    // missing from his monitor) -- feed the assembled message here,
+    // the ARQ path's one-per-message point.
+    if (!m_stationMonitors.isEmpty())
+        feedStationMonitors(fromCall, toCall, QString(), line,
+                            freq(), now, m_nSubMode);
 
     // TCP API push: full inbound reliable message delivered.
     sendNetworkMessage("RX.CHUNKED_DELIVERED", assembledBody,
