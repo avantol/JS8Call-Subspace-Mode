@@ -310,8 +310,13 @@ void StationMonitorWindow::runBackfill() {
             hist.append(tx);
         tx = {QDateTime(), m_myCall, QString(), 0};
     };
+    // write_transmit_entry's separator is "JS8:" + exactly TWO
+    // spaces; matching \s{2} keeps the frame text verbatim (a
+    // single \s left every stitched message with a leading space,
+    // which broke startsWith("CALL:") -- the WM8Q window's own
+    // lines lost their bold/tint, field-caught 2026-09-03).
     static QRegularExpression const txRe{QStringLiteral(
-        R"(^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+Transmitting .*JS8:\s(.*)$)")};
+        R"(^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+Transmitting .*JS8:\s{2}(.*)$)")};
     QString prevFrame;
     QDateTime prevUtc;
     for (QByteArray const &raw : tailLines(m_allTxtPath)) {
