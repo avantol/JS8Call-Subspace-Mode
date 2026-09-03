@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"monlinks\" (v4.1.0.467) by WM8Q"}
+    return QString{"%1 \"quietlinks\" (v4.1.0.467) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 
