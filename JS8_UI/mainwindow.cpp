@@ -949,7 +949,8 @@ void UI_Constructor::on_actionSubspace_Guide_triggered() {
         {"How to set up message relays by point-and-click on the "
          "Spots Map",
          "https://groups.io/g/Subspace/message/300"},
-        {"How to send a message via tribbleNet mesh network",
+        {"How to send a message via tribbleNet mesh network "
+         "('auto-route')",
          "https://groups.io/g/Subspace/message/325"},
         {"How to compose and transmit ICS-213 Forms",
          "https://groups.io/g/Subspace/message/318"},
