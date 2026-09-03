@@ -99,16 +99,32 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
                                 QString const &text, int offset,
                                 QDateTime const &utc, int submode,
                                 bool historical) {
-    // Everyone this message names: sender (which can itself be a
-    // relay path "A>B" -- processCommandActivity.cpp:1070), the
-    // addressee, the relay path, and any callsign mentioned in the
-    // text. Full-callsign identity throughout.
+    // [operator field-caught 2026-09-02, WM8Q/P monitor] A body
+    // MENTION is not participation: "...I'M AT WM8Q, NOT WM8Q/P"
+    // admitted itself into the WM8Q/P window via parseCallsigns.
+    // Parties are STRUCTURAL roles only -- sender (itself possibly
+    // a relay path "A>B", processCommandActivity.cpp:1070), the
+    // addressee, relay hops, and the *DE* origin of a relayed
+    // answer. Free-text mentions never admit. Full-callsign
+    // identity throughout.
     QStringList parties = validParties(from);
     parties += validParties(to);
     parties += validParties(relayPath);
-    for (QString const &c : Varicode::parseCallsigns(text))
-        if (!parties.contains(c))
-            parties << c;
+    // Leading addressee token after the "FROM: " prefix -- the
+    // structural position; covers backfilled lines whose to/relay
+    // fields are empty ("WM8Q: WM8Q/P SNR?" -> WM8Q/P).
+    if (int const colon = text.indexOf(QStringLiteral(": "));
+        colon > 0) {
+        QString const rest = text.mid(colon + 2).trimmed();
+        parties +=
+            validParties(rest.section(QLatin1Char(' '), 0, 0));
+    }
+    // *DE* origin (the far end speaking through a relay).
+    static QRegularExpression const deRe{
+        QStringLiteral(R"(\*DE\*\s+([A-Z0-9/]+))")};
+    if (auto const m = deRe.match(text); m.hasMatch())
+        parties += validParties(m.captured(1));
+    parties.removeDuplicates();
 
     // [operator ruling 2026-09-01, second revision] Transitive
     // growth is OUT -- the measured 6h replay showed HB-ACK webs
