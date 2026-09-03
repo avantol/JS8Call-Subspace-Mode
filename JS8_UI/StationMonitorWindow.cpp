@@ -290,8 +290,10 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
     // green border pulse (theme-neutral), plus the platform's
     // attention flash when the window is not the active one.
     if (!historical) {
+        // Selector-free: the monlinks swap to QTextBrowser silently
+        // broke a "QPlainTextEdit {...}" rule (field-caught).
         m_log->setStyleSheet(QStringLiteral(
-            "QPlainTextEdit { border: 4px solid rgb(200,60,60); }"));
+            "border: 4px solid rgb(200,60,60);"));
         QTimer::singleShot(2000, m_log, [log = m_log]() {
             log->setStyleSheet(QString());
         });
@@ -418,6 +420,13 @@ void StationMonitorWindow::runBackfill() {
     for (HistLine const &h : hist)
         feed(h.from, QString(), QString(), h.text, h.offset, h.utc,
              -1, true);
+    // [operator 2026-09-03] A fresh window opens showing the LATEST
+    // lines. Deferred one event-loop turn so the document layout
+    // (and thus the scrollbar maximum) is settled first.
+    QTimer::singleShot(0, m_log, [log = m_log]() {
+        auto *sb = log->verticalScrollBar();
+        sb->setValue(sb->maximum());
+    });
 }
 
 bool StationMonitorWindow::eventFilter(QObject *obj, QEvent *event) {
