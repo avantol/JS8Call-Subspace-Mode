@@ -533,13 +533,44 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             [this]() {
                 ui->actionShow_ARQ_Monitor->setChecked(false);
             });
-    // [stamon] Station monitors close with the app too (top-level
-    // windows would otherwise outlive it).
+    // [stamon] Station monitors close with the app (top-level
+    // windows would otherwise outlive it). [operator 2026-09-03]
+    // First save each OPEN monitor's station + position; startup
+    // restores the windows and the normal backfill re-derives
+    // their content. A window the operator closed mid-session is
+    // not in the map/visible and does not come back.
     connect(this, &UI_Constructor::finished, this, [this]() {
+        QStringList restore;
+        for (auto const &w : m_stationMonitors)
+            if (!w.isNull() && w->isVisible())
+                restore << QStringLiteral("%1;%2;%3")
+                               .arg(w->station())
+                               .arg(w->x())
+                               .arg(w->y());
+        m_settings->beginGroup("StationMonitor");
+        m_settings->setValue("Restore", restore);
+        m_settings->endGroup();
         for (auto const &w : m_stationMonitors)
             if (!w.isNull())
                 w->close();
         m_stationMonitors.clear();
+    });
+    // [stamon] Restore the monitors that were open at last exit,
+    // at their saved positions (deferred so the main window and
+    // settings are fully up first).
+    QTimer::singleShot(1200, this, [this]() {
+        m_settings->beginGroup("StationMonitor");
+        QStringList const restore =
+            m_settings->value("Restore").toStringList();
+        m_settings->endGroup();
+        for (QString const &r : restore) {
+            QStringList const parts = r.split(QLatin1Char(';'));
+            if (parts.size() != 3 || parts[0].isEmpty())
+                continue;
+            openStationMonitor(parts[0]);
+            if (auto const w = m_stationMonitors.value(parts[0]))
+                w->move(parts[1].toInt(), parts[2].toInt());
+        }
     });
     m_spotMapWindow->setStation(m_config.my_callsign(), m_config.my_grid());
     // [BUILD 336 TODO #96 first slice] Clicking a spot dot seeds the
