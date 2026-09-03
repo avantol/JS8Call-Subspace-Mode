@@ -138,7 +138,14 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
     //         unattributed transmission at the seed's current
     //         offset is (probably) the seed mid-message.
     bool seedLine = parties.contains(m_station);
-    if (!seedLine && !historical && offset > 0) {
+    // [operator ruling 2026-09-03] The offset match must NOT
+    // override a directed MISMATCH: a line whose addressing is
+    // readable and does not involve the seed ("WD4KAV: AC0Z ...")
+    // is someone else's conversation, however close the offset
+    // (field-caught: we answer stations ON their offset, so
+    // near-offset attributed traffic is systematic). Offset only
+    // admits lines with NO readable parties at all.
+    if (!seedLine && parties.isEmpty() && !historical && offset > 0) {
         int const range = JS8::Submode::rxThreshold(
             submode >= 0 ? submode : Varicode::JS8CallNormal);
         qint64 const nowMs = utc.toMSecsSinceEpoch();
