@@ -940,6 +940,8 @@ void UI_Constructor::on_actionUser_Guide_triggered() {
 void UI_Constructor::on_actionSubspace_Guide_triggered() {
     struct Entry { char const *desc; char const *url; };
     static constexpr Entry kEntries[] = {
+        {"How to use Station Monitors",
+         "https://groups.io/g/Subspace/message/345"},
         {"How to use the ARQ protocol",
          "https://groups.io/g/Subspace/message/190"},
         {"How to send a web link (URL)",
