@@ -284,8 +284,16 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
     // QTextBrowser::append treats input as HTML only when it LOOKS
     // rich; the span wrapper forces that for every line.
     m_log->append(QStringLiteral("<span>%1</span>").arg(line));
+    // Deferred one turn: QTextBrowser's rich-text layout is lazy,
+    // so maximum() right after append() is STALE -- the immediate
+    // setValue landed one line shy and every later wasAtBottom
+    // check then failed (field-caught 2026-09-03: auto-scroll died
+    // after the first line).
     if (wasAtBottom)
-        sb->setValue(sb->maximum());
+        QTimer::singleShot(0, m_log, [log = m_log]() {
+            auto *sb2 = log->verticalScrollBar();
+            sb2->setValue(sb2->maximum());
+        });
     // [operator 2026-09-01] Visual ping on LIVE lines only: a brief
     // green border pulse (theme-neutral), plus the platform's
     // attention flash when the window is not the active one.
