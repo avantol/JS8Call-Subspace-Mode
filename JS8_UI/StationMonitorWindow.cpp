@@ -78,12 +78,13 @@ StationMonitorWindow::StationMonitorWindow(
     m_log->setReadOnly(true);
     m_log->setOpenLinks(false);
     m_log->setOpenExternalLinks(false);
-    // [operator 2026-09-03] Quiet links: plain blue is affordance
-    // enough -- no underline, no background. Must be set BEFORE
-    // any content is inserted (applies at insertion time).
+    // [operator 2026-09-03] Quiet links: plain blue, no underline.
+    // No background rule -- an explicit one (even transparent)
+    // overrides the seed-line tint span and punches holes in it;
+    // links inherit the line's tint (operator: "bring the tint
+    // back for the links"). Set BEFORE any content is inserted.
     m_log->document()->setDefaultStyleSheet(QStringLiteral(
-        "a { color: #2a6fc9; text-decoration: none;"
-        " background-color: transparent; }"));
+        "a { color: #2a6fc9; text-decoration: none; }"));
     QFont mono{QStringLiteral("monospace")};
     mono.setStyleHint(QFont::Monospace);
     m_log->setFont(mono);
