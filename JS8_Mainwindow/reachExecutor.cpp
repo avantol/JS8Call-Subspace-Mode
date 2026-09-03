@@ -321,6 +321,16 @@ void UI_Constructor::reachComputeExpected() {
     m_reach.retExpFrames = reachReplyFrames(
         m_reach.via,
         me + QStringLiteral("> SNR -15 *DE* ") + T);
+    // [retlen 2026-09-03] KI6WDY case: return computed 3 frames,
+    // W4CAT aired 4 (frame 4 = checksum tail, stomped by our next
+    // ask). Same packer + same-length text must agree, so log the
+    // exact templates and counts to catch the diverging input on
+    // the next live run.
+    qCWarning(mainwindow_js8)
+        << "[REACH] expected frames: fwd" << m_reach.fwdExpFrames
+        << "ans" << m_reach.ansExpFrames << "ret"
+        << m_reach.retExpFrames << "retTemplate"
+        << (me + QStringLiteral("> SNR -15 *DE* ") + T);
 }
 
 // attempt.py:291-294
