@@ -12,7 +12,8 @@
 #include <QApplication>
 #include <QFile>
 #include <QLabel>
-#include <QPlainTextEdit>
+#include <QMouseEvent>
+#include <QTextBrowser>
 #include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -70,12 +71,23 @@ StationMonitorWindow::StationMonitorWindow(
     resize(sz.expandedTo(minimumSize()));
     auto *lay = new QVBoxLayout(this);
     // [operator 2026-09-01] No headline -- the log is the window.
-    m_log = new QPlainTextEdit(this);
+    // [monlinks 2026-09-03] QTextBrowser instead of QPlainTextEdit:
+    // callsigns render as anchors; single click selects the call,
+    // double click also QSYs (handled by the owner via signals).
+    m_log = new QTextBrowser(this);
     m_log->setReadOnly(true);
+    m_log->setOpenLinks(false);
+    m_log->setOpenExternalLinks(false);
     QFont mono{QStringLiteral("monospace")};
     mono.setStyleHint(QFont::Monospace);
     m_log->setFont(mono);
     lay->addWidget(m_log);
+    connect(m_log, &QTextBrowser::anchorClicked, this,
+            [this](QUrl const &url) {
+                if (url.scheme() == QStringLiteral("call"))
+                    Q_EMIT callClicked(url.path());
+            });
+    m_log->viewport()->installEventFilter(this);
 
     // Pastel tint for the station's own lines: hue from the
     // callsign hash (stable across sessions, distinct per window),
@@ -213,6 +225,35 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
         shown = QStringLiteral("<b>%1</b>%2")
                     .arg(m_station.toHtmlEscaped(),
                          text.mid(m_station.size()).toHtmlEscaped());
+    // [monlinks 2026-09-03] The line's STRUCTURAL callsigns (the
+    // same parties the admit rule extracted) become anchors --
+    // single-pass left-to-right rebuild so an inserted href can
+    // never itself be re-matched; lookarounds keep "WM8Q" from
+    // matching inside "WM8Q/P".
+    if (!parties.isEmpty()) {
+        QStringList pats = parties;
+        std::sort(pats.begin(), pats.end(),
+                  [](QString const &a, QString const &b) {
+                      return a.size() > b.size();
+                  });
+        for (QString &c : pats)
+            c = QRegularExpression::escape(c);
+        QRegularExpression const linkRe{
+            QStringLiteral("(?<![A-Z0-9/])(%1)(?![A-Z0-9/])")
+                .arg(pats.join(QLatin1Char('|')))};
+        QString out;
+        int last = 0;
+        auto it = linkRe.globalMatch(shown);
+        while (it.hasNext()) {
+            auto const m = it.next();
+            out += shown.mid(last, m.capturedStart() - last);
+            out += QStringLiteral("<a href=\"call:%1\">%1</a>")
+                       .arg(m.captured(1));
+            last = m.capturedEnd();
+        }
+        out += shown.mid(last);
+        shown = out;
+    }
     // [operator 2026-09-01] Conditional auto-scroll: follow new
     // lines only when the view was ALREADY at the bottom -- a
     // scrolled-back review position stays put.
@@ -230,7 +271,9 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
         line = QStringLiteral("<span style=\"background-color:%1;"
                               "color:black\">%2</span>")
                    .arg(m_tint.name(), line);
-    m_log->appendHtml(line);
+    // QTextBrowser::append treats input as HTML only when it LOOKS
+    // rich; the span wrapper forces that for every line.
+    m_log->append(QStringLiteral("<span>%1</span>").arg(line));
     if (wasAtBottom)
         sb->setValue(sb->maximum());
     // [operator 2026-09-01] Visual ping on LIVE lines only: a brief
@@ -365,6 +408,24 @@ void StationMonitorWindow::runBackfill() {
     for (HistLine const &h : hist)
         feed(h.from, QString(), QString(), h.text, h.offset, h.utc,
              -1, true);
+}
+
+bool StationMonitorWindow::eventFilter(QObject *obj, QEvent *event) {
+    // Double-click on an anchor: QTextBrowser has no double-click
+    // signal, so read the anchor under the cursor ourselves. The
+    // preceding single click has already fired callClicked --
+    // double's action is additive (select + QSY), so that is fine.
+    if (obj == m_log->viewport() &&
+        event->type() == QEvent::MouseButtonDblClick) {
+        auto const *me = static_cast<QMouseEvent *>(event);
+        if (QString const href =
+                m_log->anchorAt(me->position().toPoint());
+            href.startsWith(QStringLiteral("call:"))) {
+            Q_EMIT callDoubleClicked(href.mid(5));
+            return true;
+        }
+    }
+    return QWidget::eventFilter(obj, event);
 }
 
 void StationMonitorWindow::resizeEvent(QResizeEvent *event) {

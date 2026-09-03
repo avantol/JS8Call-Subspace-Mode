@@ -2904,6 +2904,22 @@ void UI_Constructor::openStationMonitor(QString const &call) {
     w->setShowHbProbe([this]() {
         return ui->actionShow_Band_Heartbeats_and_ACKs->isChecked();
     });
+    // [monlinks, operator 2026-09-03] Callsigns in monitor lines
+    // act as buttons: single click = select that call (the ONE
+    // selectCallsign path, same as the API); double click = select
+    // AND QSY to its last-heard offset, >1000 Hz rule (the
+    // waterfall's click-to-call floor).
+    connect(w, &StationMonitorWindow::callClicked, this,
+            [this](QString const &c) { selectCallsign(c); });
+    connect(w, &StationMonitorWindow::callDoubleClicked, this,
+            [this](QString const &c) {
+                selectCallsign(c);
+                if (auto const it =
+                        m_callActivity.constFind(c.toUpper());
+                    it != m_callActivity.constEnd() &&
+                    it->offset > 1000)
+                    changeFreq(it->offset);
+            });
     w->setAttribute(Qt::WA_DeleteOnClose);
     m_stationMonitors.insert(call, w);
     w->runBackfill(); // after the probes: backfill obeys HB filter

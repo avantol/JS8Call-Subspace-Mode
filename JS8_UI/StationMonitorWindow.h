@@ -23,10 +23,17 @@
 #include <functional>
 
 class QLabel;
-class QPlainTextEdit;
+class QTextBrowser;
 
 class StationMonitorWindow final : public QWidget {
     Q_OBJECT
+
+  signals:
+    // [operator 2026-09-03] Callsigns in a line act as buttons:
+    // single click selects that call in the main window; double
+    // click also QSYs to its offset (>1000 Hz rule).
+    void callClicked(QString const &call);
+    void callDoubleClicked(QString const &call);
 
   public:
     // Backfill sources: DIRECTED.TXT (RX, assembled) and ALL.TXT
@@ -64,6 +71,7 @@ class StationMonitorWindow final : public QWidget {
 
   protected:
     void resizeEvent(class QResizeEvent *event) override;
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
   private:
     void updateHeadline();
@@ -84,7 +92,7 @@ class StationMonitorWindow final : public QWidget {
     int m_lastSeedOffset = 0;
     int m_lastSeedSubmode = -1;
     std::function<bool()> m_showHb;
-    QPlainTextEdit *m_log;
+    QTextBrowser *m_log;
 };
 
 #endif
