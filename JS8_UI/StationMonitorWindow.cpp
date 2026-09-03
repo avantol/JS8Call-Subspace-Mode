@@ -239,7 +239,7 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
     if (!historical) {
         m_log->setStyleSheet(QStringLiteral(
             "QPlainTextEdit { border: 2px solid rgb(80,170,80); }"));
-        QTimer::singleShot(400, m_log, [log = m_log]() {
+        QTimer::singleShot(2000, m_log, [log = m_log]() {
             log->setStyleSheet(QString());
         });
         if (!isActiveWindow())
