@@ -2307,11 +2307,29 @@ void UI_Constructor::reachOnFrame(ActivityDetail const &d) {
                qAbs(d.offset - m_reach.retOffset) <= 5) {
         // continuation frames of the return carry no callsign prefix;
         // ride the offset. [structured] The per-frame SLIDE is the
-        // busy-band accommodation only; quiet bands run on the
-        // computed deadline set at return-start. Stub is TRUE today.
-        if (reachBandBusy())
+        // busy-band accommodation only. [retflag 2026-09-03,
+        // operator-approved] Quiet completion no longer trusts the
+        // computed count alone: the count is a PROXY (placeholder
+        // SNR + template checksum through variable-width coding =
+        // +/-1 frame at packing boundaries -- the KI6WDY case,
+        // where our next ask transmitted over W4CAT's 4th frame).
+        // Bit 73 is the in-band truth: a frame decoding WITHOUT the
+        // Last flag announces at least one more frame, so extend
+        // one slot per flagless frame -- evidence, not a pad. A
+        // frame WITH the flag extends nothing (assembly happens in
+        // its own decode pass).
+        if (reachBandBusy()) {
             m_reach.deadlineMs = qMax(m_reach.deadlineMs,
                                       reachSlotEndMs(now, 1));
+        } else if (!(d.bits & Varicode::JS8CallLast)) {
+            qint64 const ext = reachSlotEndMs(now, 1);
+            if (ext > m_reach.deadlineMs) {
+                m_reach.deadlineMs = ext;
+                reachLog(QStringLiteral(
+                    "    return frame without the Last flag -- at "
+                    "least one more coming, extending 1 slot"));
+            }
+        }
         reachArmTimer();
     }
 
