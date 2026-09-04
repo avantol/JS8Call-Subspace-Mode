@@ -6201,6 +6201,15 @@ void UI_Constructor::checkHeartbeat(){
     if(m_tx_watchdog){
         return;
     }
+    // [hbgate 2026-09-04] The mode owns the radio: no scheduled HB
+    // beacon during auto-route or an ARQ session (same discipline
+    // as HB acks). Plain return -- the loop re-fires after the mode
+    // ends, nothing queued into a listening window.
+    if (m_autoRouteActive ||
+        (m_chunkedArq && (m_chunkedArq->hasActiveRxTransfer() ||
+                          m_chunkedArq->hasActiveTxSession()))) {
+        return;
+    }
 
     // idle heartbeat watchdog!
     if (m_config.watchdog() && m_idleMinutes >= m_config.watchdog ()){
@@ -7033,6 +7042,20 @@ void UI_Constructor::sendHB() {
 }
 
 void UI_Constructor::sendHeartbeatAck(QString to, int snr, QString extra) {
+    // [hbgate 2026-09-04, field: WM8Q acked KB7ITU's HB mid-auto-
+    // route, keying inside our own return-silence window] The HB
+    // branch in processCommandActivity early-continues BEFORE the
+    // common reply gates, so the mode discipline never saw HB acks.
+    // Enforce it AT THE EMISSION SITE: no autoreplies during
+    // auto-route or an ARQ session -- every caller covered.
+    if (m_autoRouteActive ||
+        (m_chunkedArq && (m_chunkedArq->hasActiveRxTransfer() ||
+                          m_chunkedArq->hasActiveTxSession()))) {
+        qCWarning(mainwindow_js8)
+            << "[REPLY-GATE] HB ack suppressed (auto-route/ARQ"
+            << "active): to=" << to;
+        return;
+    }
 #if JS8_HB_ACK_SNR_CONFIGURABLE
     auto message = m_config.heartbeat_ack_snr()
                        ? QString("%1 SNR %2 %3")
@@ -7106,6 +7129,14 @@ void UI_Constructor::sendCQ(bool repeat) {
     // Build 122: same live-state guard as sendHB. Same queued-tick race.
     if (m_config.heartbeat_qso_pause() && !callsignSelected().isEmpty())
         return;
+    // [hbgate 2026-09-04] Mode discipline at the emission site,
+    // third enumerated source (HB ack, HB beacon, CQ): no scheduled
+    // CQ during auto-route or an ARQ session.
+    if (m_autoRouteActive ||
+        (m_chunkedArq && (m_chunkedArq->hasActiveRxTransfer() ||
+                          m_chunkedArq->hasActiveTxSession()))) {
+        return;
+    }
 
     if (!repeat && m_cq_loop->isActive()) {
         qCDebug(mainwindow_js8) << "Cancel CQ loop on single-shot CQ";
