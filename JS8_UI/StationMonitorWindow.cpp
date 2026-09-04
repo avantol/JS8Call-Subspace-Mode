@@ -138,11 +138,14 @@ void StationMonitorWindow::feed(QString const &from, QString const &to,
         parties +=
             validParties(rest.section(QLatin1Char(' '), 0, 0));
     }
-    // *DE* origin (the far end speaking through a relay).
-    static QRegularExpression const deRe{
-        QStringLiteral(R"(\*DE\*\s+([A-Z0-9/]+))")};
-    if (auto const m = deRe.match(text); m.hasMatch())
-        parties += validParties(m.captured(1));
+    // [operator ruling 2026-09-04] NO *DE* extraction: the monitor
+    // traces the TWO stations exchanging a message, and *DE* lives
+    // in the BODY, not the addressing -- "only the from and to are
+    // to be treated as data." (Second instance of promoting a
+    // meaningful body token to structural status; meaning is not
+    // position.) Cost, accepted per spec: a relayed answer names
+    // its origin only in *DE*, so the ORIGIN's window does not show
+    // it -- the two windows of the stations actually keying do.
     parties.removeDuplicates();
 
     // [operator ruling 2026-09-01, second revision] Transitive
