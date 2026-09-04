@@ -102,6 +102,17 @@ void UI_Constructor::onChunkedWantToTransmit(QString const &text) {
 }
 
 void UI_Constructor::onChunkedWantsResponseTx(QString const &text) {
+    // [modegate 2026-09-04, special-case enumeration item 2] The
+    // executor is the mode's ONLY speaker: an ARQ transfer STARTED
+    // AT US mid-auto-route gets no ACK/NACK -- keying one lands in
+    // our own listening windows. The sender's protocol retries and
+    // fails over normally; RX processing is untouched.
+    if (m_autoRouteActive) {
+        qCWarning(chunkedarq_js8)
+            << "[REPLY-GATE] ARQ response suppressed (auto-route"
+            << "active):" << text.left(40);
+        return;
+    }
     // [TODO.md #57 build 268] Before sending an ACK / NACK, snapshot
     // any draft text the operator has typed into the outgoing-msg
     // widget. stopTx() restores it once the response TX completes.

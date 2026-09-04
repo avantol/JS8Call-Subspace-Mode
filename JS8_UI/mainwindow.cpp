@@ -11201,8 +11201,14 @@ void UI_Constructor::processTxQueue() {
     // (WM8Q/P file-send deadlock -- "the session cannot starve
     // itself" was wrong, the preflight query was the missed queue
     // user).
+    // [modegate 2026-09-04, special-case enumeration item 4] The
+    // RECEIVE side now uses hasActiveRxTransfer -- this gate's own
+    // comment always said "either direction", but the V3-only
+    // hasActiveRxWindow let queued messages drain between a V1/V2
+    // receive's ACK keyups, exactly the stomping the gate was built
+    // against. Aligns with the reply-gate's predicate.
     if (m_chunkedArq && (m_chunkedArq->hasActiveChunkSends() ||
-                         m_chunkedArq->hasActiveRxWindow())) {
+                         m_chunkedArq->hasActiveRxTransfer())) {
         return;
     }
 
