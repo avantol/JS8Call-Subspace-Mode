@@ -1969,7 +1969,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 if (!mcall.isEmpty() &&
                     !mcall.startsWith(QLatin1Char('@'))) {
                     auto *monAction = menu->addAction(
-                        tr("Open station monitor"));
+                        tr("Open station monitor for %1").arg(mcall));
                     connect(monAction, &QAction::triggered, this,
                             [this, mcall]() {
                                 openStationMonitor(mcall);
