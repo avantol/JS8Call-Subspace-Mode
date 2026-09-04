@@ -2913,6 +2913,10 @@ void UI_Constructor::openStationMonitor(QString const &call) {
     // waterfall's click-to-call floor).
     connect(w, &StationMonitorWindow::callClicked, this,
             [this](QString const &c) { selectCallsign(c); });
+    // [TODO #214] Right-click "Open station monitor" on a linked
+    // call — create-or-raise, same path as every other entry.
+    connect(w, &StationMonitorWindow::openMonitorRequested, this,
+            &UI_Constructor::openStationMonitor);
     connect(w, &StationMonitorWindow::callDoubleClicked, this,
             [this](QString const &c) {
                 selectCallsign(c);

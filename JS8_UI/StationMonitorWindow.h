@@ -34,6 +34,9 @@ class StationMonitorWindow final : public QWidget {
     // click also QSYs to its offset (>1000 Hz rule).
     void callClicked(QString const &call);
     void callDoubleClicked(QString const &call);
+    // [TODO #214] Right-click on a linked call -> "Open station
+    // monitor" for it.
+    void openMonitorRequested(QString const &call);
 
   public:
     // Backfill sources: DIRECTED.TXT (RX, assembled) and ALL.TXT

@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QFile>
 #include <QLabel>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QTextBrowser>
 #include <QRegularExpression>
@@ -95,6 +96,39 @@ StationMonitorWindow::StationMonitorWindow(
                     Q_EMIT callClicked(url.path());
             });
     m_log->viewport()->installEventFilter(this);
+    // [TODO #214] Right-click on a linked callsign offers "Open
+    // station monitor" (replacing Qt's default copy-link menu
+    // there); anywhere else keeps the standard menu.
+    m_log->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_log, &QWidget::customContextMenuRequested, this,
+            [this](QPoint const &pos) {
+                QString const href = m_log->anchorAt(pos);
+                auto *menu =
+                    href.startsWith(QStringLiteral("call:"))
+                        ? nullptr
+                        : m_log->createStandardContextMenu(pos);
+                if (menu) {
+                    // [operator 2026-09-04] "Select All" not wanted
+                    // either -- the standard menu keeps Copy only.
+                    for (QAction *a : menu->actions())
+                        if (a->text().contains(
+                                QStringLiteral("Select All")))
+                            menu->removeAction(a);
+                }
+                if (!menu) {
+                    menu = new QMenu(this);
+                    QString const call = href.mid(5);
+                    connect(menu->addAction(
+                                tr("Open station monitor")),
+                            &QAction::triggered, this,
+                            [this, call]() {
+                                Q_EMIT openMonitorRequested(call);
+                            });
+                }
+                menu->setAttribute(Qt::WA_DeleteOnClose);
+                menu->popup(
+                    m_log->viewport()->mapToGlobal(pos));
+            });
 
     // Pastel tint for the station's own lines: hue from the
     // callsign hash (stable across sessions, distinct per window),
