@@ -24,6 +24,7 @@
 
 #include "JS8_UI/mainwindow.h"
 #include "JS8_UI/SpotMapWindow.h"   // also provides Geodesic.h
+#include "JS8_Main/SelfDestructMessageBox.h" // [modegate]
                                     // (which has no include guard)
 #include "JS8_Main/DriftingDateTime.h"
 #include "JS8_Mode/JS8Submode.h"
@@ -1150,6 +1151,17 @@ void UI_Constructor::autoRouteBegin(QString const &target) {
     // the mode's duration by the existing gate.
     m_txMessageQueue = {};
     m_rxCommandQueue.clear();
+    // [modegate 2026-09-04, special-case item 3] An autoreply-
+    // confirmation dialog opened BEFORE the mode could still enqueue
+    // its transmission mid-run via Yes or its self-destruct default.
+    // Same rule, same door: reject them all at entry (No path --
+    // discards without enqueueing).
+    for (auto *box : findChildren<SelfDestructMessageBox *>()) {
+        qCWarning(mainwindow_js8)
+            << "[REACH] open autoreply-confirmation dialog rejected"
+            << "at mode entry";
+        box->reject();
+    }
     refreshOutgoingPlaceholder();
     reachStart(target);
     if (!m_reach.active) {
