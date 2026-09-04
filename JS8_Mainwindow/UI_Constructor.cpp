@@ -1597,6 +1597,30 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             menu->addAction(clearAction2);
             menu->addAction(clearActionAll);
 
+            // [monfrombox, operator 2026-09-04] LAST entry: when the
+            // current (or, if empty, the last transmitted) message
+            // has an addressee, offer its monitor. Addressee via the
+            // ONE extraction authority (FROM-prefix strip, first hop
+            // of a relay chain, @groups refused).
+            {
+                QString to = ChunkedArq::effectivePeer(
+                    QString(),
+                    ui->extFreeTextMsgEdit->toPlainText());
+                if (to.isEmpty())
+                    to = ChunkedArq::effectivePeer(QString(),
+                                                   m_lastTxMessage);
+                if (!to.isEmpty() &&
+                    to.compare(m_config.my_callsign().trimmed(),
+                               Qt::CaseInsensitive) != 0) {
+                    menu->addSeparator();
+                    connect(
+                        menu->addAction(
+                            tr("Open station monitor for %1").arg(to)),
+                        &QAction::triggered, this,
+                        [this, to]() { openStationMonitor(to); });
+                }
+            }
+
             menu->popup(ui->extFreeTextMsgEdit->mapToGlobal(point));
 
             displayActivity(true);
