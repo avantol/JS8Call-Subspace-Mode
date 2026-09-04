@@ -2940,7 +2940,8 @@ void UI_Constructor::stationMonitorMenu(QString const &call,
         return;
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
-    connect(menu->addAction(tr("Open station monitor")),
+    connect(menu->addAction(
+                tr("Open station monitor for %1").arg(call)),
             &QAction::triggered, this,
             [this, call]() { openStationMonitor(call); });
     menu->popup(globalPos);

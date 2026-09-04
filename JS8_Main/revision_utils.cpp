@@ -24,7 +24,7 @@ QString version() {
 }
 
 QString program_title() {
-    return QString{"%1 \"monlabel\" (v4.1.0.469) by WM8Q"}
+    return QString{"%1 \"monlabel2\" (v4.1.0.469) by WM8Q"}
         .arg(QCoreApplication::applicationName());
 }
 

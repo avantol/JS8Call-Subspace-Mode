@@ -119,7 +119,8 @@ StationMonitorWindow::StationMonitorWindow(
                     menu = new QMenu(this);
                     QString const call = href.mid(5);
                     connect(menu->addAction(
-                                tr("Open station monitor")),
+                                tr("Open station monitor for %1")
+                                    .arg(call)),
                             &QAction::triggered, this,
                             [this, call]() {
                                 Q_EMIT openMonitorRequested(call);
