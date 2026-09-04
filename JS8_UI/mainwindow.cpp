@@ -4706,8 +4706,27 @@ void UI_Constructor::stopTx() {
         m_arqResponseSavedText.clear();
         m_arqResponseRestorePending = false;
         QPointer<TransmitTextEdit> const widget(ui->extFreeTextMsgEdit);
-        QTimer::singleShot(750, this, [widget, saved]() {
-            if (!widget) return;
+        QPointer<UI_Constructor> const self(this);
+        QTimer::singleShot(750, this, [widget, saved, self]() {
+            if (!widget || !self) return;
+            // [boxrace 2026-09-04, WM8Q/P field jam] A NEW TX can
+            // arm inside this 750 ms window (the relay forward the
+            // just-ACKed message triggered) -- writing the draft
+            // over an armed box disrupts that TX and can park wire
+            // text. Same re-stash pattern as the submode restore
+            // below: the blocking TX's own stopTx re-schedules us.
+            if (self->m_transmitting || self->m_txFrameCount > 0 ||
+                !self->m_txFrameQueue.isEmpty() ||
+                self->ui->startTxButton->isChecked()) {
+                if (!self->m_arqResponseRestorePending) {
+                    self->m_arqResponseSavedText = saved;
+                    self->m_arqResponseRestorePending = true;
+                }
+                qCWarning(chunkedarq_js8)
+                    << "[ARQ-RX] outgoing-text restore deferred "
+                       "again (TX armed/active); re-stashed";
+                return;
+            }
             widget->setPlainText(saved);
             // [TODO #146] Response TX over, draft returned — unlock.
             widget->setReadOnly(false);
@@ -4746,8 +4765,12 @@ void UI_Constructor::stopTx() {
                 // caller's speed. If TX is active, RE-STASH instead:
                 // the blocking TX's own stopTx drain re-schedules
                 // this restore — guaranteed retry, existing machinery.
+                // [boxrace 2026-09-04] ARMED (Send checked, frames
+                // not yet keyed) counts as active too -- the WM8Q/P
+                // jam's speed flip fired in exactly that window.
                 if (self->m_transmitting || self->m_txFrameCount > 0 ||
-                    !self->m_txFrameQueue.isEmpty()) {
+                    !self->m_txFrameQueue.isEmpty() ||
+                    self->ui->startTxButton->isChecked()) {
                     if (self->m_arqPreSwitchSubmode == -1) {
                         self->m_arqPreSwitchSubmode = stashedMode;
                     }

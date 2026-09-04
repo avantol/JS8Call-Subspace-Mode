@@ -113,7 +113,24 @@ void UI_Constructor::onChunkedWantsResponseTx(QString const &text) {
     // the next stopTx, producing a stale ACK / NACK line back in the
     // box.
     if (ui->extFreeTextMsgEdit && !m_arqResponseRestorePending) {
-        m_arqResponseSavedText = ui->extFreeTextMsgEdit->toPlainText();
+        // [boxrace 2026-09-04, WM8Q/P field jam] Only an IDLE box
+        // holds an operator draft. If a transmission is armed or
+        // running, the box holds WIRE TEXT (a queue-drained relay
+        // forward in the field case) -- saving that and restoring
+        // it later parks dead wire text in the box, and a non-empty
+        // box blocks the whole transmit queue. Save NOTHING then:
+        // the restore becomes a plain unlock.
+        bool const boxHoldsWire =
+            m_transmitting || m_txFrameCount > 0 ||
+            !m_txFrameQueue.isEmpty() ||
+            ui->startTxButton->isChecked();
+        m_arqResponseSavedText =
+            boxHoldsWire ? QString()
+                         : ui->extFreeTextMsgEdit->toPlainText();
+        if (boxHoldsWire)
+            qCWarning(chunkedarq_js8)
+                << "[ARQ-RX] outgoing-text save SKIPPED: box holds"
+                << "armed wire text, not a draft";
         m_arqResponseRestorePending = true;
         // [TODO #146] Lock the box for the whole save/inject/restore
         // window: keystrokes during a response TX either ride into
