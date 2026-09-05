@@ -428,8 +428,12 @@ void StationMonitorWindow::runBackfill() {
     QString prevFrame;
     QDateTime prevUtc;
     for (QByteArray const &raw : tailLines(m_allTxtPath)) {
-        auto const m =
-            txRe.match(QString::fromUtf8(raw).trimmed());
+        // [monspace 2026-09-04, field: "WHENSELECTED"] NO trimmed()
+        // here: ALL.TXT frames carry their word-boundary space as a
+        // TRAILING space, and trimming each line glued words at
+        // every frame join in stitched historic messages. tailLines
+        // opens with QIODevice::Text, so there is no \r to strip.
+        auto const m = txRe.match(QString::fromUtf8(raw));
         if (!m.hasMatch())
             continue;
         QDateTime const utc = parseUtc(m.captured(1));
