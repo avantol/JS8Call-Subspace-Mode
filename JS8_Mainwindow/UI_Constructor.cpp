@@ -2630,6 +2630,29 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                                            true);
                 return; // one balloon per startup
             }
+
+            // (f) [bandhint] Band activity per-station listing
+            // (Build 472) -- first Yes/No balloon: Yes switches the
+            // band activity window to "List by Callsign"; No, a
+            // body click, or the 45 s timeout just dismisses. Shown
+            // once either way.
+            if (!self->m_settings->value("HintBandListByShown", false)
+                     .toBool()) {
+                auto *balloon = new SpeechBalloon(
+                    tr("The Band Activity window is more useful "
+                       "when there's only one call sign per line. "
+                       "Do you want to try it?"),
+                    self->ui->tableWidgetRXAll);
+                balloon->setTailSide(SpeechBalloon::TailSide::Left);
+                balloon->setYesNoChoice([self]() {
+                    self->setBandListBy(QStringLiteral("call"));
+                });
+                balloon->setAutoDismissMs(45000);
+                balloon->showAtTarget();
+                self->m_settings->setValue("HintBandListByShown",
+                                           true);
+                return; // one balloon per startup
+            }
         });
     }
 

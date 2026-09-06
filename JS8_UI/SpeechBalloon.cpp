@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QPushButton>
 #include <QRegion>
 #include <QResizeEvent>
 #include <QScreen>
@@ -59,6 +60,60 @@ SpeechBalloon::SpeechBalloon(QString const &text, QWidget *target)
     case TailSide::Right:  extraW = m_tailHeight; break;
     }
     resize(bodyW + extraW, bodyH + extraH);
+}
+
+// [bandhint] Yes/No question mode: two buttons under the text. Yes
+// runs the action then closes; No closes; a click on the bubble body
+// or the auto-dismiss timeout also just closes (counts as No). The
+// one-per-startup chain semantics are untouched.
+void SpeechBalloon::setYesNoChoice(std::function<void()> onYes) {
+    if (m_yesButton) {
+        return;
+    }
+    m_yesButton = new QPushButton(tr("Yes"), this);
+    m_noButton  = new QPushButton(tr("No"), this);
+    for (QPushButton *b : {m_yesButton, m_noButton}) {
+        b->setFocusPolicy(Qt::NoFocus);
+        b->setCursor(Qt::ArrowCursor);
+    }
+    connect(m_yesButton, &QPushButton::clicked, this,
+            [this, onYes]() {
+                if (onYes) {
+                    onYes();
+                }
+                close();
+            });
+    connect(m_noButton, &QPushButton::clicked, this, &QWidget::close);
+
+    m_buttonRowH = m_yesButton->sizeHint().height() + 6;
+    int const needW = m_yesButton->sizeHint().width() +
+                      m_noButton->sizeHint().width() + 8 +
+                      2 * m_paddingX;
+    resize(qMax(width(), needW), height() + m_buttonRowH);
+    layoutButtons();
+    m_yesButton->show();
+    m_noButton->show();
+}
+
+void SpeechBalloon::layoutButtons() {
+    if (!m_yesButton) {
+        return;
+    }
+    // Same body inset as paintEvent: the tail eats one edge.
+    QRect body = rect();
+    switch (m_tailSide) {
+    case TailSide::Top:    body.adjust(0, m_tailHeight, 0, 0);  break;
+    case TailSide::Bottom: body.adjust(0, 0, 0, -m_tailHeight); break;
+    case TailSide::Left:   body.adjust(m_tailHeight, 0, 0, 0);  break;
+    case TailSide::Right:  body.adjust(0, 0, -m_tailHeight, 0); break;
+    }
+    QSize const ys = m_yesButton->sizeHint();
+    QSize const ns = m_noButton->sizeHint();
+    int const y = body.bottom() - m_paddingY - ys.height() + 1;
+    int x = body.right() - m_paddingX - ns.width() + 1;
+    m_noButton->setGeometry(x, y, ns.width(), ns.height());
+    x -= ys.width() + 8;
+    m_yesButton->setGeometry(x, y, ys.width(), ys.height());
 }
 
 void SpeechBalloon::showAtTarget() {
@@ -130,6 +185,7 @@ void SpeechBalloon::updateShape() {
 void SpeechBalloon::resizeEvent(QResizeEvent *e) {
     QWidget::resizeEvent(e);
     updateShape();
+    layoutButtons();
 }
 
 void SpeechBalloon::paintEvent(QPaintEvent *) {
@@ -183,7 +239,8 @@ void SpeechBalloon::paintEvent(QPaintEvent *) {
 
     p.setPen(balloonText());
     QRect const textArea = body.toRect().adjusted(
-        m_paddingX, m_paddingY, -m_paddingX, -m_paddingY);
+        m_paddingX, m_paddingY, -m_paddingX,
+        -m_paddingY - m_buttonRowH);
     p.drawText(textArea, Qt::AlignLeft | Qt::TextWordWrap, m_text);
 }
 

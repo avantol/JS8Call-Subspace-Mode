@@ -5,8 +5,11 @@
 #include <QString>
 #include <QWidget>
 
+#include <functional>
+
 class QPaintEvent;
 class QMouseEvent;
+class QPushButton;
 
 /**
  * Cartoon-style word balloon that points at a target widget.
@@ -55,6 +58,14 @@ class SpeechBalloon : public QWidget {
         m_targetRectOverride = localRect;
     }
 
+    /**
+     * [bandhint] Turn the balloon into a Yes/No question: two
+     * buttons appear under the text. Yes runs onYes then closes;
+     * No closes; a click on the bubble body or the auto-dismiss
+     * timeout counts as No. Call BEFORE showAtTarget().
+     */
+    void setYesNoChoice(std::function<void()> onYes);
+
     /** Compute position relative to target and show. */
     void showAtTarget();
 
@@ -65,9 +76,13 @@ class SpeechBalloon : public QWidget {
 
   private:
     void updateShape();
+    void layoutButtons();
 
     QString             m_text;
     QPointer<QWidget>   m_target;
+    QPushButton        *m_yesButton{nullptr}; // [bandhint] choice mode
+    QPushButton        *m_noButton{nullptr};
+    int                 m_buttonRowH{0};      // extra body height
     QRect               m_targetRectOverride; // local coords; invalid = whole widget
     TailSide            m_tailSide{TailSide::Top};
     int                 m_autoDismissMs{0};
