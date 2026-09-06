@@ -1066,7 +1066,7 @@ class UI_Constructor : public QMainWindow {
     qint32 m_XIT = 0;
     qint32 m_sec0 = 0;
     qint32 m_RxLog = 0;
-    qint32 m_nutc0 = 0;
+    QDate m_lastAllTxtHeaderDate; // [alldate] last ALL.TXT header's UTC date
     // The period of the current submode, in seconds. (15 for normal, 10 for
     // fast, ...)
     qint32 m_TRperiod = 15;

@@ -2477,10 +2477,9 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
     dec_data.params.nfb =
         m_wideGraph->filterEnabled() ? m_wideGraph->filterMaximum() : 5000;
 
-    if (dec_data.params.nutc < m_nutc0)
-        m_RxLog = 1; // Date and Time to ALL.TXT
-    if (dec_data.params.newdat == 1)
-        m_nutc0 = dec_data.params.nutc;
+    // [alldate 2026-09-06] Date-rollover check moved into writeAllTxt
+    // itself (it owns the header) -- this site stopped running in
+    // Subspace-only sessions when noclassic idled the period pass.
 
     // keep track of the minimum submode
     if (pSubmode)
@@ -11589,13 +11588,20 @@ void UI_Constructor::writeAllTxt(QStringView message) {
     if (f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append)) {
         QTextStream out(&f);
 
-        if (m_RxLog == 1) {
+        // [alldate 2026-09-06] This routine now owns the date-rollover
+        // check (one authority): a header is written at startup / after
+        // erase (m_RxLog) AND whenever the UTC date changed since the
+        // last header. Previously the rollover lived in the decode-pass
+        // preparation, which noclassic idled for Subspace-only sessions.
+        QDate const utcDate = DriftingDateTime::currentDateTimeUtc().date();
+        if (m_RxLog == 1 || utcDate != m_lastAllTxtHeaderDate) {
             out << DriftingDateTime::currentDateTimeUtc().toString(
                        "yyyy-MM-dd hh:mm:ss")
                 << "  " << qSetRealNumberPrecision(12) << (m_freqNominal / 1.e6)
                 << " MHz  JS8" << Qt::endl;
 
             m_RxLog = 0;
+            m_lastAllTxtHeaderDate = utcDate;
         }
 
         out << message << Qt::endl;
