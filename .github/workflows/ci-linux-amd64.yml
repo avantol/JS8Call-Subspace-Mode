@@ -6,6 +6,15 @@ name: Linux amd64 Build (Subspace)
 on:
   push:
     branches: [master]
+    # [ciskip 2026-09-06] Asset/doc-only pushes (guide screenshots,
+    # web uploads) do not trigger builds. A push touching ANY other
+    # file still builds.
+    paths-ignore:
+      - '**.png'
+      - '**.jpg'
+      - '**.gif'
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
 
 jobs:
