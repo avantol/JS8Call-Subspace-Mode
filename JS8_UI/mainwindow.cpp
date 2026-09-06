@@ -2179,55 +2179,10 @@ bool UI_Constructor::decodeEnqueueReady(qint32 k, qint32 k0) {
 #endif
 
 #ifdef JS8_ENABLE_FT2
-    // FT2 uses its own cycle calculation (not JS8::Submode which would throw)
-    {
-        static qint32 currentDecodeStartFT2 = -1;
-        static qint32 nextDecodeStartFT2 = -1;
-        constexpr qint32 ft2CycleFrames = FT2_TX_PERIOD_MS * JS8_RX_SAMPLE_RATE / 1000;
-        constexpr qint32 ft2FramesNeeded = FT2_NMAX;
-
-        // [TODO.md #58 build 268] m_arqMultiModeOverride is the
-        // sticky runtime flag that ARQ activation sets. Once true,
-        // FT2/Subspace decode runs even when the operator is in a
-        // legacy submode and the persisted multi-decoder action is
-        // unchecked. The override is set-once for the program run —
-        // never cleared — so a single ARQ contact unlocks Subspace
-        // RX for the remainder of the session without touching
-        // Configuration / QSettings. See setupJS8 entry handler and
-        // the auto-enable site in processCommandActivity.cpp.
-        if (m_nSubMode == Varicode::JS8CallFT2 ||
-            ui->actionModeMultiDecoder->isChecked() ||
-            m_arqMultiModeOverride) {
-            qint32 currentCycle = (k / ft2CycleFrames) %
-                                  (JS8_RX_SAMPLE_SIZE / ft2CycleFrames);
-            qint32 delta = qAbs(k - k0);
-
-            if ((k < k0) || (delta > ft2CycleFrames) ||
-                (currentDecodeStartFT2 == -1) || (nextDecodeStartFT2 == -1)) {
-                currentDecodeStartFT2 = currentCycle * ft2CycleFrames;
-                nextDecodeStartFT2 = currentDecodeStartFT2 + ft2CycleFrames;
-            }
-
-            if (currentDecodeStartFT2 + ft2FramesNeeded <= k) {
-                // Primary decode at cycle boundary
-                DecodeParams d;
-                d.submode = Varicode::JS8CallFT2;
-                d.start = currentDecodeStartFT2;
-                if (d.start < 0) d.start += JS8_RX_SAMPLE_SIZE;
-                if (d.start >= JS8_RX_SAMPLE_SIZE) d.start -= JS8_RX_SAMPLE_SIZE;
-                d.sz = qMax(ft2FramesNeeded, k - currentDecodeStartFT2);
-                m_decoderQueue.append(d);
-                decodes++;
-
-                qCDebug(decoder_js8) << "[FT2-SYNC] decodeEnqueueReady:"
-                    << "primary.start=" << d.start
-                    << "k=" << k;
-
-                currentDecodeStartFT2 = nextDecodeStartFT2;
-                nextDecodeStartFT2 = currentDecodeStartFT2 + ft2CycleFrames;
-            }
-        }
-    }
+    // [noclassic 2026-09-06] Subspace enqueue removed here too (this
+    // whole function is the dead JS8_USE_EXPERIMENTAL_DECODE_TIMING
+    // branch, never compiled in) so NO path can ever schedule a
+    // period-based Subspace decode. See the live function's note.
 #endif
 
     return decodes > 0;
@@ -2373,53 +2328,15 @@ bool UI_Constructor::decodeEnqueueReadyExperiment(qint32 k, qint32 /*k0*/) {
     }
 
 #ifdef JS8_ENABLE_FT2
-    // FT2 handled separately — uses its own cycle params, not JS8::Submode
-    if (m_nSubMode == Varicode::JS8CallFT2 || multi) {
-        constexpr qint32 ft2CycleFrames = FT2_TX_PERIOD_MS * JS8_RX_SAMPLE_RATE / 1000;
-        constexpr qint32 ft2FramesNeeded = FT2_NMAX;
-        qint32 ft2Cycle = (k / ft2CycleFrames) %
-                          (maxSamples / ft2CycleFrames);
-
-        if (!m_lastDecodeStartMap.contains(Varicode::JS8CallFT2)) {
-            m_lastDecodeStartMap[Varicode::JS8CallFT2] = ft2Cycle * ft2CycleFrames;
-        }
-
-        qint32 lastDecodeStart = m_lastDecodeStartMap[Varicode::JS8CallFT2];
-        qint32 incrementedBy = k - lastDecodeStart;
-        if (k < lastDecodeStart) {
-            incrementedBy = maxSamples - lastDecodeStart + k;
-        }
-
-        qint32 cycleFramesReady = k - (ft2Cycle * ft2CycleFrames);
-        if (cycleFramesReady < 0) {
-            cycleFramesReady = k + (maxSamples - (ft2Cycle * ft2CycleFrames));
-        }
-
-        if ((incrementedBy >= 1.5 * oneSecondSamples &&
-             cycleFramesReady >= ft2FramesNeeded) ||
-            (incrementedBy >= oneSecondSamples &&
-             cycleFramesReady >= ft2FramesNeeded - 1.5 * oneSecondSamples) ||
-            (incrementedBy >= oneSecondSamples &&
-             cycleFramesReady < 1.5 * oneSecondSamples)) {
-            // Primary decode at cycle boundary
-            qint32 primaryStart = ft2Cycle * ft2CycleFrames;
-            if (primaryStart < 0) primaryStart += maxSamples;
-            if (primaryStart >= maxSamples) primaryStart -= maxSamples;
-
-            DecodeParams d;
-            d.submode = Varicode::JS8CallFT2;
-            d.start = primaryStart;
-            d.sz = cycleFramesReady;
-            m_decoderQueue.append(d);
-            decodes++;
-
-            qCDebug(decoder_js8) << "[FT2-SYNC] decodeEnqueueReadyExperiment:"
-                << "primary.start=" << primaryStart
-                << "k=" << k;
-
-            m_lastDecodeStartMap[Varicode::JS8CallFT2] = k;
-        }
-    }
+    // [noclassic 2026-09-06] Period-based Subspace decode pass RETIRED.
+    // Audit: zero decodes from it in every diag log on disk (the async
+    // scanner finds everything first), its one wired consumer (the
+    // m_ft2StdSnr substitution) never fired, and its SNR-quality reason
+    // is duplicated -- the scanner's engine computes SNR from the same
+    // getCandidates routine (ft2_modem.cpp ~1326). Measured cost was
+    // ~1.5 s CPU per 3.75 s cycle (~40% of a core, bench 2026-09-06).
+    // The scanner is self-chaining (l2DecodeDone -> l2TryDecode) and
+    // does not use this queue.
 #endif
 
     return decodes > 0;
@@ -2527,14 +2444,9 @@ bool UI_Constructor::decodeProcessQueue(qint32 *pSubmode) {
             break;
 #endif
 #ifdef JS8_ENABLE_FT2
-        case Varicode::JS8CallFT2:
-            dec_data.params.kposFT2 = params.start;
-            dec_data.params.kszFT2 = params.sz;
-            // Standard FT2 decoder runs alongside L2. With C++ port
-            // (no Fortran lock conflict), both can run concurrently.
-            // Standard decoder provides accurate SNR via getCandidates.
-            dec_data.params.nsubmodes |= 16; // bit 4
-            break;
+        // [noclassic 2026-09-06] JS8CallFT2 case removed -- nothing
+        // enqueues Subspace segments any more, so bit 4 (16) is never
+        // set and the period-based Subspace decoder never runs.
 #endif
         }
     }

@@ -62,19 +62,13 @@ void UI_Constructor::processDecodeEvent(JS8::Event::Variant const &event) {
                 //       manner, likely by sorting the raw take from the initial
                 //       selection pass.
 
-                // Use standard decoder's SNR for L2 decodes when available
+                // [noclassic 2026-09-06] m_ft2StdSnr substitution
+                // removed with the period-based Subspace decoder: only
+                // its decodes populated the cache, and it produced zero
+                // decodes in every log on disk, so the substitution
+                // never fired. The scanner's own SNR comes from the
+                // same getCandidates routine.
                 auto ev = e;
-                if (ev.mode == 16) {
-                    int freqKey = static_cast<int>(ev.frequency) / 10;
-                    if (!ev.l2) {
-                        m_ft2StdSnr[freqKey] = ev.snr;
-                    } else {
-                        auto it = m_ft2StdSnr.find(freqKey);
-                        if (it != m_ft2StdSnr.end()) {
-                            ev.snr = it.value();
-                        }
-                    }
-                }
 
                 qCDebug(mainwindow_js8) << "[DECODE-EVENT] received:"
                            << "snr=" << ev.snr << "freq=" << ev.frequency

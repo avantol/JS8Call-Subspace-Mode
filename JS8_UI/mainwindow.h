@@ -1722,7 +1722,6 @@ class UI_Constructor : public QMainWindow {
     std::int64_t m_l2KnownPos[20] = {};         // monotonic pos when each frame was added
     int m_l2NKnown = 0;                         // number of known frames
     int m_l2SignalFreq = 0;                     // last decoded signal freq (Hz), 0=unknown
-    QMap<int, int> m_ft2StdSnr;                  // standard decoder SNR cache: freq/10 → SNR
     int m_l2EmptyCycles = 0;                    // consecutive empty decode cycles
 
     // L2 deduplication (5s window, best SNR wins)
