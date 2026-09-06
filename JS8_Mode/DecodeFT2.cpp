@@ -61,16 +61,21 @@ void DecodeFT2::decodeCallback(float /*sync*/, int snr, float dt, float freq,
     // silently. Later (todo #35) we can start using bit 75 for the
     // ARQ-capability flag; tolerance must be widely deployed first
     // since stations on builds before this one would still discard.
-    // [bit76 2026-09-06, operator field-tracked "I I ARRLEXTENT E
-    // TUFB" phantom] Bit 76 rejection RESTORED: nothing plans to
-    // use bit 76 (#192 calls it fully free), and dropping its test
-    // in Build 441 let the LDPC noise attractor (bit 76 SET, CRC14
-    // falsely passing) print ~11 phantom decodes/day on every
-    // fleet receiver -- identical bits everywhere because the
-    // attractor is a property of the code, JSC-decoding to
-    // top-of-codebook ham words. Bit 75 stays tolerated for #192
-    // phase 2.
-    bool garbage = frameBits == 0 || (msgbits77[76] & 1);
+    // [attractor 2026-09-06, operator field-tracked "I I ARRLEXTENT
+    // E TUFB" phantom] Build 441's reserved-bits tolerance exposed
+    // the LDPC decoder's noise ATTRACTOR: one specific codeword
+    // (bit 76 set, CRC14 falsely passing) that belief propagation
+    // converges to from noise or undecodable strong signals --
+    // identical on every receiver because it is a property of the
+    // code, ~11 phantom prints/day fleet-wide, JSC-decoding to
+    // top-of-codebook ham words. Rejecting the bit-76 CLASS would
+    // kill a spare bit forever (operator: "we would lose the use of
+    // one of the spare bits"), so reject the ONE known attractor
+    // payload exactly; both spare bits stay tolerated. If another
+    // attractor surfaces, extend this list from field data.
+    bool const isAttractor =
+        frame == QLatin1String("Ibw9jB2AULM-");
+    bool garbage = frameBits == 0 || isAttractor;
 
     qWarning() << "[FT2-RX] DECODED: snr=" << snr << "dt=" << dt
                << "freq=" << freq << "nap=" << nap
@@ -269,7 +274,14 @@ std::size_t DecodeFT2::decodeL2(const std::int16_t *samples,
         // tolerance has aged through the fleet.
         bool noFlags = (frameBits == 0);
         bool syncLow = (sync < 2.2f && snr < -4);
-        bool garbage = syncLow;
+        // [attractor 2026-09-06] Same known LDPC noise-attractor
+        // payload rejected on the sync path -- and THIS async path is
+        // where all 89 field phantoms ("I I ARRLEXTENT E TUFB~")
+        // actually decoded ([FT2-L2] on every diag line). Exact-frame
+        // match keeps both spare bits usable.
+        bool const isAttractor =
+            frame == QLatin1String("Ibw9jB2AULM-");
+        bool garbage = syncLow || isAttractor;
 
         qWarning() << "[FT2-L2] DECODED: snr=" << snr << "dt=" << dt
                    << "freq=" << freq << "sync=" << sync
