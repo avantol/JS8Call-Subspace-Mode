@@ -1745,6 +1745,33 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             }
             bool const listByCall = bandListByCall();
 
+            // [bandcall5] In callsign mode every row IS a station:
+            // offer its monitor first, from the RIGHT-CLICKED row's
+            // Callsign column (any column of the row), falling back
+            // to the selection -- same shape as the calls table's
+            // entry ([stamon, TODO #210]).
+            if (listByCall) {
+                QString mcall;
+                if (int const row =
+                        ui->tableWidgetRXAll->rowAt(point.y());
+                    row != -1)
+                    if (auto *it =
+                            ui->tableWidgetRXAll->item(row, BACallsign))
+                        mcall = it->data(Qt::UserRole).toString();
+                if (mcall.isEmpty())
+                    mcall = selectedCall;
+                if (!mcall.isEmpty() &&
+                    !mcall.startsWith(QLatin1Char('@'))) {
+                    auto *monAction = menu->addAction(
+                        tr("Open station monitor for %1").arg(mcall));
+                    connect(monAction, &QAction::triggered, this,
+                            [this, mcall]() {
+                                openStationMonitor(mcall);
+                            });
+                    menu->addSeparator();
+                }
+            }
+
             if (selectedOffset != -1) {
                 auto qsyAction = menu->addAction(
                     QString("Jump to %1Hz").arg(selectedOffset));
