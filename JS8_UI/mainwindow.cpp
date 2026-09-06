@@ -8810,7 +8810,14 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
                 QString const c = frameFromCall(d.text);
                 if (!c.isEmpty())
                     lastCall = c;
-                if (!lastCall.isEmpty() && lastCall == rowCall)
+                // [bandcall2] same orphan fallback as the renderer:
+                // no sender known in this bucket -> nearest station
+                // by offset.
+                QString const effective =
+                    lastCall.isEmpty()
+                        ? mostLikelyCallAtOffset(d.offset, d.submode)
+                        : lastCall;
+                if (!effective.isEmpty() && effective == rowCall)
                     mine.append(d);
             }
         }

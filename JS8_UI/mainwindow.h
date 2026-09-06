@@ -552,6 +552,10 @@ class UI_Constructor : public QMainWindow {
     // [bandcall] shared "CALL: " prefix parse (was inline in the
     // render loop) -- returns empty when the text has no valid prefix
     static QString frameFromCall(QString const &text);
+    // [bandcall2] orphan fallback: the station last seen NEAREST this
+    // offset within the submode's rx tolerance, from m_callActivity;
+    // empty when none is close enough
+    QString mostLikelyCallAtOffset(int offset, int submode) const;
     void buildQueryMenu(QMenu *, QString callsign);
     QMap<QString, QString> buildMacroValues();
     void buildColumnLabelMap();

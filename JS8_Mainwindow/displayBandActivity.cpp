@@ -26,6 +26,29 @@ QString UI_Constructor::frameFromCall(QString const &text) {
     return QString();
 }
 
+// [bandcall2] Orphan-frame fallback (operator proposal 2026-09-06):
+// a frame whose bucket has no identifiable sender is attributed to
+// the station LAST SEEN nearest its offset, within the submode's rx
+// tolerance -- the same proximity rule the click handler's fallback
+// uses. Returns empty when no station is close enough (the frame
+// then stays out of callsign mode, as before).
+QString UI_Constructor::mostLikelyCallAtOffset(int offset,
+                                               int submode) const {
+    int const threshold =
+        submode >= 0 ? JS8::Submode::rxThreshold(submode) : 10;
+    QString best;
+    int bestDist = threshold + 1;
+    for (auto it = m_callActivity.constBegin();
+         it != m_callActivity.constEnd(); ++it) {
+        int const dist = qAbs(it.value().offset - offset);
+        if (dist <= threshold && dist < bestDist) {
+            bestDist = dist;
+            best = it.value().call;
+        }
+    }
+    return best;
+}
+
 void UI_Constructor::displayBandActivity() {
     auto now = DriftingDateTime::currentDateTimeUtc();
     bool const listByCall = bandListByCall();
@@ -88,18 +111,25 @@ void UI_Constructor::displayBandActivity() {
             // with a "CALL: " prefix belongs to that call; a
             // continuation frame belongs to the last attributed call in
             // this bucket (same rule the per-offset subdivision has
-            // always used); frames before any call is known stay
-            // unattributed (dropped in callsign mode, like orphan
-            // fragments today).
+            // always used). [bandcall2] A frame arriving before any
+            // call is known in its bucket goes to the station last
+            // seen nearest its offset (operator proposal); only when
+            // that finds nothing is it left out of callsign mode.
             QStringList attrib;
-            {
+            if (listByCall) {
                 QString lastCall;
                 for (auto const &it : items) {
                     QString const c = frameFromCall(it.text);
                     if (!c.isEmpty())
                         lastCall = c;
-                    attrib.append(lastCall);
+                    attrib.append(
+                        lastCall.isEmpty()
+                            ? mostLikelyCallAtOffset(it.offset, it.submode)
+                            : lastCall);
                 }
+            } else {
+                for (int i = 0; i < items.size(); ++i)
+                    attrib.append(QString());
             }
 
             for (int i = 0; i < items.length(); ++i) {
