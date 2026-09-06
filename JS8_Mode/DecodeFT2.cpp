@@ -61,7 +61,16 @@ void DecodeFT2::decodeCallback(float /*sync*/, int snr, float dt, float freq,
     // silently. Later (todo #35) we can start using bit 75 for the
     // ARQ-capability flag; tolerance must be widely deployed first
     // since stations on builds before this one would still discard.
-    bool garbage = frameBits == 0;
+    // [bit76 2026-09-06, operator field-tracked "I I ARRLEXTENT E
+    // TUFB" phantom] Bit 76 rejection RESTORED: nothing plans to
+    // use bit 76 (#192 calls it fully free), and dropping its test
+    // in Build 441 let the LDPC noise attractor (bit 76 SET, CRC14
+    // falsely passing) print ~11 phantom decodes/day on every
+    // fleet receiver -- identical bits everywhere because the
+    // attractor is a property of the code, JSC-decoding to
+    // top-of-codebook ham words. Bit 75 stays tolerated for #192
+    // phase 2.
+    bool garbage = frameBits == 0 || (msgbits77[76] & 1);
 
     qWarning() << "[FT2-RX] DECODED: snr=" << snr << "dt=" << dt
                << "freq=" << freq << "nap=" << nap
