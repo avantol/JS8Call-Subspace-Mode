@@ -1161,6 +1161,11 @@ QPushButton:checked {
         </attribute>
         <column>
          <property name="text">
+          <string>Callsign</string>
+         </property>
+        </column>
+        <column>
+         <property name="text">
           <string>Offset</string>
          </property>
         </column>

@@ -9,8 +9,26 @@
 
 #include "JS8_Main/ChunkedArq.h"
 
+// [bandcall] Shared "CALL: " prefix parse -- the ONE authority for
+// attributing a frame to its sender in the band activity view (was
+// inline in the render loop). Format is always "CALLSIGN: @GROUP/msg".
+QString UI_Constructor::frameFromCall(QString const &text) {
+    int colonPos = text.indexOf(": ");
+    if (colonPos > 0 && colonPos <= 15) {
+        QString candidate = text.left(colonPos).trimmed();
+        // Valid callsign: 3-15 chars, has letter and digit
+        if (candidate.length() >= 3 && candidate.length() <= 15
+            && candidate.contains(QRegularExpression("[A-Z]"))
+            && candidate.contains(QRegularExpression("[0-9]"))) {
+            return candidate;
+        }
+    }
+    return QString();
+}
+
 void UI_Constructor::displayBandActivity() {
     auto now = DriftingDateTime::currentDateTimeUtc();
+    bool const listByCall = bandListByCall();
 
     // Reset the header label text to accommodate minimal label setting
     int cols = ui->tableWidgetRXAll->columnCount();
@@ -21,11 +39,19 @@ void UI_Constructor::displayBandActivity() {
 
     ui->tableWidgetRXAll->setFont(m_config.table_font());
 
-    // Selected Offset
+    // Selected row identity, read from FIXED columns (mode-aware).
+    // [bandcall] The old read took selectedItems().first(), which is
+    // whatever column happens to be first VISIBLE -- with the Offset
+    // column hidden it read the Time Delta float as an offset.
     int selectedOffset = -1;
+    QString selectedCall;
     auto selectedItems = ui->tableWidgetRXAll->selectedItems();
     if (!selectedItems.isEmpty()) {
-        selectedOffset = selectedItems.first()->data(Qt::UserRole).toInt();
+        int const selRow = selectedItems.first()->row();
+        if (auto *it = ui->tableWidgetRXAll->item(selRow, BAOffset))
+            selectedOffset = it->data(Qt::UserRole).toInt();
+        if (auto *it = ui->tableWidgetRXAll->item(selRow, BACallsign))
+            selectedCall = it->data(Qt::UserRole).toString();
     }
 
     ui->tableWidgetRXAll->setUpdatesEnabled(false);
@@ -52,17 +78,42 @@ void UI_Constructor::displayBandActivity() {
         auto const &myCall = m_config.my_callsign();
         auto const &eot = m_config.eot();
         QMap<int, QList<ActivityDetail>> filtered;
+        QMap<int, QStringList> attributed; // [bandcall] per-frame sender
         QMap<int, ActivityDetail> lastVisible;
         for (int key : keys) {
             bool isOffsetSelected = (key == selectedOffset);
             QList<ActivityDetail> items = m_bandActivity[key];
 
+            // [bandcall] Attribute every frame in bucket order: a frame
+            // with a "CALL: " prefix belongs to that call; a
+            // continuation frame belongs to the last attributed call in
+            // this bucket (same rule the per-offset subdivision has
+            // always used); frames before any call is known stay
+            // unattributed (dropped in callsign mode, like orphan
+            // fragments today).
+            QStringList attrib;
+            {
+                QString lastCall;
+                for (auto const &it : items) {
+                    QString const c = frameFromCall(it.text);
+                    if (!c.isEmpty())
+                        lastCall = c;
+                    attrib.append(lastCall);
+                }
+            }
+
             for (int i = 0; i < items.length(); ++i) {
                 auto &item = items[i];
                 bool shouldDisplay = true;
 
-                // hide aged items (selected offset bypasses aging)
-                if (!isOffsetSelected && activityAging &&
+                // hide aged items. The selected row bypasses aging:
+                // the selected offset in offset mode, the selected
+                // station's frames in callsign mode.
+                bool const agingExempt =
+                    listByCall ? (!selectedCall.isEmpty() &&
+                                  attrib[i] == selectedCall)
+                               : isOffsetSelected;
+                if (!agingExempt && activityAging &&
                     item.utcTimestamp.secsTo(now) / 60 >= activityAging) {
                     shouldDisplay = false;
                 }
@@ -156,6 +207,7 @@ void UI_Constructor::displayBandActivity() {
             }
 
             filtered[key] = items;
+            attributed[key] = attrib;
             // [BANDROW] Render-state trace (#156): one compact line
             // per bucket whose COMPOSITION changed since the last
             // render — closes the "header absent at paint" open link
@@ -185,28 +237,11 @@ void UI_Constructor::displayBandActivity() {
             }
         }
 
-        // Base comparison using last visible item, not raw list end.
-        auto const compare = [&lastVisible](int const lhsKey, int const rhsKey,
-                                    auto &&detail) {
-            bool lhsHas = lastVisible.contains(lhsKey);
-            bool rhsHas = lastVisible.contains(rhsKey);
+        // Field comparators shared by both listing modes.
 
-            if (!lhsHas)
-                return false;
-            if (!rhsHas)
-                return true;
-
-            return detail(lastVisible[lhsKey], lastVisible[rhsKey]);
-        };
-
-        // Time stamp comparison, easy stuff, just a total ordering on the
-        // UTC time stamp field.
-
-        auto const compareTimestamp = [compare](int const lhsKey,
-                                                int const rhsKey) {
-            return compare(lhsKey, rhsKey, [](auto &&lhs, auto &&rhs) {
-                return lhs.utcTimestamp < rhs.utcTimestamp;
-            });
+        auto const detailTimestamp = [](ActivityDetail const &lhs,
+                                        ActivityDetail const &rhs) {
+            return lhs.utcTimestamp < rhs.utcTimestamp;
         };
 
         // SNR comparison;  we always want insane SNR values to be at the end
@@ -215,88 +250,413 @@ void UI_Constructor::displayBandActivity() {
         // at the beginning in the case of a reverse, or all at the end in the
         // standard case. Reverse takes care of itself; we just need to sort
         // out standard.
+        auto const detailSNR = [reverse = sort.reverse](
+                                   ActivityDetail const &lhs,
+                                   ActivityDetail const &rhs) {
+            auto lhsSNR = lhs.snr;
+            auto rhsSNR = rhs.snr;
 
-        auto const compareSNR = [compare, reverse = sort.reverse](
-                                    int const lhsKey, int const rhsKey) {
-            return compare(lhsKey, rhsKey, [reverse](auto &&lhs, auto &&rhs) {
-                auto lhsSNR = lhs.snr;
-                auto rhsSNR = rhs.snr;
+            if (!reverse) {
+                if (lhsSNR < -60 || lhsSNR > 60)
+                    lhsSNR = -lhsSNR;
+                if (rhsSNR < -60 || rhsSNR > 60)
+                    rhsSNR = -rhsSNR;
+            }
 
-                if (!reverse) {
-                    if (lhsSNR < -60 || lhsSNR > 60)
-                        lhsSNR = -lhsSNR;
-                    if (rhsSNR < -60 || rhsSNR > 60)
-                        rhsSNR = -rhsSNR;
-                }
-
-                return lhsSNR < rhsSNR;
-            });
+            return lhsSNR < rhsSNR;
         };
 
         // Submode comparison; slow mode isn't at the start of the enumeration;
         // it's in the middle of it. All the other modes are in the expected
         // order.
+        auto const detailSubmode = [](ActivityDetail const &lhs,
+                                      ActivityDetail const &rhs) {
+            auto lhsSubmode = lhs.submode;
+            auto rhsSubmode = rhs.submode;
 
-        auto const compareSubmode = [compare](int const lhsKey,
-                                              int const rhsKey) {
-            return compare(lhsKey, rhsKey, [](auto &&lhs, auto &&rhs) {
-                auto lhsSubmode = lhs.submode;
-                auto rhsSubmode = rhs.submode;
+            if (lhsSubmode == Varicode::JS8CallSlow)
+                lhsSubmode = -lhsSubmode;
+            if (rhsSubmode == Varicode::JS8CallSlow)
+                rhsSubmode = -rhsSubmode;
 
-                if (lhsSubmode == Varicode::JS8CallSlow)
-                    lhsSubmode = -lhsSubmode;
-                if (rhsSubmode == Varicode::JS8CallSlow)
-                    rhsSubmode = -rhsSubmode;
-
-                return lhsSubmode < rhsSubmode;
-            });
+            return lhsSubmode < rhsSubmode;
         };
 
-        // Always perform an initial sort by offset.
+        // [bandcall] Callsign-mode station buckets: every VISIBLE
+        // attributed frame, merged across offsets AND submode classes
+        // (operator ruling: no separate Subspace line in this mode),
+        // ordered by timestamp. Unattributed orphans are dropped, as
+        // they are in the per-offset subdivision.
+        QMap<QString, QList<ActivityDetail>> callItems;
+        if (listByCall) {
+            for (int key : keys) {
+                auto const &items = filtered[key];
+                auto const &attrib = attributed[key];
+                for (int i = 0; i < items.size(); ++i) {
+                    if (!items[i].shouldDisplay)
+                        continue;
+                    if (attrib[i].isEmpty())
+                        continue;
+                    callItems[attrib[i]].append(items[i]);
+                }
+            }
+            for (auto &list : callItems)
+                std::stable_sort(list.begin(), list.end(), detailTimestamp);
+        }
 
-        std::stable_sort(keys.begin(), keys.end());
+        // Row builder shared by both modes: creates all 7 cells for
+        // one table row, applies selection and the 4-tier tinting.
+        auto const addRow = [&](QString const &call, int offset,
+                                float tdrift, QString const &age,
+                                QDateTime const &timestamp, int snr,
+                                bool snrSuspect, int submode,
+                                QString const &joined,
+                                QVariantList const &groupData,
+                                QString const &lastText, bool selected) {
+            ui->tableWidgetRXAll->insertRow(
+                ui->tableWidgetRXAll->rowCount());
+            int row = ui->tableWidgetRXAll->rowCount() - 1;
 
-        // If something other than offset was requested as the sort by, perform
-        // an additional stable sort by the field requested.
+            auto callItem = new QTableWidgetItem(call);
+            callItem->setData(Qt::UserRole, QVariant(call));
+            callItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            ui->tableWidgetRXAll->setItem(row, BACallsign, callItem);
 
-        if (sort.by == "timestamp")
-            std::stable_sort(keys.begin(), keys.end(), compareTimestamp);
-        else if (sort.by == "snr")
-            std::stable_sort(keys.begin(), keys.end(), compareSNR);
-        else if (sort.by == "submode")
-            std::stable_sort(keys.begin(), keys.end(), compareSubmode);
+            auto offsetItem = new QTableWidgetItem(
+                QString(columnLabel("%1 Hz")).arg(offset));
+            offsetItem->setData(Qt::UserRole, QVariant(offset));
+            offsetItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            ui->tableWidgetRXAll->setItem(row, BAOffset, offsetItem);
 
-        // The sort comparators leave things in forward order. If a reverse sort
-        // was requested, reverse the keys.
+            auto tdriftItem = new QTableWidgetItem(
+                QString(columnLabel("%1 ms")).arg((int)(1000 * tdrift)));
+            tdriftItem->setData(Qt::UserRole, QVariant(tdrift));
+            tdriftItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            ui->tableWidgetRXAll->setItem(row, BATDrift, tdriftItem);
 
-        if (sort.reverse)
-            std::reverse(keys.begin(), keys.end());
+            auto ageItem = new QTableWidgetItem(age);
+            ageItem->setTextAlignment(Qt::AlignCenter);
+            ageItem->setToolTip(timestamp.toString());
+            ui->tableWidgetRXAll->setItem(row, BAAge, ageItem);
 
-        // Build the table
-        foreach (int offset, keys) {
-            bool isOffsetSelected = (offset == selectedOffset);
+            auto snrText = snrSuspect ? QString() : Varicode::formatSNR(snr);
+            auto snrItem = new QTableWidgetItem(
+                snrText.isEmpty()
+                    ? ""
+                    : QString(columnLabel("%1 dB")).arg(snrText));
+            snrItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            ui->tableWidgetRXAll->setItem(row, BASnr, snrItem);
 
-            // Build 145: split offset items into Subspace (FT2) vs
-            // standard groups so each class gets its own row. Without
-            // this split, both classes collapse into one row whose
-            // displayed mode reflects whichever submode landed last in
-            // the bucket — relabeling a Subspace row as Normal when
-            // newer Normal traffic arrived at the same offset. The
-            // merge-on-nearby logic in processDecodeEvent already
-            // separates classes across adjacent offsets; this closes
-            // the gap for exact-offset collisions.
-            QList<ActivityDetail> filteredStandard, filteredSubspace;
-            for (auto const & item : filtered[offset]) {
-                if (item.submode == Varicode::JS8CallFT2)
-                    filteredSubspace.append(item);
-                else
-                    filteredStandard.append(item);
+            auto name = JS8::Submode::name(submode);
+            auto displayChar = (submode == Varicode::JS8CallFT2)
+                ? QString::fromUtf8("\u26A1")
+                : name.left(1).replace("H", "N");
+            auto submodeItem = new QTableWidgetItem(displayChar);
+            submodeItem->setToolTip(name);
+            submodeItem->setData(Qt::UserRole, QVariant(submode));
+            submodeItem->setTextAlignment(Qt::AlignCenter);
+            ui->tableWidgetRXAll->setItem(row, BASpeed, submodeItem);
+
+            auto textItem = new QTableWidgetItem(joined);
+            textItem->setData(Qt::UserRole, groupData);
+            textItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            ui->tableWidgetRXAll->setItem(row, BAMessage, textItem);
+
+            // Show full line contents as tooltip on Callsign, Offset,
+            // Time Delta, and SNR columns (not Age or Speed — they
+            // have their own tips). Bold callsign: patterns for
+            // readability.
+            {
+                auto fullTip = joined.toHtmlEscaped();
+                static const QRegularExpression callRe(R"((\b(?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}:)(?=\s))");
+                fullTip.replace(callRe, "<br/><b>\\1</b>");
+                if (fullTip.startsWith("<br/>"))
+                    fullTip = fullTip.mid(5);
+                fullTip = QString("<div style='white-space:nowrap;'>%1</div>").arg(fullTip);
+                callItem->setToolTip(fullTip);
+                offsetItem->setToolTip(fullTip);
+                tdriftItem->setToolTip(fullTip);
+                snrItem->setToolTip(fullTip);
             }
 
-            for (QList<ActivityDetail> const * itemsPtr :
-                 {&filteredStandard, &filteredSubspace}) {
-            QList<ActivityDetail> const & items = *itemsPtr;
-            if (items.length() > 0) {
+            if (selected) {
+                for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
+                     i++) {
+                    ui->tableWidgetRXAll->item(row, i)->setSelected(true);
+                }
+            }
+
+            bool isDirectedAllCall = false;
+            if ((isDirectedOffset(offset, &isDirectedAllCall) &&
+                 !isDirectedAllCall) ||
+                isMyCallIncluded(lastText)) {
+                for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
+                     i++) {
+                    ui->tableWidgetRXAll->item(row, i)->setBackground(
+                        QBrush(m_config.color_MyCall()));
+                }
+            }
+
+            if (!joined.isEmpty()) {
+                auto const list = joined.split(QRegularExpression("[:> ]"),
+                                               Qt::SkipEmptyParts);
+                QSet<QString> words(list.begin(), list.end());
+
+                if (words.contains("CQ")) {
+                    for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
+                         i++) {
+                        ui->tableWidgetRXAll->item(row, i)->setBackground(
+                            QBrush(m_config.color_CQ()));
+                    }
+                }
+
+                auto matchingSecondaryWords =
+                    m_config.secondary_highlight_words() & words;
+                if (!matchingSecondaryWords.isEmpty()) {
+                    for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
+                         i++) {
+                        ui->tableWidgetRXAll->item(row, i)->setBackground(
+                            QBrush(m_config.color_secondary_highlight()));
+                    }
+                }
+
+                auto matchingPrimaryWords =
+                    m_config.primary_highlight_words() & words;
+                if (!matchingPrimaryWords.isEmpty()) {
+                    for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
+                         i++) {
+                        ui->tableWidgetRXAll->item(row, i)->setBackground(
+                            QBrush(m_config.color_primary_highlight()));
+                    }
+                }
+            }
+        };
+
+        if (!listByCall) {
+            // ------------------- classic offset mode -----------------
+
+            auto const compare = [&lastVisible](int const lhsKey,
+                                                int const rhsKey,
+                                                auto &&detail) {
+                bool lhsHas = lastVisible.contains(lhsKey);
+                bool rhsHas = lastVisible.contains(rhsKey);
+
+                if (!lhsHas)
+                    return false;
+                if (!rhsHas)
+                    return true;
+
+                return detail(lastVisible[lhsKey], lastVisible[rhsKey]);
+            };
+
+            // Always perform an initial sort by offset.
+            std::stable_sort(keys.begin(), keys.end());
+
+            // If something other than offset was requested as the sort
+            // by, perform an additional stable sort by the field
+            // requested. Note: "call" (the callsign-mode-only sort)
+            // matches no branch here, so it falls back to the offset
+            // baseline by design.
+            if (sort.by == "timestamp")
+                std::stable_sort(keys.begin(), keys.end(),
+                                 [&](int l, int r) {
+                                     return compare(l, r, detailTimestamp);
+                                 });
+            else if (sort.by == "snr")
+                std::stable_sort(keys.begin(), keys.end(),
+                                 [&](int l, int r) {
+                                     return compare(l, r, detailSNR);
+                                 });
+            else if (sort.by == "submode")
+                std::stable_sort(keys.begin(), keys.end(),
+                                 [&](int l, int r) {
+                                     return compare(l, r, detailSubmode);
+                                 });
+
+            // The sort comparators leave things in forward order. If a
+            // reverse sort was requested, reverse the keys.
+            if (sort.reverse)
+                std::reverse(keys.begin(), keys.end());
+
+            // Build the table
+            foreach (int offset, keys) {
+                bool isOffsetSelected = (offset == selectedOffset);
+
+                // Build 145: split offset items into Subspace (FT2) vs
+                // standard groups so each class gets its own row. Without
+                // this split, both classes collapse into one row whose
+                // displayed mode reflects whichever submode landed last in
+                // the bucket — relabeling a Subspace row as Normal when
+                // newer Normal traffic arrived at the same offset. The
+                // merge-on-nearby logic in processDecodeEvent already
+                // separates classes across adjacent offsets; this closes
+                // the gap for exact-offset collisions.
+                QList<ActivityDetail> filteredStandard, filteredSubspace;
+                for (auto const & item : filtered[offset]) {
+                    if (item.submode == Varicode::JS8CallFT2)
+                        filteredSubspace.append(item);
+                    else
+                        filteredStandard.append(item);
+                }
+
+                for (QList<ActivityDetail> const * itemsPtr :
+                     {&filteredStandard, &filteredSubspace}) {
+                QList<ActivityDetail> const & items = *itemsPtr;
+                if (items.length() > 0) {
+                    QDateTime timestamp;
+                    QStringList text;
+                    QString age;
+                    int snr = 0;
+                    bool snrSuspect = false;
+                    float tdrift = 0;
+                    int submode = -1;
+
+                    // shouldDisplay was computed in the pre-sort filter
+                    // pass above; render directly from
+                    // items[i].shouldDisplay here.
+
+                    // show the items that should appear, grouped by callsign
+                    // Each group: {callsign, accumulated text}
+                    struct CallGroup { QString call; QString text; };
+                    QList<CallGroup> callGroups;
+
+                    foreach (ActivityDetail item, items) {
+                        if (!item.shouldDisplay) {
+                            continue;
+                        }
+
+                        if (item.isLowConfidence) {
+                            item.text = QString("[%1]").arg(item.text);
+                        }
+
+                        if ((item.bits & Varicode::JS8CallLast) ==
+                            Varicode::JS8CallLast) {
+                            item.text = QString("%1 %2 ")
+                                            .arg(Varicode::rstrip(item.text))
+                                            .arg(m_config.eot());
+                        }
+
+                        // Extract "from" callsign via the shared parse
+                        QString frameCall = frameFromCall(item.text);
+
+                        // Assign frame to callsign group — consolidate by callsign
+                        int maxGroups = m_config.message_subdivisions();
+                        if (!frameCall.isEmpty()) {
+                            // Find existing group for this callsign
+                            int existingIdx = -1;
+                            for (int g = 0; g < callGroups.size(); g++) {
+                                if (callGroups[g].call == frameCall) {
+                                    existingIdx = g;
+                                    break;
+                                }
+                            }
+                            if (existingIdx >= 0) {
+                                // Append to existing group for this callsign
+                                callGroups[existingIdx].text += item.text;
+                            } else if (callGroups.size() < maxGroups) {
+                                // New callsign — create new group
+                                callGroups.append({frameCall, item.text});
+                            } else {
+                                // No room — drop oldest subdivision to make
+                                // room for the most recent callsign.
+                                callGroups.removeFirst();
+                                callGroups.append({frameCall, item.text});
+                            }
+                        } else {
+                            // Anonymous frame — append to current callsign's group
+                            // as continuation. If no group exists yet, skip it
+                            // (orphan fragment, visible via tooltip on other columns).
+                            if (!callGroups.isEmpty()) {
+                                callGroups.last().text += item.text;
+                            }
+                        }
+
+                        text.append(item.text);
+                        snr = item.snr;
+                        snrSuspect = item.snrSuspect;
+                        age = since(item.utcTimestamp);
+                        timestamp = item.utcTimestamp;
+                        tdrift = item.tdrift;
+                        submode = item.submode;
+                    }
+
+                    auto joined = Varicode::rstrip(text.join(""));
+                    if (joined.isEmpty()) {
+                        continue;
+                    }
+                    // Chunked-DATA wire markers ("#NN.CC/TT.HHHH") are
+                    // intentionally left in the band activity row.
+                    // Operator-call 2026-06-04: ham operators are used to
+                    // coded protocol traffic on JS8; the marker is
+                    // diagnostic in the live-decode stream view. The
+                    // assembled-message summary in the conversation panel
+                    // (♦ line) is the operator-friendly readout.
+
+                    // Store callsign groups for sub-divided rendering
+                    QVariantList groupData;
+                    for (const auto &g : callGroups) {
+                        QVariantMap m;
+                        m["call"] = g.call;
+                        m["text"] = Varicode::rstrip(g.text);
+                        groupData.append(m);
+                    }
+
+                    addRow(QString(), offset, tdrift, age, timestamp,
+                           snr, snrSuspect, submode, joined, groupData,
+                           text.last(), isOffsetSelected);
+                }
+                } // end split-by-submode for loop (Build 145)
+            }
+        } else {
+            // ------------------- callsign mode -----------------------
+            // [bandcall] One row per station; scalars come from its
+            // newest visible frame; message text is its frames joined
+            // chronologically across offsets and classes.
+
+            QStringList callKeys = callItems.keys(); // alphabetical
+
+            auto const compareCall = [&callItems](QString const &lhsKey,
+                                                  QString const &rhsKey,
+                                                  auto &&detail) {
+                return detail(callItems[lhsKey].last(),
+                              callItems[rhsKey].last());
+            };
+
+            // Baseline is alphabetical (QMap key order) == the
+            // "Callsign" sort. Other sorts compare each station's
+            // newest visible frame.
+            if (sort.by == "offset")
+                std::stable_sort(callKeys.begin(), callKeys.end(),
+                                 [&](QString const &l, QString const &r) {
+                                     return compareCall(
+                                         l, r,
+                                         [](ActivityDetail const &a,
+                                            ActivityDetail const &b) {
+                                             return a.offset < b.offset;
+                                         });
+                                 });
+            else if (sort.by == "timestamp")
+                std::stable_sort(callKeys.begin(), callKeys.end(),
+                                 [&](QString const &l, QString const &r) {
+                                     return compareCall(l, r,
+                                                        detailTimestamp);
+                                 });
+            else if (sort.by == "snr")
+                std::stable_sort(callKeys.begin(), callKeys.end(),
+                                 [&](QString const &l, QString const &r) {
+                                     return compareCall(l, r, detailSNR);
+                                 });
+            else if (sort.by == "submode")
+                std::stable_sort(callKeys.begin(), callKeys.end(),
+                                 [&](QString const &l, QString const &r) {
+                                     return compareCall(l, r,
+                                                        detailSubmode);
+                                 });
+
+            if (sort.reverse)
+                std::reverse(callKeys.begin(), callKeys.end());
+
+            foreach (QString const &call, callKeys) {
                 QDateTime timestamp;
                 QStringList text;
                 QString age;
@@ -304,21 +664,9 @@ void UI_Constructor::displayBandActivity() {
                 bool snrSuspect = false;
                 float tdrift = 0;
                 int submode = -1;
+                int offset = -1;
 
-                // shouldDisplay was computed in the pre-sort filter pass above;
-                // render directly from items[i].shouldDisplay here.
-
-                // show the items that should appear, grouped by callsign
-                // Each group: {callsign, accumulated text}
-                struct CallGroup { QString call; QString text; };
-                QList<CallGroup> callGroups;
-                QString currentCall;
-
-                foreach (ActivityDetail item, items) {
-                    if (!item.shouldDisplay) {
-                        continue;
-                    }
-
+                foreach (ActivityDetail item, callItems[call]) {
                     if (item.isLowConfidence) {
                         item.text = QString("[%1]").arg(item.text);
                     }
@@ -330,57 +678,6 @@ void UI_Constructor::displayBandActivity() {
                                         .arg(m_config.eot());
                     }
 
-                    // Extract "from" callsign from "CALL: text" pattern
-                    // Format is always CALLSIGN: @GROUP/message — the callsign
-                    // is the sender, @GROUP is the destination.
-                    QString frameCall;
-                    int colonPos = item.text.indexOf(": ");
-                    if (colonPos > 0 && colonPos <= 15) {
-                        QString candidate = item.text.left(colonPos).trimmed();
-                        // Valid callsign: 3-15 chars, has letter and digit
-                        if (candidate.length() >= 3 && candidate.length() <= 15
-                            && candidate.contains(QRegularExpression("[A-Z]"))
-                            && candidate.contains(QRegularExpression("[0-9]"))) {
-                            frameCall = candidate;
-                        }
-                    }
-
-                    // Assign frame to callsign group — consolidate by callsign
-                    int maxGroups = m_config.message_subdivisions();
-                    if (!frameCall.isEmpty()) {
-                        // Find existing group for this callsign
-                        int existingIdx = -1;
-                        for (int g = 0; g < callGroups.size(); g++) {
-                            if (callGroups[g].call == frameCall) {
-                                existingIdx = g;
-                                break;
-                            }
-                        }
-                        if (existingIdx >= 0) {
-                            // Append to existing group for this callsign
-                            callGroups[existingIdx].text += item.text;
-                        } else if (callGroups.size() < maxGroups) {
-                            // New callsign — create new group
-                            callGroups.append({frameCall, item.text});
-                        } else {
-                            // No room — drop oldest subdivision to make
-                            // room for the most recent callsign.
-                            callGroups.removeFirst();
-                            callGroups.append({frameCall, item.text});
-                        }
-                        currentCall = frameCall;
-                    } else if (frameCall.isEmpty()) {
-                        // Anonymous frame — append to current callsign's group
-                        // as continuation. If no group exists yet, skip it
-                        // (orphan fragment, visible via tooltip on other columns).
-                        if (!callGroups.isEmpty()) {
-                            callGroups.last().text += item.text;
-                        }
-                    } else {
-                        // Continuation frame (same callsign) — append to current group
-                        callGroups.last().text += item.text;
-                    }
-
                     text.append(item.text);
                     snr = item.snr;
                     snrSuspect = item.snrSuspect;
@@ -388,143 +685,29 @@ void UI_Constructor::displayBandActivity() {
                     timestamp = item.utcTimestamp;
                     tdrift = item.tdrift;
                     submode = item.submode;
+                    offset = item.offset;
                 }
 
                 auto joined = Varicode::rstrip(text.join(""));
                 if (joined.isEmpty()) {
                     continue;
                 }
-                // Chunked-DATA wire markers ("#NN.CC/TT.HHHH") are
-                // intentionally left in the band activity row.
-                // Operator-call 2026-06-04: ham operators are used to
-                // coded protocol traffic on JS8; the marker is
-                // diagnostic in the live-decode stream view. The
-                // assembled-message summary in the conversation panel
-                // (♦ line) is the operator-friendly readout.
 
-                ui->tableWidgetRXAll->insertRow(
-                    ui->tableWidgetRXAll->rowCount());
-                int row = ui->tableWidgetRXAll->rowCount() - 1;
-                int col = 0;
-
-                auto offsetItem = new QTableWidgetItem(
-                    QString(columnLabel("%1 Hz")).arg(offset));
-                offsetItem->setData(Qt::UserRole, QVariant(offset));
-                offsetItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-                ui->tableWidgetRXAll->setItem(row, col++, offsetItem);
-
-                auto tdriftItem = new QTableWidgetItem(
-                    QString(columnLabel("%1 ms")).arg((int)(1000 * tdrift)));
-                tdriftItem->setData(Qt::UserRole, QVariant(tdrift));
-                tdriftItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-                ui->tableWidgetRXAll->setItem(row, col++, tdriftItem);
-
-                auto ageItem = new QTableWidgetItem(age);
-                ageItem->setTextAlignment(Qt::AlignCenter);
-                ageItem->setToolTip(timestamp.toString());
-                ui->tableWidgetRXAll->setItem(row, col++, ageItem);
-
-                auto snrText = snrSuspect ? QString() : Varicode::formatSNR(snr);
-                auto snrItem = new QTableWidgetItem(
-                    snrText.isEmpty()
-                        ? ""
-                        : QString(columnLabel("%1 dB")).arg(snrText));
-                snrItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-                ui->tableWidgetRXAll->setItem(row, col++, snrItem);
-
-                auto name = JS8::Submode::name(submode);
-                auto displayChar = (submode == Varicode::JS8CallFT2)
-                    ? QString::fromUtf8("\u26A1")
-                    : name.left(1).replace("H", "N");
-                auto submodeItem = new QTableWidgetItem(displayChar);
-                submodeItem->setToolTip(name);
-                submodeItem->setData(Qt::UserRole, QVariant(submode));
-                submodeItem->setTextAlignment(Qt::AlignCenter);
-                ui->tableWidgetRXAll->setItem(row, col++, submodeItem);
-
-                // Store callsign groups for sub-divided rendering
+                // Single group: the delegate paints one region with
+                // the station's call bolded, exactly like a one-call
+                // offset row.
                 QVariantList groupData;
-                for (const auto &g : callGroups) {
+                {
                     QVariantMap m;
-                    m["call"] = g.call;
-                    m["text"] = Varicode::rstrip(g.text);
+                    m["call"] = call;
+                    m["text"] = joined;
                     groupData.append(m);
                 }
 
-                auto textItem = new QTableWidgetItem(joined);
-                textItem->setData(Qt::UserRole, groupData);
-                textItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-
-                ui->tableWidgetRXAll->setItem(row, col++, textItem);
-
-                // Show full line contents as tooltip on Offset, Time Delta,
-                // and SNR columns (not Age or Speed — they have their own tips)
-                // Bold callsign: patterns for readability
-                {
-                    auto fullTip = joined.toHtmlEscaped();
-                    static const QRegularExpression callRe(R"((\b(?=[A-Z0-9/]*[0-9])[A-Z0-9/]{3,15}:)(?=\s))");
-                    fullTip.replace(callRe, "<br/><b>\\1</b>");
-                    if (fullTip.startsWith("<br/>"))
-                        fullTip = fullTip.mid(5);
-                    fullTip = QString("<div style='white-space:nowrap;'>%1</div>").arg(fullTip);
-                    offsetItem->setToolTip(fullTip);
-                    tdriftItem->setToolTip(fullTip);
-                    snrItem->setToolTip(fullTip);
-                }
-
-                if (isOffsetSelected) {
-                    for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
-                         i++) {
-                        ui->tableWidgetRXAll->item(row, i)->setSelected(true);
-                    }
-                }
-
-                bool isDirectedAllCall = false;
-                if ((isDirectedOffset(offset, &isDirectedAllCall) &&
-                     !isDirectedAllCall) ||
-                    isMyCallIncluded(text.last())) {
-                    for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
-                         i++) {
-                        ui->tableWidgetRXAll->item(row, i)->setBackground(
-                            QBrush(m_config.color_MyCall()));
-                    }
-                }
-
-                if (!text.isEmpty()) {
-                    auto const list = joined.split(QRegularExpression("[:> ]"),
-                                                   Qt::SkipEmptyParts);
-                    QSet<QString> words(list.begin(), list.end());
-
-                    if (words.contains("CQ")) {
-                        for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
-                             i++) {
-                            ui->tableWidgetRXAll->item(row, i)->setBackground(
-                                QBrush(m_config.color_CQ()));
-                        }
-                    }
-
-                    auto matchingSecondaryWords =
-                        m_config.secondary_highlight_words() & words;
-                    if (!matchingSecondaryWords.isEmpty()) {
-                        for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
-                             i++) {
-                            ui->tableWidgetRXAll->item(row, i)->setBackground(
-                                QBrush(m_config.color_secondary_highlight()));
-                        }
-                    }
-
-                    auto matchingPrimaryWords =
-                        m_config.primary_highlight_words() & words;
-                    if (!matchingPrimaryWords.isEmpty()) {
-                        for (int i = 0; i < ui->tableWidgetRXAll->columnCount();
-                             i++) {
-                            ui->tableWidgetRXAll->item(row, i)->setBackground(
-                                QBrush(m_config.color_primary_highlight()));
-                        }
-                    }
-                }
+                addRow(call, offset, tdrift, age, timestamp, snr,
+                       snrSuspect, submode, joined, groupData,
+                       text.last(), call == selectedCall);
             }
-            } // end split-by-submode for loop (Build 145)
         }
 
         // Set table color
@@ -562,22 +745,27 @@ void UI_Constructor::displayBandActivity() {
         ui->tableWidgetRXAll->horizontalHeader()->setVisible(
             showColumn("band", "labels"));
 
-        // Hide columns
-        ui->tableWidgetRXAll->setColumnHidden(0, !showColumn("band", "offset"));
+        // Hide columns. The Callsign column is not operator-hideable:
+        // it IS the callsign mode, and is absent from offset mode.
+        ui->tableWidgetRXAll->setColumnHidden(BACallsign, !listByCall);
         ui->tableWidgetRXAll->setColumnHidden(
-            1, !showColumn("band", "tdrift"));
-        ui->tableWidgetRXAll->setColumnHidden(2,
-                                              !showColumn("band", "timestamp"));
-        ui->tableWidgetRXAll->setColumnHidden(3, !showColumn("band", "snr"));
+            BAOffset, !showColumn("band", "offset"));
         ui->tableWidgetRXAll->setColumnHidden(
-            4, !showColumn("band", "submode", false));
+            BATDrift, !showColumn("band", "tdrift"));
+        ui->tableWidgetRXAll->setColumnHidden(
+            BAAge, !showColumn("band", "timestamp"));
+        ui->tableWidgetRXAll->setColumnHidden(
+            BASnr, !showColumn("band", "snr"));
+        ui->tableWidgetRXAll->setColumnHidden(
+            BASpeed, !showColumn("band", "submode", false));
 
         // Resize the table columns
-        ui->tableWidgetRXAll->resizeColumnToContents(0);
-        ui->tableWidgetRXAll->resizeColumnToContents(1);
-        ui->tableWidgetRXAll->resizeColumnToContents(2);
-        ui->tableWidgetRXAll->resizeColumnToContents(3);
-        ui->tableWidgetRXAll->resizeColumnToContents(4);
+        ui->tableWidgetRXAll->resizeColumnToContents(BACallsign);
+        ui->tableWidgetRXAll->resizeColumnToContents(BAOffset);
+        ui->tableWidgetRXAll->resizeColumnToContents(BATDrift);
+        ui->tableWidgetRXAll->resizeColumnToContents(BAAge);
+        ui->tableWidgetRXAll->resizeColumnToContents(BASnr);
+        ui->tableWidgetRXAll->resizeColumnToContents(BASpeed);
 
         // Reset the scroll position
         ui->tableWidgetRXAll->verticalScrollBar()->setValue(currentScrollPos);

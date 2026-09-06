@@ -1463,12 +1463,27 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                         setFreqOffsetForRestore(targetFreq, false);
                         // Highlight the band-activity row matching the
                         // LIVE tuned offset, not the line's frozen offset.
+                        // [bandcall] In callsign mode prefer the row
+                        // whose station IS the clicked call; offset
+                        // match is the fallback (two stations can
+                        // share a newest offset).
+                        int offsetMatch = -1;
+                        int callMatch = -1;
                         for (int r = 0; r < ui->tableWidgetRXAll->rowCount(); ++r) {
-                            auto item = ui->tableWidgetRXAll->item(r, 0);
-                            if (item && item->data(Qt::UserRole).toInt() == targetFreq) {
-                                ui->tableWidgetRXAll->selectRow(r);
+                            auto item = ui->tableWidgetRXAll->item(r, BAOffset);
+                            if (item && item->data(Qt::UserRole).toInt() == targetFreq &&
+                                offsetMatch < 0) {
+                                offsetMatch = r;
+                            }
+                            auto ci = ui->tableWidgetRXAll->item(r, BACallsign);
+                            if (ci && ci->data(Qt::UserRole).toString() == callsign) {
+                                callMatch = r;
                                 break;
                             }
+                        }
+                        int const target = callMatch >= 0 ? callMatch : offsetMatch;
+                        if (target >= 0) {
+                            ui->tableWidgetRXAll->selectRow(target);
                         }
                     }
                     ui->tableWidgetRXAll->blockSignals(false);
@@ -1629,7 +1644,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     // Install custom delegate for sub-divided Message(s) column
     auto *msgDelegate = new BandActivityMessageDelegate(ui->tableWidgetRXAll);
     msgDelegate->setMyCallsign(m_config.my_callsign());
-    ui->tableWidgetRXAll->setItemDelegateForColumn(5, msgDelegate);
+    ui->tableWidgetRXAll->setItemDelegateForColumn(BAMessage, msgDelegate);
 
     auto clearAction3 = new QAction(QString("Clear"), ui->tableWidgetRXAll);
     connect(clearAction3, &QAction::triggered, this,
@@ -1638,12 +1653,20 @@ UI_Constructor::UI_Constructor(QString const &program_info,
     auto removeActivity =
         new QAction(QString("Remove Activity"), ui->tableWidgetRXAll);
     connect(removeActivity, &QAction::triggered, this, [this]() {
-        if (ui->tableWidgetRXAll->selectedItems().isEmpty()) {
+        auto selectedItems = ui->tableWidgetRXAll->selectedItems();
+        if (selectedItems.isEmpty()) {
             return;
         }
 
-        auto selectedItems = ui->tableWidgetRXAll->selectedItems();
-        int selectedOffset = selectedItems.first()->data(Qt::UserRole).toInt();
+        // [bandcall] Offset from the FIXED Offset column -- the old
+        // first-selected-item read returned the wrong column's data
+        // whenever the Offset column was hidden.
+        int const selRow = selectedItems.first()->row();
+        auto *offsetItem = ui->tableWidgetRXAll->item(selRow, BAOffset);
+        if (!offsetItem) {
+            return;
+        }
+        int selectedOffset = offsetItem->data(Qt::UserRole).toInt();
 
         m_bandActivity.remove(selectedOffset);
         displayActivity(true);
@@ -1666,6 +1689,11 @@ UI_Constructor::UI_Constructor(QString const &program_info,
         &QHeaderView::customContextMenuRequested, this,
         [this](QPoint const &point) {
             QMenu *menu = new QMenu(ui->tableWidgetRXAll);
+
+            // [bandcall] Listing mode first: one row per Offset
+            // (classic) or one row per Callsign.
+            QMenu *listByMenu = menu->addMenu("List by...");
+            buildBandActivityListByMenu(listByMenu);
 
             QMenu *sortByMenu = menu->addMenu("Sort By...");
             buildBandActivitySortByMenu(sortByMenu);
@@ -1694,12 +1722,28 @@ UI_Constructor::UI_Constructor(QString const &program_info,
             bool missingCallsign = selectedCall.isEmpty();
             bool isAllCall = isAllCallIncluded(selectedCall);
 
+            // [bandcall] Row identity from FIXED columns (the old
+            // first-selected-item read broke with the Offset column
+            // hidden). In callsign mode the row's speed/drift are the
+            // station's newest frame, carried in the row's own items --
+            // the model bucket's .last() could be a DIFFERENT station.
             int selectedOffset = -1;
+            int rowSubmode = -1;
+            float rowTdrift = 0;
+            bool haveRowData = false;
             if (!ui->tableWidgetRXAll->selectedItems().isEmpty()) {
-                auto selectedItems = ui->tableWidgetRXAll->selectedItems();
-                selectedOffset =
-                    selectedItems.first()->data(Qt::UserRole).toInt();
+                int const selRow =
+                    ui->tableWidgetRXAll->selectedItems().first()->row();
+                if (auto *it = ui->tableWidgetRXAll->item(selRow, BAOffset))
+                    selectedOffset = it->data(Qt::UserRole).toInt();
+                if (auto *it = ui->tableWidgetRXAll->item(selRow, BASpeed)) {
+                    rowSubmode = it->data(Qt::UserRole).toInt();
+                    haveRowData = true;
+                }
+                if (auto *it = ui->tableWidgetRXAll->item(selRow, BATDrift))
+                    rowTdrift = it->data(Qt::UserRole).toFloat();
             }
+            bool const listByCall = bandListByCall();
 
             if (selectedOffset != -1) {
                 auto qsyAction = menu->addAction(
@@ -1718,9 +1762,25 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                             });
                 }
 
-                auto items = m_bandActivity.value(selectedOffset);
-                if (!items.isEmpty()) {
-                    int submode = items.last().submode;
+                // Speed and drift source: in callsign mode the row's
+                // own stored values (the station's newest frame); in
+                // offset mode the bucket's newest frame, as before.
+                int submode = -1;
+                float tdriftVal = 0;
+                bool haveFrame = false;
+                if (listByCall) {
+                    submode = rowSubmode;
+                    tdriftVal = rowTdrift;
+                    haveFrame = haveRowData && rowSubmode >= 0;
+                } else {
+                    auto items = m_bandActivity.value(selectedOffset);
+                    if (!items.isEmpty()) {
+                        submode = items.last().submode;
+                        tdriftVal = items.last().tdrift;
+                        haveFrame = true;
+                    }
+                }
+                if (haveFrame) {
                     auto speed = JS8::Submode::name(submode);
                     if (submode != m_nSubMode) {
                         auto qrqAction =
@@ -1731,7 +1791,7 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                                 [this, submode]() { setSubmode(submode); });
                     }
 
-                    int tdrift = -int(items.last().tdrift * 1000);
+                    int tdrift = -int(tdriftVal * 1000);
                     auto qtrAction = menu->addAction(
                         QString("Jump to %1 ms time drift").arg(tdrift));
                     connect(qtrAction, &QAction::triggered, this,
@@ -1768,10 +1828,15 @@ UI_Constructor::UI_Constructor(QString const &program_info,
                 messagePanel_->setCall("%");
             });
 
-            menu->addSeparator();
+            // [bandcall] "Remove Activity" is offset-bucket removal;
+            // in callsign mode a row is a station spanning several
+            // buckets, so the entry is absent (operator ruling).
+            if (!listByCall) {
+                menu->addSeparator();
 
-            removeActivity->setDisabled(selectedOffset == -1);
-            menu->addAction(removeActivity);
+                removeActivity->setDisabled(selectedOffset == -1);
+                menu->addAction(removeActivity);
+            }
 
             menu->addSeparator();
             menu->addAction(clearAction3);

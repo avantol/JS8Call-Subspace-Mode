@@ -525,6 +525,7 @@ void UI_Constructor::writeSettings() {
     m_settings->setValue("pwrBandTuneMemory", m_pwrBandTuneMemory);
     m_settings->setValue("SortBy", QVariant(m_sortCache));
     m_settings->setValue("ShowColumns", QVariant(m_showColumnsCache));
+    m_settings->setValue("ListBy", m_bandListBy); // [bandcall]
     m_settings->setValue("HBInterval", m_hbInterval);
     m_settings->setValue("CQInterval", m_cqInterval);
 
@@ -677,6 +678,8 @@ void UI_Constructor::readSettings() {
 
     m_sortCache = m_settings->value("SortBy").toMap();
     m_showColumnsCache = m_settings->value("ShowColumns").toMap();
+    m_bandListBy =
+        m_settings->value("ListBy", "offset").toString(); // [bandcall]
     m_hbInterval = m_settings->value("HBInterval", 0).toInt();
     m_cqInterval = m_settings->value("CQInterval", 0).toInt();
 
@@ -8369,14 +8372,53 @@ void UI_Constructor::buildSortByMenu(QMenu *menu, QString key,
 }
 
 void UI_Constructor::buildBandActivitySortByMenu(QMenu *menu) {
-    buildSortByMenu(menu, "bandActivity", "offset",
+    QList<QPair<QString, QString>> values =
                     {{"Frequency offset", "offset"},
                      {"Last heard timestamp (oldest first)", "timestamp"},
                      {"Last heard timestamp (recent first)", "-timestamp"},
                      {"SNR (weakest first)", "snr"},
                      {"SNR (strongest first)", "-snr"},
                      {"Mode Speed (slowest first)", "submode"},
-                     {"Mode Speed (fastest first)", "-submode"}});
+                     {"Mode Speed (fastest first)", "-submode"}};
+    // [bandcall] The Callsign sort exists only while the table lists
+    // by callsign (operator ruling). If "call" is the stored sort and
+    // the operator switches back to offset listing, the renderer falls
+    // back to the offset baseline (no comparator matches "call").
+    if (bandListByCall())
+        values.append(qMakePair(QString("Callsign"), QString("call")));
+    buildSortByMenu(menu, "bandActivity", "offset", values);
+}
+
+// [bandcall] "List by..." submenu for the band activity table:
+// Offset (classic, one row per offset) or Callsign (one row per
+// station). Persisted as Common/ListBy.
+bool UI_Constructor::bandListByCall() const {
+    return m_bandListBy == QLatin1String("call");
+}
+
+void UI_Constructor::setBandListBy(QString const &value) {
+    m_bandListBy = value;
+    displayBandActivity();
+}
+
+void UI_Constructor::buildBandActivityListByMenu(QMenu *menu) {
+    QActionGroup *g = new QActionGroup(menu);
+    g->setExclusive(true);
+
+    for (auto const &p :
+         {QPair<QString, QString>{"Offset", "offset"},
+          QPair<QString, QString>{"Callsign", "call"}}) {
+        auto v = p.second;
+        auto a = menu->addAction(p.first);
+        a->setCheckable(true);
+        a->setChecked(v == m_bandListBy);
+        a->setActionGroup(g);
+        connect(a, &QAction::triggered, this, [this, a, v]() {
+            if (a->isChecked()) {
+                setBandListBy(v);
+            }
+        });
+    }
 }
 
 void UI_Constructor::buildCallActivitySortByMenu(QMenu *menu) {
@@ -8488,6 +8530,7 @@ void UI_Constructor::buildColumnLabelMap() {
     // This is the map of full-length strings to shortened versions
     // Add new minimal labels here as needed
     m_columnLabelMap = {{"Callsigns", "Call"}, {"Callsigns (%1)", "Call(%1)"},
+                        {"Callsign", "Call"},
                         {"Offset", "Off"},     {"SNR", "SN"},
                         {"Time Delta", "TD"},  {"Speed", "Sp"},
                         {"Distance", "Dist"},  {"Azimuth", "Az"},
@@ -8629,21 +8672,34 @@ void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
 
     displayCallActivity();
 
-    auto item = ui->tableWidgetRXAll->item(row, 0);
+    auto item = ui->tableWidgetRXAll->item(row, BAOffset);
     if (!item) return;
 
     int offset = item->data(Qt::UserRole).toInt();
     // Read submode from the row's speed column (set by displayBandActivity)
-    auto speedItem = ui->tableWidgetRXAll->item(row, 4);
+    auto speedItem = ui->tableWidgetRXAll->item(row, BASpeed);
     int rowSubmode = speedItem ? speedItem->data(Qt::UserRole).toInt() : -1;
 
     qWarning() << "[UI] click band activity: row=" << row << "offset=" << offset
                << "rowSubmode=" << rowSubmode
                << "speedText=" << (speedItem ? speedItem->text() : "null");
 
+    // [bandcall] In callsign mode the row IS the station -- no
+    // positional mapping or text parsing needed.
+    if (bandListByCall()) {
+        QString rowCall;
+        if (auto *ci = ui->tableWidgetRXAll->item(row, BACallsign))
+            rowCall = ci->data(Qt::UserRole).toString();
+        if (!rowCall.isEmpty())
+            selectCallsign(rowCall, rowSubmode);
+        else
+            clearSelection();
+        return;
+    }
+
     // Find callsign from sub-divided Message(s) column
     QString call;
-    int msgCol = ui->tableWidgetRXAll->columnCount() - 1;
+    int msgCol = BAMessage;
     auto msgItem = ui->tableWidgetRXAll->item(row, msgCol);
 
     if (msgItem) {
@@ -8719,9 +8775,11 @@ void UI_Constructor::on_tableWidgetRXAll_cellClicked(int row, int /*col*/) {
 void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
     on_tableWidgetRXAll_cellClicked(row, col);
 
-    // TODO: jsherer - could also parse the messages for the last callsign?
-    auto item = ui->tableWidgetRXAll->item(row, 0);
-    int offset = item->text().replace(" Hz", "").toInt();
+    // [bandcall] Offset from UserRole, not the display text -- the
+    // old " Hz" text parse broke under minimal column labels.
+    auto item = ui->tableWidgetRXAll->item(row, BAOffset);
+    if (!item) return;
+    int offset = item->data(Qt::UserRole).toInt();
 
     // switch to the offset of this row (inhibit if too low — likely noise)
     if (offset > 1000)
@@ -8729,9 +8787,75 @@ void UI_Constructor::on_tableWidgetRXAll_cellDoubleClicked(int row, int col) {
 
     // print the history in the main window...
     // Read submode from the row's speed column to filter by mode
-    auto speedItem = ui->tableWidgetRXAll->item(row, 4);
+    auto speedItem = ui->tableWidgetRXAll->item(row, BASpeed);
     int rowSubmode = speedItem ? speedItem->data(Qt::UserRole).toInt() : -1;
     bool rowIsFT2 = (rowSubmode == Varicode::JS8CallFT2);
+
+    // [bandcall] Callsign mode: the history is the STATION's frames,
+    // gathered across every offset bucket and both submode classes
+    // (operator ruling), attributed by the same shared prefix parse
+    // the renderer uses, chronological, aging-filtered.
+    if (bandListByCall()) {
+        QString rowCall;
+        if (auto *ci = ui->tableWidgetRXAll->item(row, BACallsign))
+            rowCall = ci->data(Qt::UserRole).toString();
+        if (rowCall.isEmpty())
+            return;
+
+        QList<ActivityDetail> mine;
+        for (auto it = m_bandActivity.constBegin();
+             it != m_bandActivity.constEnd(); ++it) {
+            QString lastCall;
+            for (auto const &d : it.value()) {
+                QString const c = frameFromCall(d.text);
+                if (!c.isEmpty())
+                    lastCall = c;
+                if (!lastCall.isEmpty() && lastCall == rowCall)
+                    mine.append(d);
+            }
+        }
+        std::stable_sort(mine.begin(), mine.end(),
+                         [](ActivityDetail const &a,
+                            ActivityDetail const &b) {
+                             return a.utcTimestamp < b.utcTimestamp;
+                         });
+
+        int activityAging = m_config.activity_aging();
+        QDateTime now = DriftingDateTime::currentDateTimeUtc();
+        QDateTime firstActivity = now;
+        QString activityText;
+        bool isLast = false;
+        int activitySubmode = rowSubmode;
+        foreach (auto d, mine) {
+            if (activityAging &&
+                d.utcTimestamp.secsTo(now) / 60 >= activityAging) {
+                continue;
+            }
+            if (activityText.isEmpty()) {
+                firstActivity = d.utcTimestamp;
+            }
+            activityText.append(d.text);
+            activitySubmode = d.submode;
+
+            isLast = (d.bits & Varicode::JS8CallLast) ==
+                     Varicode::JS8CallLast;
+            if (isLast) {
+                activityText = QString("%1 %2 ")
+                                   .arg(Varicode::rstrip(activityText))
+                                   .arg(m_config.eot());
+            }
+        }
+
+        qWarning() << "[UI] dblclick band activity (call mode): call="
+                   << rowCall << "frames=" << mine.size()
+                   << "textLen=" << activityText.length();
+
+        if (!activityText.isEmpty()) {
+            displayTextForFreq(activityText, offset, firstActivity, false,
+                               true, isLast, activitySubmode);
+        }
+        return;
+    }
 
     qWarning() << "[UI] dblclick band activity: offset=" << offset
                << "rowSubmode=" << rowSubmode << "rowIsFT2=" << rowIsFT2

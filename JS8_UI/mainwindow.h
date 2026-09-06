@@ -545,6 +545,13 @@ class UI_Constructor : public QMainWindow {
                          QList<QPair<QString, QString>> values);
     void buildBandActivitySortByMenu(QMenu *menu);
     void buildCallActivitySortByMenu(QMenu *menu);
+    // [bandcall] "List by..." mode for the band activity table
+    bool bandListByCall() const;
+    void setBandListBy(QString const &value);
+    void buildBandActivityListByMenu(QMenu *menu);
+    // [bandcall] shared "CALL: " prefix parse (was inline in the
+    // render loop) -- returns empty when the text has no valid prefix
+    static QString frameFromCall(QString const &text);
     void buildQueryMenu(QMenu *, QString callsign);
     QMap<QString, QString> buildMacroValues();
     void buildColumnLabelMap();
@@ -1615,10 +1622,28 @@ class UI_Constructor : public QMainWindow {
                            FrameCacheKey::Hash>;
     using BandActivity = QMap<int, QList<ActivityDetail>>;
 
+    // [bandcall] Band activity column indices -- ONE authority for the
+    // table layout; never index tableWidgetRXAll with a literal.
+    // Column 0 (Callsign) is hidden in offset mode, shown in callsign
+    // mode ("List by..." on the header menu).
+    enum BACol : int {
+        BACallsign = 0,
+        BAOffset   = 1,
+        BATDrift   = 2,
+        BAAge      = 3,
+        BASnr      = 4,
+        BASpeed    = 5,
+        BAMessage  = 6,
+    };
+
     QQueue<DecodeParams> m_decoderQueue;
     FrameCache m_messageDupeCache;  // submode, frame -> date seen
     QVariantMap m_showColumnsCache; // table column:key -> show boolean
     QVariantMap m_sortCache;        // table key -> sort by
+    // [bandcall] Band activity listing mode: "offset" (classic, one
+    // row per offset) or "call" (one row per station). Persisted as
+    // Common/ListBy.
+    QString m_bandListBy = QStringLiteral("offset");
     QPriorityQueue<PrioritizedMessage> m_txMessageQueue; // messages to be sent
     QQueue<QPair<QString, int>> m_txFrameQueue;          // frames to be sent
     QQueue<ActivityDetail> m_rxActivityQueue; // all rx activity queue

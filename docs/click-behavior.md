@@ -82,6 +82,36 @@
 2. **Mode switch recursion**: `setSubmode()` → `setupJS8()` → table rebuilds → `tableSelectionChanged` → mode switch. Fix: only switch when callsign actually changes.
 3. **"Directed to" cleared on rebuild**: callsign table deselect + rebuild fires `tableSelectionChanged` with empty selection. Fix: handle callsign selection explicitly in `cellClicked`, not through the generic `tableSelectionChanged` path.
 
+## List by Callsign mode (bandcall)
+
+The band activity table has two listing modes, chosen from the header
+right-click menu "List by..." (persisted as Common/ListBy):
+- **Offset** (default): classic one row per offset, Standard and
+  Subspace traffic at one offset split into two rows.
+- **Callsign**: one row per station; a leading Callsign column appears;
+  the station's frames are merged chronologically across offsets AND
+  submode classes (no separate Subspace line); the scalar columns show
+  the station's newest frame.
+
+Interaction differences in callsign mode:
+- Single-click selects the row's station directly (Callsign column
+  UserRole) — no positional sub-region mapping or fallbacks.
+- Double-click QSYs to the station's newest offset (>1000 Hz rule) and
+  shows the STATION's history (all its frames, both classes).
+- Right-click: "List by..." tops the header menu; "Sort By..." gains a
+  "Callsign" entry (this mode only); "Remove Activity" is absent
+  (rows span several offset buckets); Jump to speed/drift use the
+  row's own newest-frame values, not the offset bucket's last frame.
+- Selection survives rebuilds keyed by callsign; the selected
+  station's frames are exempt from aging.
+- Frame attribution: `UI_Constructor::frameFromCall()` (the "CALL: "
+  prefix parse) plus bucket-order continuation — the same rule the
+  per-offset subdivision always used.
+
+The backing model (m_bandActivity) is untouched: API responses, TX
+offset picking, QSY re-keying, and band caching are identical in both
+modes.
+
 ## Subspace-Specific Additions
 
 | Feature | Standard JS8Call | Subspace |

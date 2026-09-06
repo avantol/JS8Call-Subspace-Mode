@@ -87,6 +87,14 @@ This function is now just a getter.
 **Source of truth for callsign**: `m_callActivity` lookup by offset (standard JS8Call behavior).
 **Source of truth for mode**: Row's `m_bandActivity` data (what's displayed).
 
+**List by Callsign mode (bandcall)**: when the band table lists one
+row per station, single-click reads the callsign directly from the
+row's Callsign column `Qt::UserRole` (no text parse, no offset
+fallback), and double-click shows the STATION's history (its frames
+across all offsets and both submode classes) and QSYs to the
+station's newest offset. Selection is keyed by callsign across
+rebuilds. See docs/click-behavior.md "List by Callsign mode".
+
 ### Right Window (Call Sign Table)
 
 | Action | Behavior |
