@@ -1038,6 +1038,13 @@ void UI_Constructor::on_menuWindow_aboutToShow() {
     ui->actionSort_Band_Activity->setEnabled(
         ui->actionShow_Band_Activity->isChecked());
 
+    // [bandcall3] View-menu twin of the header popup's "List by..."
+    QMenu *listBandMenu = new QMenu(this->menuBar());
+    buildBandActivityListByMenu(listBandMenu);
+    ui->actionList_Band_Activity->setMenu(listBandMenu);
+    ui->actionList_Band_Activity->setEnabled(
+        ui->actionShow_Band_Activity->isChecked());
+
     QMenu *sortCallMenu = new QMenu(this->menuBar()); // ui->menuWindow);
     buildCallActivitySortByMenu(sortCallMenu);
     ui->actionSort_Call_Activity->setMenu(sortCallMenu);
@@ -8276,6 +8283,13 @@ void UI_Constructor::buildShowColumnsMenu(QMenu *menu, QString tableKey) {
     QMap<QString, bool> defaultOverride = {
         {"submode", false},  {"tdrift", false},  {"grid", false},
         {"distance", false}, {"azimuth", false}, {"minimal_labels", false}};
+
+    // [bandcall3] The band table's Callsign column exists only in
+    // callsign list mode; its hide toggle appears (before Frequency
+    // Offset) only there.
+    if (tableKey == "band" && bandListByCall()) {
+        columnKeys.prepend({"Callsign", "callsign"});
+    }
 
     if (tableKey == "call") {
         columnKeys.prepend({"Callsign", "callsign"});

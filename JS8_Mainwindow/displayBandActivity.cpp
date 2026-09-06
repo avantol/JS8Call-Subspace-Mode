@@ -775,9 +775,10 @@ void UI_Constructor::displayBandActivity() {
         ui->tableWidgetRXAll->horizontalHeader()->setVisible(
             showColumn("band", "labels"));
 
-        // Hide columns. The Callsign column is not operator-hideable:
-        // it IS the callsign mode, and is absent from offset mode.
-        ui->tableWidgetRXAll->setColumnHidden(BACallsign, !listByCall);
+        // Hide columns. The Callsign column exists only in callsign
+        // mode, where it is hideable like the others ([bandcall3]).
+        ui->tableWidgetRXAll->setColumnHidden(
+            BACallsign, !listByCall || !showColumn("band", "callsign"));
         ui->tableWidgetRXAll->setColumnHidden(
             BAOffset, !showColumn("band", "offset"));
         ui->tableWidgetRXAll->setColumnHidden(
