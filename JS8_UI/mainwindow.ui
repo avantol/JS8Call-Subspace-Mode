@@ -2197,9 +2197,9 @@ background-color: #22ff22;
     <addaction name="separator"/>
     <addaction name="actionShow_Band_Activity"/>
     <addaction name="actionShow_Band_Heartbeats_and_ACKs"/>
+    <addaction name="actionList_Band_Activity"/>
     <addaction name="actionShow_Band_Activity_Columns"/>
     <addaction name="actionSort_Band_Activity"/>
-    <addaction name="actionList_Band_Activity"/>
     <addaction name="separator"/>
     <addaction name="actionShow_Call_Activity"/>
     <addaction name="actionShow_Call_Activity_Columns"/>
