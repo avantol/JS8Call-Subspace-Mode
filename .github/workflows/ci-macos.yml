@@ -32,7 +32,11 @@ jobs:
     - name: Install dependencies
       run: |
         brew update
-        brew install autoconf automake libtool pkgconf fdk-aac git lame libass libtool libvorbis \
+        # [macfix 2026-09-06] fdk-aac REMOVED: Homebrew deleted the
+        # formula ("No formulae or casks found"), which failed both
+        # runners on builds 472/473 -- and our ffmpeg configure line
+        # enables no external codecs, so it was never used.
+        brew install autoconf automake libtool pkgconf git lame libass libtool libvorbis \
           libvpx opus sdl shtool texi2html theora wget x264 x265 xvid nasm create-dmg
 
     - name: Cache libusb 1.0.29
